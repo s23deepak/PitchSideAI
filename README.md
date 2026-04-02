@@ -22,20 +22,25 @@ PitchSide AI provides real-time multilingual commentary, tactical vision recogni
 
 ## 🏗️ Architecture
 
-```
+```text
 Fan Browser (mic + video) [React Frontend]
       │
       ├─[WebSocket / HTTP]──► FastAPI Backend Server
                                  │
-                     ┌───────────┴───────────┐
-                     │                       │
-             LLM Backend (configurable)    boto3 SDK
-              ┌──────┼──────┬──────┐         │
-           Bedrock  Ollama OpenAI vLLM   ┌───┴───┐
-                                         │       │
-                                      DynamoDB OpenSearch
-                                      (Events)  (RAG)
+                     ┌───────────┼───────────┐
+                     │           │           │
+             LLM Backend    Data Factory   boto3 SDK
+              ┌──────┼       ┌───┼───┐       │
+           Bedrock Ollama   ESPN Goal Cric   DynamoDB
 ```
+
+---
+
+## 📊 Sport-Specific Data Retrievers
+PitchSide utilizes a central **DataRetrieverFactory** to dynamically pull statistics from the deepest available domain sources based on the context:
+- `CricbuzzRetriever` – Engaged automatically for Cricket context (strike rates, innings)
+- `GoalComRetriever` – Engaged automatically for Soccer context (xG, formations)
+- `ESPNDataRetriever` – Acts as the robust fallback for Basketball, Hockey, Baseball, and Rugby.
 
 ---
 
