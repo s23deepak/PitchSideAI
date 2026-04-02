@@ -24,7 +24,7 @@ export default function EventFeed() {
     const fetchEvents = async () => {
         setLoading(true)
         try {
-            const res = await fetch(`${BACKEND}/api/events?n=30`)
+            const res = await fetch(`${BACKEND}/api/v1/events?n=30`)
             const data = await res.json()
             setEvents(data.events || [])
         } catch {
@@ -37,7 +37,7 @@ export default function EventFeed() {
     // Poll every 5 seconds for new events
     useEffect(() => {
         fetchEvents()
-        const interval = setInterval(fetchEvents, 5000)
+        const interval = setInterval(fetchEvents, 30000)
         return () => clearInterval(interval)
     }, [])
 

@@ -4,10 +4,16 @@ Embeds match notes via Titan Multimodal Embeddings and upserts them into OpenSea
 """
 import json
 import boto3
+import httpx
 from opensearchpy import OpenSearch, RequestsHttpConnection
 from requests_aws4auth import AWS4Auth
 
-from config import AWS_REGION, OPENSEARCH_ENDPOINT, OPENSEARCH_INDEX, EMBEDDING_MODEL
+from config import (
+    AWS_REGION, OPENSEARCH_ENDPOINT, OPENSEARCH_INDEX, EMBEDDING_MODEL,
+    LLM_BACKEND, OLLAMA_BASE_URL, OLLAMA_EMBED_MODEL,
+    OPENAI_API_KEY, OPENAI_EMBED_MODEL,
+    VLLM_BASE_URL, VLLM_EMBED_MODEL,
+)
 
 # AWS Creds for OpenSearch standard/serverless
 credentials = boto3.Session().get_credentials()
@@ -24,11 +30,35 @@ else:
     _os_client = None
     _local_store = []
 
-_bedrock_runtime = boto3.client('bedrock-runtime', region_name=AWS_REGION)
+_bedrock_runtime = None
+if LLM_BACKEND == "bedrock":
+    _bedrock_runtime = boto3.client('bedrock-runtime', region_name=AWS_REGION)
 
 
 def _embed(text: str) -> list[float]:
-    """Generate embeddings using Amazon Titan Multimodal model."""
+    """Generate embeddings using configured backend."""
+    if LLM_BACKEND in ("ollama", "openai", "vllm"):
+        if LLM_BACKEND == "ollama":
+            url = f"{OLLAMA_BASE_URL}/api/embed"
+            payload = {"model": OLLAMA_EMBED_MODEL, "input": text}
+            headers = {}
+        elif LLM_BACKEND == "openai":
+            url = "https://api.openai.com/v1/embeddings"
+            payload = {"model": OPENAI_EMBED_MODEL, "input": text}
+            headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
+        else:  # vllm
+            url = f"{VLLM_BASE_URL}/v1/embeddings"
+            payload = {"model": VLLM_EMBED_MODEL, "input": text}
+            headers = {}
+
+        response = httpx.post(url, json=payload, headers=headers, timeout=30.0)
+        response.raise_for_status()
+        data = response.json()
+        # Ollama uses "embeddings[0]", OpenAI/vLLM use "data[0].embedding"
+        if "embeddings" in data:
+            return data["embeddings"][0]
+        return data["data"][0]["embedding"]
+
     body = json.dumps({"inputText": text})
     response = _bedrock_runtime.invoke_model(
         body=body,

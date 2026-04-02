@@ -1,88 +1,204 @@
 """
-Research Agent — Amazon Nova 2 Pro + Bedrock AgentCore + OpenSearch RAG
-Builds the pre-match "Commentator's Brief" and answers live research queries.
+Research Agent — Amazon Nova Pro + Advanced RAG
+Builds pre-match briefs and answers live research queries.
 """
-import json
-import boto3
+import asyncio
+from typing import Dict, List, Optional
 
-from config import AWS_REGION, RESEARCH_MODEL
-from tools.vector_store import upsert_match_notes, retrieve_relevant_context
-
-# Initialize Bedrock client
-_bedrock = boto3.client(service_name='bedrock-runtime', region_name=AWS_REGION)
+from agents.base import ResearchAgent as BaseResearchAgent
+from config.prompts import get_research_prompt, get_query_prompt
+from rag import get_rag_retriever
 
 
-class ResearchAgent:
+class ResearchAgent(BaseResearchAgent):
     """
-    Uses Amazon Nova 2 Pro to autonomously research match-specific information 
-    and store it in Amazon OpenSearch Serverless for RAG.
+    Researches match-specific information using Nova Pro and stores in RAG.
+    Dynamically adapts to any sport type.
     """
 
-    def __init__(self):
-        self.model_id = RESEARCH_MODEL
+    def __init__(self, model_id: str = None, sport: str = "soccer"):
+        from config import RESEARCH_MODEL
+        super().__init__(model_id or RESEARCH_MODEL, sport)
+        self.retriever = get_rag_retriever()
 
-    async def build_match_brief(self, home_team: str, away_team: str, sport: str = "soccer") -> str:
+    async def execute(self, home_team: str, away_team: str) -> str:
+        """Alias for build_match_brief for orchestration compatibility."""
+        return await self.build_match_brief(home_team, away_team)
+
+    async def build_match_brief(self, home_team: str, away_team: str) -> str:
         """
-        Builds the Commentator's Brief and stores chunks in OpenSearch.
-        Returns: Summary of the brief as a string.
+        Build comprehensive pre-match brief with dynamic sport-specific content.
+
+        Args:
+            home_team: Home team name
+            away_team: Away team name
+
+        Returns:
+            Brief text and indexed in RAG
         """
-        prompt = f"""
-        You are a professional sports analyst preparing for a live {sport} match.
-        Research the following match and produce a structured Commentator's Brief:
+        self.log_event("brief_generation_started", {
+            "home_team": home_team,
+            "away_team": away_team
+        })
 
-        Match: {home_team} vs {away_team}
+        # Get dynamic prompt based on sport
+        prompt = get_research_prompt(home_team, away_team, self.sport)
 
-        Include:
-        1. Each team's current form (last 5 matches).
-        2. Key player stats (goals, assists, injury updates).
-        3. Historical head-to-head record.
-        4. Tactical tendencies: pressing style, formation, set-piece patterns.
-        """
-
-        messages = [{"role": "user", "content": [{"text": prompt}]}]
-        
-        # Call Nova 2 Pro via Converse API
-        response = _bedrock.converse(
-            modelId=self.model_id,
-            messages=messages,
-            inferenceConfig={"temperature": 0.5}
+        # Call model
+        brief_text = await self.call_bedrock(
+            prompt,
+            temperature=0.5,
+            max_tokens=2000
         )
-        brief_text = response['output']['message']['content'][0]['text']
 
-        # Chunk and store in Amazon OpenSearch for live RAG
-        chunks = self._chunk_text(brief_text, chunk_size=500)
-        for i, chunk in enumerate(chunks):
-            doc_id = f"{home_team.lower().replace(' ', '_')}_vs_{away_team.lower().replace(' ', '_')}_chunk_{i}"
-            await upsert_match_notes(doc_id, chunk)
+        # Chunk and index for RAG
+        await self._index_brief(home_team, away_team, brief_text)
+
+        self.log_event("brief_generation_completed", {
+            "home_team": home_team,
+            "away_team": away_team,
+            "brief_length": len(brief_text)
+        })
 
         return brief_text
 
-    async def answer_live_query(self, query: str) -> str:
+    async def answer_live_query(
+        self,
+        query: str,
+        home_team: Optional[str] = None,
+        away_team: Optional[str] = None
+    ) -> str:
         """
-        Retrieves relevant match notes from OpenSearch (RAG) and uses Nova 2 Pro 
-        to answer a live tactical or statistical question.
+        Answer live fan questions using RAG context and Nova Pro.
+
+        Args:
+            query: Fan question
+            home_team: Optional - home team for context
+            away_team: Optional - away team for context
+
+        Returns:
+            Answer text
         """
-        context = await retrieve_relevant_context(query, top_k=3)
+        self.log_event("query_received", {
+            "query": query[:100],  # Log first 100 chars
+            "has_team_context": home_team is not None
+        })
+
+        # Retrieve relevant context using RAG
+        retrieved_docs = await self.retriever.retrieve(
+            query,
+            top_k=5
+        )
+
+        context = "\n\n---\n\n".join([
+            f"[{doc.strategy_used}] {doc.text[:500]}"
+            for doc in retrieved_docs
+        ])
+
+        # Get dynamic prompt based on sport
+        prompt = get_query_prompt(context, query, self.sport)
+
+        # Answer
+        answer = await self.call_bedrock(
+            prompt,
+            temperature=0.3,
+            max_tokens=300
+        )
+
+        self.log_event("query_answered", {
+            "query": query[:100],
+            "context_documents": len(retrieved_docs),
+            "answer_length": len(answer)
+        })
+
+        return answer
+
+    async def _index_brief(self, home_team: str, away_team: str, brief_text: str) -> None:
+        """
+        Index brief chunks in RAG for later retrieval.
+
+        Args:
+            home_team: Home team name
+            away_team: Away team name
+            brief_text: Brief text to index
+        """
+        chunks = self._chunk_text(brief_text, chunk_size=500)
+        match_id = f"{home_team.lower().replace(' ', '_')}_{away_team.lower().replace(' ', '_')}"
+
+        # Index chunks concurrently
+        tasks = []
+        for i, chunk in enumerate(chunks):
+            doc_id = f"{match_id}_chunk_{i}"
+            metadata = {
+                "match_id": match_id,
+                "home_team": home_team,
+                "away_team": away_team,
+                "sport": self.sport,
+                "chunk_index": i,
+                "chunk_count": len(chunks)
+            }
+
+            task = self.retriever.index_document(doc_id, chunk, metadata)
+            tasks.append(task)
+
+        # Wait for all indexing to complete
+        await asyncio.gather(*tasks)
+
+        self.logger.info(
+            "brief_indexed",
+            match_id=match_id,
+            chunks_indexed=len(chunks)
+        )
+
+    async def research_multiple_topics(
+        self,
+        home_team: str,
+        away_team: str,
+        topics: List[str]
+    ) -> Dict[str, str]:
+        """
+        Research specific topics for more focused briefs.
+
+        Args:
+            home_team: Home team
+            away_team: Away team
+            topics: List of specific topics to research
+
+        Returns:
+            Dict mapping topic -> research results
+        """
+        topics_str = "\n".join([f"- {t}" for t in topics])
 
         prompt = f"""
-        You are a real-time sports analyst assistant.
+You are a professional {self.sport} analyst.
 
-        MATCH CONTEXT (pre-researched notes from Amazon OpenSearch):
-        {context}
+Research the following for {home_team} vs {away_team}:
 
-        QUESTION: {query}
+{topics_str}
 
-        Answer concisely in 2-3 sentences, citing specific stats where possible from the context.
-        """
-        messages = [{"role": "user", "content": [{"text": prompt}]}]
-        response = _bedrock.converse(
-            modelId=self.model_id,
-            messages=messages,
-            inferenceConfig={"temperature": 0.3}
-        )
-        return response['output']['message']['content'][0]['text']
+Provide specific, data-driven insights for each topic.
+"""
 
-    @staticmethod
-    def _chunk_text(text: str, chunk_size: int = 500) -> list[str]:
-        words = text.split()
-        return [" ".join(words[i:i + chunk_size]) for i in range(0, len(words), chunk_size)]
+        response = await self.call_bedrock(prompt, temperature=0.5, max_tokens=1500)
+
+        results = {}
+        current_topic = None
+        current_text = []
+
+        for line in response.split('\n'):
+            for topic in topics:
+                if topic.lower() in line.lower():
+                    if current_topic:
+                        results[current_topic] = '\n'.join(current_text).strip()
+                    current_topic = topic
+                    current_text = [line]
+                    break
+            else:
+                if current_topic:
+                    current_text.append(line)
+
+        if current_topic:
+            results[current_topic] = '\n'.join(current_text).strip()
+
+        return results
+

@@ -89,7 +89,7 @@ export default function PushToTalk({ matchReady, homeTeam, awayTeam, sport }) {
         e.preventDefault()
         if (!transcript || !matchReady) return
         setStatus('speaking')
-        const res = await fetch(`${BACKEND}/api/query`, {
+        const res = await fetch(`${BACKEND}/api/v1/query`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ query: transcript, home_team: homeTeam, away_team: awayTeam }),

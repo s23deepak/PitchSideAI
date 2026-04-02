@@ -77,7 +77,7 @@ export default function TacticalOverlay({ sport }) {
         reader.onload = async (ev) => {
             const b64 = ev.target.result.split(',')[1]
             try {
-                const res = await fetch(`${BACKEND}/api/frame`, {
+                const res = await fetch(`${BACKEND}/api/v1/frame/analyze`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ frame_b64: b64, sport }),

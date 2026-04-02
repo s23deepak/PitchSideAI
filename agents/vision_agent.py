@@ -1,97 +1,155 @@
 """
-Vision Agent — Amazon Nova 2 Lite
-Analyzes sampled video frames to detect tactical patterns in soccer and cricket.
+Vision Agent — Amazon Nova Lite
+Real-time tactical pattern recognition for video frames.
+Dynamically adapts to any sport type.
 """
 import base64
-import json
-import logging
-import boto3
+from typing import Dict, Any, List
 
-from config import AWS_REGION, VISION_MODEL
+from agents.base import VisionAgent as BaseVisionAgent
+from config.prompts import get_frame_prompt
 from tools.dynamodb_tool import write_event
 
-logger = logging.getLogger(__name__)
 
-# Initialize Bedrock client
-_bedrock = boto3.client(service_name='bedrock-runtime', region_name=AWS_REGION)
-
-SOCCER_PROMPT = """
-You are an elite soccer tactical analyst. Analyze this video frame.
-
-Identify ONE tactical label: [High Press | Low Block | Counter Attack | Build-Up Play | Set Piece | Normal Play]
-Also identify formation and key observation.
-
-Respond ONLY with valid JSON:
-{"tactical_label": "...", "formation_home": "...", "formation_away": "...", "key_observation": "...", "confidence": 0.9}
-"""
-
-CRICKET_PROMPT = """
-You are an elite cricket tactical analyst. Analyze this video frame.
-
-Identify ONE tactical label: [Attacking Field | Defensive Field | Pace Attack | Spin Attack | Normal]
-
-Respond ONLY with valid JSON:
-{"tactical_label": "...", "key_observation": "...", "confidence": 0.9}
-"""
-
-class VisionAgent:
+class VisionAgent(BaseVisionAgent):
     """
-    Analyzes base64 JPEG frames from a live broadcast feed using Amazon Nova 2 Lite.
-    Results are written to DynamoDB for the live event feed.
+    Analyzes video frames for tactical patterns using Nova Lite.
+    Supports any sport type with dynamic prompts.
     """
 
-    def __init__(self, sport: str = "soccer"):
-        self.sport = sport
-        self.model_id = VISION_MODEL
-        self.prompt = SOCCER_PROMPT if sport == "soccer" else CRICKET_PROMPT
+    def __init__(self, model_id: str = None, sport: str = "soccer"):
+        from config import VISION_MODEL
+        super().__init__(model_id or VISION_MODEL, sport)
 
-    async def analyze_frame_b64(self, b64_str: str) -> dict:
-        """
-        Sends a JPEG frame to Nova 2 Lite for multimodal tactical analysis.
-        """
-        image_bytes = base64.b64decode(b64_str)
-        
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "image": {
-                            "format": "jpeg",
-                            "source": {"bytes": image_bytes}
-                        }
-                    },
-                    {"text": self.prompt}
-                ]
-            }
-        ]
+    async def execute(self, image_data: bytes) -> Dict[str, Any]:
+        """Alias for analyze_frame for orchestration compatibility."""
+        return await self.analyze_frame(image_data)
 
+    async def analyze_frame(self, image_data: bytes) -> Dict[str, Any]:
+        """
+        Analyze a video frame for tactical patterns.
+
+        Args:
+            image_data: Raw JPEG frame bytes
+
+        Returns:
+            Tactical analysis dict with confidence scores
+        """
+        self.log_event("frame_analysis_started", {
+            "image_size": len(image_data)
+        })
+
+        # Get dynamic prompt based on sport
+        prompt = get_frame_prompt(self.sport)
+
+        # Call model with image
+        response_text = await self.call_bedrock(
+            prompt,
+            temperature=0.1,
+            max_tokens=300,
+            image_data=image_data
+        )
+
+        # Parse JSON response
         try:
-            response = _bedrock.converse(
-                modelId=self.model_id,
-                messages=messages,
-                inferenceConfig={"temperature": 0.1, "maxTokens": 300}
-            )
-            response_text = response['output']['message']['content'][0]['text']
-            
-            # Clean possible markdown formatting
-            response_text = response_text.replace("```json", "").replace("```", "").strip()
-            result = json.loads(response_text)
-        except Exception as e:
-            logger.error(f"Vision analysis failed: {e}")
+            result = await self.parse_json_response(response_text)
+        except Exception as exc:
+            self.logger.error("frame_analysis_parse_error", error=str(exc))
+            # Return default result on parse error
             result = {
-                "tactical_label": "Normal Play",
-                "key_observation": "Analyzing play...",
-                "confidence": 0.5,
+                "tactical_label": "Analysis Failed",
+                "key_observation": "Could not analyze frame",
+                "confidence": 0.0,
+                "actionable_insight": "Retrying next frame"
             }
 
-        # Write high-confidence detections to DynamoDB
-        if result.get("confidence", 0) > 0.6:
-            await write_event(
-                "tactical_detection",
-                result["key_observation"],
-                {"label": result["tactical_label"], "confidence": result["confidence"]},
-            )
-            logger.info(f"[VisionAgent] {result['tactical_label']} — {result['key_observation']}")
+        # Index high-confidence detections
+        confidence = result.get("confidence", 0.0)
+        if confidence > 0.6:
+            await self._log_detection(result)
+
+        self.log_event("frame_analysis_completed", {
+            "tactical_label": result.get("tactical_label"),
+            "confidence": confidence
+        })
 
         return result
+
+    async def analyze_frame_b64(self, b64_str: str) -> Dict[str, Any]:
+        """
+        Analyze base64-encoded JPEG frame.
+
+        Args:
+            b64_str: Base64-encoded JPEG string
+
+        Returns:
+            Tactical analysis
+        """
+        try:
+            image_bytes = base64.b64decode(b64_str)
+            return await self.analyze_frame(image_bytes)
+        except Exception as exc:
+            self.logger.error("frame_decode_error", error=str(exc))
+            raise
+
+    async def analyze_frame_sequence(
+        self,
+        frames: List[bytes],
+        interval: int = 1
+    ) -> List[Dict[str, Any]]:
+        """
+        Analyze multiple frames (e.g., key moments in sequence).
+
+        Args:
+            frames: List of frame bytes
+            interval: Analyze every Nth frame (improves efficiency)
+
+        Returns:
+            List of analyses
+        """
+        self.log_event("sequence_analysis_started", {
+            "frame_count": len(frames),
+            "interval": interval
+        })
+
+        results = []
+
+        for i, frame in enumerate(frames):
+            if i % interval != 0:
+                continue
+
+            result = await self.analyze_frame(frame)
+            result["frame_index"] = i
+            results.append(result)
+
+        self.log_event("sequence_analysis_completed", {
+            "frames_analyzed": len(results)
+        })
+
+        return results
+
+    async def _log_detection(self, result: Dict[str, Any]) -> None:
+        """
+        Log high-confidence tactical detection to DynamoDB.
+
+        Args:
+            result: Analysis result
+        """
+        try:
+            await write_event(
+                "tactical_detection",
+                result.get("key_observation", ""),
+                {
+                    "label": result.get("tactical_label"),
+                    "confidence": result.get("confidence"),
+                    "sport": self.sport,
+                    "actionable_insight": result.get("actionable_insight")
+                }
+            )
+            self.logger.info(
+                "tactical_detection_logged",
+                label=result.get("tactical_label"),
+                sport=self.sport
+            )
+        except Exception as exc:
+            self.logger.error("detection_logging_failed", error=str(exc))

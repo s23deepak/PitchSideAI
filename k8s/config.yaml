@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pitchside-config
+data:
+  aws_region: "us-east-1"
+  opensearch_endpoint: "your-opensearch-endpoint.us-east-1.aoss.amazonaws.com"
+  dynamodb_table: "PitchSideMatchEvents"
+  log_level: "info"
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pitchside-aws-creds
+type: Opaque
+stringData:
+  access_key_id: "YOUR_AWS_ACCESS_KEY"
+  secret_access_key: "YOUR_AWS_SECRET_KEY"
