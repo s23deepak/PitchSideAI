@@ -80,9 +80,10 @@ class CommentaryNotesWorkflow:
         self.state: Optional[CommentaryNotesState] = None
 
     async def initialize_workflow(self, state: CommentaryNotesState) -> CommentaryNotesState:
-        """Initialize workflow state."""
+        """Initialize workflow state and extract final contextual parameters sequentially."""
         import uuid
-
+        from data_sources.factory import get_retriever
+        
         state.workflow_id = str(uuid.uuid4())
         state.phase = WorkflowPhase.INITIAL_CONTEXT
         state.start_time = datetime.utcnow()
@@ -90,6 +91,14 @@ class CommentaryNotesWorkflow:
         logger.info(
             f"Workflow {state.workflow_id} initialized for {state.home_team} vs {state.away_team}"
         )
+        
+        # Sequentially populate missing venue and datetime data from ESPN before launching the parallel multi-agents
+        if not state.match_datetime or not state.venue:
+            logger.info(f"[{state.workflow_id}] Sequentially fetching match location and schedule...")
+            retriever = get_retriever(state.sport)
+            ctx = await retriever.get_match_context(state.home_team, state.sport)
+            state.match_datetime = state.match_datetime or ctx["date"]
+            state.venue = state.venue or ctx["venue"]
 
         return state
 

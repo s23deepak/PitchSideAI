@@ -10,7 +10,8 @@ from datetime import datetime
 import asyncio
 import logging
 from agents.base import BaseAgent
-from data_sources import ESPNDataRetriever, SportsSpecificRetriever, DataCache
+from data_sources import DataCache
+from data_sources.factory import get_retriever
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +28,7 @@ class NewsAgent(BaseAgent):
         """Initialize news agent."""
         super().__init__(model_id=model_id, sport=sport, agent_type="news")
         self.cache = cache or DataCache(ttl_seconds=1800)  # 30 min for news
-        self.espn_retriever = ESPNDataRetriever(cache=self.cache)
-        self.sports_retriever = SportsSpecificRetriever(cache=self.cache)
+        self.retriever = get_retriever(self.sport, cache=self.cache)
 
     async def execute(self, home_team: str, away_team: str) -> Dict[str, Any]:
         """Execute news gathering for both teams."""
@@ -91,7 +91,7 @@ class NewsAgent(BaseAgent):
         Returns:
             News including injuries, suspensions, lineup status
         """
-        espn_news_list = await self.espn_retriever.get_team_news(team_name, self.sport)
+        espn_news_list = await self.retriever.get_team_news(team_name, self.sport)
         headlines = [item.get("headline", "") for item in espn_news_list if isinstance(item, dict)]
         recent_headlines = " | ".join(headlines[:3]) if headlines else "None known"
 
@@ -99,10 +99,10 @@ class NewsAgent(BaseAgent):
         lineup_status = await self._get_lineup_confirmation_status(team_name)
 
         # Get actual injuries from roster instead of news
-        injuries = await self.espn_retriever.get_injuries(team_name, self.sport)
+        injuries = await self.retriever.get_injuries(team_name, self.sport)
 
         # Synthesize into news report
-        news_synthesis_prompt = f"""Create a concise team news report for {team_name}:
+        news_synthesis_prompt = f"""As an elite {self.sport} analyst, create a concise team news report for {team_name}:
 
 Recent Headlines: {recent_headlines}
 
@@ -195,5 +195,5 @@ Keep to 3-4 sentences."""
 
     async def close(self):
         """Clean up resources."""
-        await self.espn_retriever.close()
+        await self.retriever.close()
         await self.sports_retriever.close()

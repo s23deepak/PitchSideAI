@@ -39,13 +39,17 @@ class BaseAgent(ABC):
         self.agent_type = agent_type
         self.logger = get_logger(f"agent.{agent_type}")
         self.backend = LLM_BACKEND
+        self.model_id = model_id
 
         if self.backend == "bedrock":
             import boto3
-            self.model_id = model_id
             self.bedrock_client = boto3.client("bedrock-runtime", region_name="us-east-1")
         elif self.backend == "ollama":
-            self.model_id = OLLAMA_MODEL
+            import os
+            if self.agent_type == "vision":
+                self.model_id = os.getenv("OLLAMA_VISION_MODEL", "llama3.2-vision")
+            else:
+                self.model_id = OLLAMA_MODEL
             self.bedrock_client = None
         elif self.backend == "openai":
             self.model_id = OPENAI_MODEL
@@ -67,8 +71,11 @@ class BaseAgent(ABC):
         """
         Call LLM API (Bedrock, Ollama, OpenAI, or vLLM) with error handling and logging.
         """
+        guardrail = "\n\nCRITICAL INSTRUCTION: You are generating a final output narrative. DO NOT output ANY template placeholders (e.g. [insert player], [team], etc.). Fill out all details using the provided context natively. If you lack context for a claim, do not make the claim at all."
+        prompt = prompt + guardrail
+
         if self.backend != "bedrock":
-            return await self._call_openai_compatible(prompt, temperature, max_tokens, image_data)
+            return await self._call_openai_compatible(prompt, temperature, max_tokens, image_data, response_format)
 
         start_time = datetime.utcnow()
 
@@ -154,6 +161,7 @@ class BaseAgent(ABC):
         temperature: float = 0.5,
         max_tokens: Optional[int] = None,
         image_data: Optional[bytes] = None,
+        response_format: str = "text"
     ) -> str:
         """Call any OpenAI-compatible API (Ollama, OpenAI, vLLM)."""
         start_time = datetime.utcnow()
@@ -163,9 +171,10 @@ class BaseAgent(ABC):
             content = []
             if image_data:
                 b64_image = base64.b64encode(image_data).decode("utf-8")
+                mime_type = "image/png" if image_data.startswith(b"\x89PNG") else "image/jpeg"
                 content.append({
                     "type": "image_url",
-                    "image_url": {"url": f"data:image/jpeg;base64,{b64_image}"}
+                    "image_url": {"url": f"data:{mime_type};base64,{b64_image}"}
                 })
             content.append({"type": "text", "text": prompt})
 
@@ -177,12 +186,14 @@ class BaseAgent(ABC):
             }
             if max_tokens:
                 payload["max_tokens"] = max_tokens
+            if response_format == "json":
+                payload["response_format"] = {"type": "json_object"}
 
             headers = {"Content-Type": "application/json"}
             if api_key:
                 headers["Authorization"] = f"Bearer {api_key}"
 
-            async with httpx.AsyncClient(timeout=120.0) as client:
+            async with httpx.AsyncClient(timeout=300.0) as client:
                 response = await client.post(
                     f"{base_url}/v1/chat/completions",
                     json=payload,

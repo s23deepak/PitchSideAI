@@ -60,8 +60,8 @@ class CommentaryNotesRequest(BaseModel):
     home_team: str = Field(..., min_length=1, max_length=100)
     away_team: str = Field(..., min_length=1, max_length=100)
     sport: str = Field(default="soccer", pattern="^(soccer|cricket|basketball|rugby|tennis|hockey|baseball)$")
-    match_datetime: str = Field(..., description="ISO format datetime")
-    venue: str = Field(..., min_length=1, max_length=200)
+    match_datetime: Optional[str] = None
+    venue: Optional[str] = None
     venue_lat: float = Field(default=0.0, description="Venue latitude")
     venue_lon: float = Field(default=0.0, description="Venue longitude")
     include_embedded_json: bool = Field(default=True)

@@ -141,10 +141,11 @@ export default function PushToTalk({ matchReady, homeTeam, awayTeam, sport }) {
             <form onSubmit={handleTextQuery} style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
                 <input
                     type="text"
-                    placeholder="Type a question..."
+                    placeholder={matchReady ? "Type a question..." : "Build Match Notes first..."}
                     value={transcript}
                     onChange={e => setTranscript(e.target.value)}
-                    style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text-primary)', padding: '6px 12px', fontFamily: 'inherit', fontSize: 13 }}
+                    disabled={!matchReady}
+                    style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text-primary)', padding: '6px 12px', fontFamily: 'inherit', fontSize: 13, opacity: matchReady ? 1 : 0.5 }}
                 />
                 <button type="submit" className="btn btn-secondary" disabled={!matchReady}>Send</button>
             </form>

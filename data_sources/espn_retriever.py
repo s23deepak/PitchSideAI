@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from .cache import DataCache
+from .base import BaseRetriever
 
 logger = logging.getLogger(__name__)
 
@@ -75,8 +76,11 @@ SPORT_LEAGUE: Dict[str, tuple] = {
     "soccer": ("soccer", "eng.1"),
     "basketball": ("basketball", "nba"),
     "american_football": ("football", "nfl"),
-    "baseball": ("baseball", "mlb",),
+    "baseball": ("baseball", "mlb"),
     "hockey": ("hockey", "nhl"),
+    "cricket": ("cricket", "test"),
+    "rugby": ("rugby", "world"),
+    "tennis": ("tennis", "atp"),
 }
 
 
@@ -184,6 +188,31 @@ class ESPNDataRetriever:
         return None
 
     # ── public methods ────────────────────────────────────────────────────────
+
+    async def get_match_context(self, team_name: str, sport: str = "soccer") -> Dict[str, Any]:
+        """Fetch the exact datetime and venue for the team's next event."""
+        cached = self.cache.get("match_context", f"{sport}:{team_name}")
+        if cached:
+            return cached
+            
+        sport_slug, league_slug = self._sport_league(sport)
+        tid = await self._resolve_team_id(team_name, sport_slug, league_slug)
+        if not tid:
+            from datetime import datetime, timezone
+            return {"date": datetime.now(timezone.utc).isoformat(), "venue": "Unknown Venue"}
+            
+        team_data = await self._get(f"{ESPN_BASE}/{sport_slug}/{league_slug}/teams/{tid}")
+        team = team_data.get("team", {})
+        next_event = team.get("nextEvent", [{}])[0]
+        
+        from datetime import datetime, timezone
+        date = next_event.get("date", datetime.now(timezone.utc).isoformat())
+        venue_info = next_event.get("competitions", [{}])[0].get("venue", {})
+        venue_name = venue_info.get("fullName", "Unknown Venue")
+        
+        result = {"date": date, "venue": venue_name}
+        self.cache.set("match_context", f"{sport}:{team_name}", result)
+        return result
 
     async def get_team_squad(self, team_name: str, sport: str = "soccer") -> Dict[str, Any]:
         """Return current squad roster with real stats from ESPN."""

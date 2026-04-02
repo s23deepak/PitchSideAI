@@ -95,12 +95,14 @@ AWS_SECRET_ACCESS_KEY=xxx
 # Install and pull models
 curl -fsSL https://ollama.com/install.sh | sh
 ollama pull gemma2:9b
+ollama pull llama3.2-vision
 ollama pull nomic-embed-text
 ```
 ```env
 LLM_BACKEND=ollama
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_MODEL=gemma2:9b
+OLLAMA_VISION_MODEL=llama3.2-vision
 OLLAMA_EMBED_MODEL=nomic-embed-text
 ```
 

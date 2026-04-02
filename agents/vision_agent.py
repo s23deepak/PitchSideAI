@@ -45,9 +45,10 @@ class VisionAgent(BaseVisionAgent):
         # Call model with image
         response_text = await self.call_bedrock(
             prompt,
-            temperature=0.1,
+            temperature=0.6,
             max_tokens=300,
-            image_data=image_data
+            image_data=image_data,
+            response_format="json"
         )
 
         # Parse JSON response
@@ -136,12 +137,13 @@ class VisionAgent(BaseVisionAgent):
             result: Analysis result
         """
         try:
+            from decimal import Decimal
             await write_event(
                 "tactical_detection",
                 result.get("key_observation", ""),
                 {
                     "label": result.get("tactical_label"),
-                    "confidence": result.get("confidence"),
+                    "confidence": Decimal(str(result.get("confidence", 0.0))),
                     "sport": self.sport,
                     "actionable_insight": result.get("actionable_insight")
                 }

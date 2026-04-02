@@ -10,7 +10,8 @@ from datetime import datetime
 import asyncio
 import logging
 from agents.base import BaseAgent
-from data_sources import ESPNDataRetriever, DataCache
+from data_sources import DataCache
+from data_sources.factory import get_retriever
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ class MatchupAnalysisAgent(BaseAgent):
             agent_type="matchup_analysis",
         )
         self.cache = cache or DataCache(ttl_seconds=3600)
-        self.espn_retriever = ESPNDataRetriever(cache=self.cache)
+        self.retriever = get_retriever(self.sport, cache=self.cache)
 
     async def execute(
         self,
@@ -119,7 +120,7 @@ class MatchupAnalysisAgent(BaseAgent):
         player2: Dict[str, str],
     ) -> Optional[Dict[str, Any]]:
         """Analyze individual player matchup."""
-        prompt = f"""Analyze matchup: {player1.get('name', 'Player 1')} vs {player2.get('name', 'Player 2')}
+        prompt = f"""As an elite {self.sport} analyst, analyze matchup: {player1.get('name', 'Player 1')} vs {player2.get('name', 'Player 2')}
 Position: {player1.get('position', 'Unknown')}
 
 Provide:
@@ -174,7 +175,7 @@ Keep to 2 sentences."""
         weak_points: Dict[str, Any],
     ) -> str:
         """Generate tactical implications from matchup analysis."""
-        prompt = f"""Based on key matchups and weak points, what tactical approaches will likely emerge?
+        prompt = f"""As an elite {self.sport} analyst, based on key matchups and weak points, what tactical approaches will likely emerge?
 
 Matchups Summary: {len(matchups)} critical battles identified
 
@@ -190,4 +191,4 @@ Provide expected tactical adjustments and key battles to watch."""
 
     async def close(self):
         """Clean up resources."""
-        await self.espn_retriever.close()
+        await self.retriever.close()

@@ -10,7 +10,8 @@ from datetime import datetime
 import asyncio
 import logging
 from agents.base import BaseAgent
-from data_sources import ESPNDataRetriever, WikipediaRetriever, DataCache
+from data_sources import WikipediaRetriever, DataCache
+from data_sources.factory import get_retriever
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ class HistoricalContextAgent(BaseAgent):
             agent_type="historical_context",
         )
         self.cache = cache or DataCache(ttl_seconds=86400)  # 24 hours for historical data
-        self.espn_retriever = ESPNDataRetriever(cache=self.cache)
+        self.retriever = get_retriever(self.sport, cache=self.cache)
         self.wiki_retriever = WikipediaRetriever(cache=self.cache)
 
     async def execute(self, home_team: str, away_team: str) -> Dict[str, Any]:
@@ -75,7 +76,7 @@ class HistoricalContextAgent(BaseAgent):
         )
 
         # Synthesize into narrative
-        narrative_prompt = f"""Create a compelling match narrative for {home_team} vs {away_team}:
+        narrative_prompt = f"""As an elite {self.sport} analyst, create a compelling match narrative for {home_team} vs {away_team}:
 
 Historical Record: {h2h_history.get('total_record', 'Unknown')}
 
@@ -123,7 +124,7 @@ Keep to 4-5 sentences focused on storytelling."""
         Returns:
             H2H record and match details
         """
-        h2h_data = await self.espn_retriever.get_head_to_head(
+        h2h_data = await self.retriever.get_head_to_head(
             team1,
             team2,
             self.sport,
@@ -215,5 +216,5 @@ Keep to 4-5 sentences focused on storytelling."""
 
     async def close(self):
         """Clean up resources."""
-        await self.espn_retriever.close()
+        await self.retriever.close()
         await self.wiki_retriever.close()

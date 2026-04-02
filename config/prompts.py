@@ -72,12 +72,19 @@ Answer:
         else:
             formation_note = ""
 
+        definitions_str = ""
+        if hasattr(config, "tactical_definitions") and config.tactical_definitions:
+            definitions_str = "\nCRITICAL VISUAL DEFINITIONS:\n"
+            for label, definition in config.tactical_definitions.items():
+                definitions_str += f'- "{label}": {definition}\n'
+
         return f"""
 You are an elite {config.display_name} tactical analyst with expertise in real-time pattern recognition.
 
 Analyze this video frame and provide tactical insights.
 
-Identify tactical situation: [{labels_str} | ...]
+Identify tactical situation from options: {labels_str} ...
+{definitions_str}
 {formation_note}
 
 Respond ONLY with valid JSON (no markdown, no explanation):

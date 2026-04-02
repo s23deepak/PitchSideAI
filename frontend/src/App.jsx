@@ -12,16 +12,13 @@ export default function App() {
     const [homeTeam, setHomeTeam] = useState('Manchester United')
     const [awayTeam, setAwayTeam] = useState('Liverpool')
     const [sport, setSport] = useState('soccer')
-    const [matchDateTime, setMatchDateTime] = useState(new Date().toISOString().slice(0, 16))
-    const [venue, setVenue] = useState('Old Trafford')
-    const [venueLat, setVenueLat] = useState(53.4631)
-    const [venueLon, setVenueLon] = useState(-2.2913)
 
     const [matchReady, setMatchReady] = useState(false)
     const [buildingNotes, setBuildingNotes] = useState(false)
     const [commentaryData, setCommentaryData] = useState(null)
     const [buildStatus, setBuildStatus] = useState(null) // null | 'loading' | 'ready' | 'error'
     const [preparationTime, setPreparationTime] = useState(0)
+    const [detection, setDetection] = useState(null)
 
     const buildCommentaryNotes = async () => {
         setBuildingNotes(true)
@@ -30,21 +27,13 @@ export default function App() {
         setPreparationTime(0)
 
         try {
-            // Convert datetime to ISO format
-            const isoDateTime = new Date(matchDateTime).toISOString()
-
             const res = await fetch(`${BACKEND}/api/v1/commentary/prepare-notes`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     home_team: homeTeam,
                     away_team: awayTeam,
-                    sport,
-                    match_datetime: isoDateTime,
-                    venue,
-                    venue_lat: parseFloat(venueLat),
-                    venue_lon: parseFloat(venueLon),
-                    include_embedded_json: true,
+                    sport
                 }),
             })
 
@@ -117,27 +106,10 @@ export default function App() {
                     <option value="hockey">🏒 Hockey</option>
                 </select>
 
-                <input
-                    type="datetime-local"
-                    value={matchDateTime}
-                    onChange={e => setMatchDateTime(e.target.value)}
-                    style={{ width: 180 }}
-                    id="match-datetime-input"
-                />
-
-                <input
-                    type="text"
-                    placeholder="Venue"
-                    value={venue}
-                    onChange={e => setVenue(e.target.value)}
-                    style={{ width: 140 }}
-                    id="venue-input"
-                />
-
                 <button
                     className="btn btn-primary"
                     onClick={buildCommentaryNotes}
-                    disabled={buildingNotes || !homeTeam || !awayTeam || !venue}
+                    disabled={buildingNotes || !homeTeam || !awayTeam}
                     id="build-commentary-btn"
                 >
                     {buildingNotes
@@ -160,29 +132,58 @@ export default function App() {
 
                 {/* Left — main area */}
                 <div className="dashboard-main">
-                    {commentaryData && <CommentaryNotesViewer data={commentaryData} />}
-                    {!commentaryData && (
-                        <>
-                            {/* Push-to-Talk */}
-                            <PushToTalk
-                                matchReady={matchReady}
-                                homeTeam={homeTeam}
-                                awayTeam={awayTeam}
-                                sport={sport}
-                            />
+                    {/* Push-to-Talk always visible */}
+                    <PushToTalk
+                        matchReady={matchReady}
+                        homeTeam={homeTeam}
+                        awayTeam={awayTeam}
+                        sport={sport}
+                    />
 
-                            {/* Tactical Overlay */}
-                            <TacticalOverlay sport={sport} />
-                        </>
-                    )}
+                    {commentaryData && <CommentaryNotesViewer data={commentaryData} />}
+                    {!commentaryData && <TacticalOverlay sport={sport} detection={detection} setDetection={setDetection} />}
                 </div>
 
                 {/* Right — sidebar */}
                 <div className="dashboard-sidebar">
-                    {/* Match Notes (top half) */}
+                    {/* Match Notes OR Tactical Detection */}
                     {!commentaryData && (
                         <>
-                            <MatchNotes notes={[]} loading={buildingNotes} />
+                            {detection ? (
+                                <div className="tactical-info" style={{ width: '100%', minWidth: 300 }}>
+                                    <div className="detection-card">
+                                        <div className="detection-label">Tactical Label</div>
+                                        <div className="detection-value">
+                                            {detection.tactical_label}
+                                        </div>
+                                        {detection.key_observation && (
+                                            <div className="detection-sub">{detection.key_observation}</div>
+                                        )}
+                                        {detection.confidence != null && (
+                                            <>
+                                                <div className="confidence-bar">
+                                                    <div className="confidence-fill" style={{ width: `${detection.confidence * 100}%` }} />
+                                                </div>
+                                                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+                                                    {Math.round(detection.confidence * 100)}% confidence
+                                                </div>
+                                            </>
+                                        )}
+                                    </div>
+
+                                    <div className="detection-card">
+                                        <div className="detection-label">Formation (Home)</div>
+                                        <div className="detection-value">{detection.formation_home || '4-3-3'}</div>
+                                    </div>
+
+                                    <div className="detection-card">
+                                        <div className="detection-label">Formation (Away)</div>
+                                        <div className="detection-value">{detection.formation_away || '4-2-3-1'}</div>
+                                    </div>
+                                </div>
+                            ) : (
+                                <MatchNotes notes={[]} loading={buildingNotes} />
+                            )}
 
                             {/* Event Feed (bottom half) */}
                             <EventFeed />

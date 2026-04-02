@@ -42,7 +42,9 @@ async def write_event(event_type: str, description: str, metadata: dict[str, Any
     }
     
     # Run sync boto3 call in a thread if needed, but for simplicity here:
-    _table.put_item(Item=item)
+    from config import LLM_BACKEND
+    if LLM_BACKEND == "bedrock":
+        _table.put_item(Item=item)
     return item_id
 
 async def get_recent_events(n: int = 10) -> list[dict[str, Any]]:
@@ -57,6 +59,10 @@ async def get_recent_events(n: int = 10) -> list[dict[str, Any]]:
     """
     # Assuming a Global Secondary Index (GSI) named "SessionTimestampIndex" 
     # with Partition Key: `match_session` and Sort Key: `timestamp`.
+    from config import LLM_BACKEND
+    if LLM_BACKEND != "bedrock":
+        return []
+        
     try:
         response = _table.query(
             IndexName='SessionTimestampIndex',

@@ -10,7 +10,8 @@ from datetime import datetime
 import asyncio
 import logging
 from agents.base import BaseAgent
-from data_sources import ESPNDataRetriever, WikipediaRetriever, DataCache
+from data_sources import WikipediaRetriever, DataCache
+from data_sources.factory import get_retriever
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,7 @@ class PlayerResearchAgent(BaseAgent):
         """
         super().__init__(model_id=model_id, sport=sport, agent_type="player_research")
         self.cache = cache or DataCache(ttl_seconds=3600)
-        self.espn_retriever = ESPNDataRetriever(cache=self.cache)
+        self.retriever = get_retriever(self.sport, cache=self.cache)
         self.wiki_retriever = WikipediaRetriever(cache=self.cache)
 
     async def execute(
@@ -107,7 +108,7 @@ class PlayerResearchAgent(BaseAgent):
             Squad data with 25 researched players (or fewer if unavailable)
         """
         # Fetch ESPN squad data
-        espn_squad = await self.espn_retriever.get_team_squad(team_name, self.sport)
+        espn_squad = await self.retriever.get_team_squad(team_name, self.sport)
 
         # Enrich each player with detailed research
         players = espn_squad.get("players", [])[:5]  # 5 for local dev (bump to 25 for production)
@@ -150,7 +151,7 @@ class PlayerResearchAgent(BaseAgent):
             # Get Wikipedia biography in parallel with stats
             wiki_bio, player_stats = await asyncio.gather(
                 self.wiki_retriever.get_player_biography(player_name, self.sport),
-                self.espn_retriever.get_player_stats(player_name, team_name, self.sport),
+                self.retriever.get_player_stats(player_name, team_name, self.sport),
                 return_exceptions=True,
             )
 
@@ -161,7 +162,7 @@ class PlayerResearchAgent(BaseAgent):
                 player_stats = {}
 
             # Synthesize into profile using Bedrock
-            profile_prompt = f"""Create a professional player profile for {player_name}:
+            profile_prompt = f"""Create a professional {self.sport} player profile for {player_name}:
 
 Basic Info:
 - Position: {player_data.get('position', 'Unknown')}
@@ -233,7 +234,7 @@ Keep it concise (3-4 sentences total) for commentary notes."""
         Returns:
             Comparative analysis
         """
-        prompt = f"""Analyze the tactical matchup between {player_name} and {opposing_player}:
+        prompt = f"""As an elite {self.sport} analyst, analyze the tactical matchup between {player_name} and {opposing_player}:
 
 For {player_name}:
 - Consider their strengths (speed, positioning, strength, technical ability)
@@ -265,5 +266,5 @@ Keep to 3-4 sentences."""
 
     async def close(self):
         """Clean up resources."""
-        await self.espn_retriever.close()
+        await self.retriever.close()
         await self.wiki_retriever.close()

@@ -33,26 +33,23 @@ function SoccerPitch({ detection }) {
             <rect x="10" y="110" width="18" height="60" fill="rgba(255,255,255,0.08)" stroke="rgba(255,255,255,0.3)" strokeWidth="1.5" />
             <rect x="372" y="110" width="18" height="60" fill="rgba(255,255,255,0.08)" stroke="rgba(255,255,255,0.3)" strokeWidth="1.5" />
 
-            {/* Formation dots — home team (blue) */}
+            {/* Formation dots — home team (blue) 4-3-3 */}
             {[
                 [50, 140],  // GK
-                [100, 80], [100, 140], [100, 200],  // defence
-                [150, 100], [150, 180],              // midfield
-                [175, 140],                           // CM
-                [190, 80], [190, 200],               // wings
-                [210, 140],                           // striker
+                [100, 50], [100, 110], [100, 170], [100, 230], // DEF x4
+                [150, 80], [150, 140], [150, 200],  // MID x3
+                [210, 80], [210, 140], [210, 200],  // FWD x3
             ].map(([cx, cy], i) => (
                 <circle key={`h${i}`} cx={cx} cy={cy} r="7" fill="rgba(79,156,249,0.85)" stroke="white" strokeWidth="1.5" />
             ))}
 
-            {/* Formation dots — away team (red) */}
+            {/* Formation dots — away team (red) 4-2-3-1 */}
             {[
                 [350, 140],  // GK
-                [300, 80], [300, 140], [300, 200],  // defence
-                [250, 100], [250, 180],              // midfield
-                [225, 140],                           // CM
-                [210, 80], [210, 200],               // wings
-                [230, 140],                           // striker
+                [300, 50], [300, 110], [300, 170], [300, 230], // DEF x4
+                [260, 100], [260, 180], // CDM x2
+                [220, 60], [220, 140], [220, 220], // CAM x3
+                [180, 140],  // ST x1
             ].map(([cx, cy], i) => (
                 <circle key={`a${i}`} cx={cx} cy={cy} r="7" fill="rgba(248,113,113,0.85)" stroke="white" strokeWidth="1.5" />
             ))}
@@ -63,9 +60,9 @@ function SoccerPitch({ detection }) {
     )
 }
 
-export default function TacticalOverlay({ sport }) {
-    const [detection, setDetection] = useState(null)
+export default function TacticalOverlay({ sport, detection, setDetection }) {
     const [loading, setLoading] = useState(false)
+    const [previewUrl, setPreviewUrl] = useState(null)
     const fileInputRef = useRef()
 
     const handleFileChange = async (e) => {
@@ -75,7 +72,9 @@ export default function TacticalOverlay({ sport }) {
 
         const reader = new FileReader()
         reader.onload = async (ev) => {
-            const b64 = ev.target.result.split(',')[1]
+            const dataUrl = ev.target.result
+            setPreviewUrl(dataUrl)
+            const b64 = dataUrl.split(',')[1]
             try {
                 const res = await fetch(`${BACKEND}/api/v1/frame/analyze`, {
                     method: 'POST',
@@ -83,60 +82,46 @@ export default function TacticalOverlay({ sport }) {
                     body: JSON.stringify({ frame_b64: b64, sport }),
                 })
                 const data = await res.json()
-                setDetection(data)
+                if (data.status === 'success') {
+                    setDetection(data.analysis)
+                } else {
+                    console.error('Frame analysis returned error:', data)
+                }
             } catch (err) {
                 console.error('Frame analysis failed', err)
             } finally {
                 setLoading(false)
+                if (fileInputRef.current) {
+                    fileInputRef.current.value = ''
+                }
             }
         }
         reader.readAsDataURL(file)
     }
 
     return (
-        <div className="tactical-section">
-            <div className="pitch-container">
-                <SoccerPitch detection={detection} />
+        <div className="tactical-section" style={{ flexDirection: 'column', alignItems: 'center', width: '100%', gap: '1.5rem' }}>
+            <div className="pitch-container" style={{ width: '100%', position: 'relative' }}>
+                {previewUrl ? (
+                    <img src={previewUrl} alt="Uploaded Frame" style={{ width: '100%', borderRadius: 8, boxShadow: '0 4px 12px rgba(0,0,0,0.2)', objectFit: 'contain' }} />
+                ) : (
+                    <SoccerPitch detection={detection} />
+                )}
                 {detection && (
-                    <div className="tactical-label-badge">
+                    <div className="tactical-label-badge" style={{ position: 'absolute', top: 16, left: 16, zIndex: 10 }}>
                         {ICON_MAP[detection.tactical_label] || '⚽'} {detection.tactical_label}
                     </div>
                 )}
             </div>
 
-            <div className="tactical-info">
-                <div className="detection-card">
-                    <div className="detection-label">Tactical Label</div>
-                    <div className="detection-value">
-                        {detection ? detection.tactical_label : '—'}
-                    </div>
-                    {detection?.key_observation && (
-                        <div className="detection-sub">{detection.key_observation}</div>
-                    )}
-                    {detection?.confidence != null && (
-                        <>
-                            <div className="confidence-bar">
-                                <div className="confidence-fill" style={{ width: `${detection.confidence * 100}%` }} />
-                            </div>
-                            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-                                {Math.round(detection.confidence * 100)}% confidence
-                            </div>
-                        </>
-                    )}
-                </div>
-
-                <div className="detection-card">
-                    <div className="detection-label">Formation (Home)</div>
-                    <div className="detection-value">{detection?.formation_home || '4-3-3'}</div>
-                </div>
-
-                <div className="detection-card">
-                    <div className="detection-label">Formation (Away)</div>
-                    <div className="detection-value">{detection?.formation_away || '4-2-3-1'}</div>
-                </div>
-
-                <button className="upload-frame-btn" onClick={() => fileInputRef.current.click()} disabled={loading}>
-                    {loading ? <><span className="spinner" /> Analyzing...</> : <>📸 Upload Frame</>}
+            <div className="tactical-controls" style={{ width: '100%' }}>
+                <button
+                    className="upload-frame-btn"
+                    onClick={() => fileInputRef.current.click()}
+                    disabled={loading}
+                    style={{ width: '100%', padding: '14px', fontSize: '1.1rem', fontWeight: 600 }}
+                >
+                    {loading ? <><span className="spinner" /> Analyzing Frame...</> : <>📸 Upload Live Broadcast Frame</>}
                 </button>
                 <input
                     ref={fileInputRef}

@@ -29,6 +29,7 @@ class SportConfig:
     tactical_labels: List[str]  # Sport-specific tactical classifications
     team_positions: List[str]  # Key player positions
     research_topics: List[str]  # Topics to research pre-match
+    tactical_definitions: Dict[str, str] = field(default_factory=dict)  # Visual definitions for LLM grounding
 
     def __hash__(self):
         return hash(self.sport_type.value)
@@ -65,6 +66,13 @@ SPORTS_CONFIG: Dict[SportType, SportConfig] = {
             "Central Play",
             "Normal Play"
         ],
+        tactical_definitions={
+            "Set Piece Attack": "Look for a structured 'wall' of defending players, players clustered inside the penalty box, or a player standing over a stationary ball preparing for a free kick.",
+            "Set Piece Defense": "Defending players packed densely inside their own penalty area.",
+            "Build-Up Play": "Look for defenders passing tightly grouped near their own goal or midfield.",
+            "High Press": "Look for attackers heavily swarming the opponent's defensive third.",
+            "Counter Attack": "Look for a rapid, chaotic sprint forward with few defenders back."
+        },
         team_positions=[
             "GK",
             "CB",

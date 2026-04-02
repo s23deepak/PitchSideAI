@@ -10,7 +10,8 @@ from datetime import datetime
 import asyncio
 import logging
 from agents.base import BaseAgent
-from data_sources import ESPNDataRetriever, DataCache
+from data_sources import DataCache
+from data_sources.factory import get_retriever
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,7 @@ class TeamFormAgent(BaseAgent):
         """
         super().__init__(model_id=model_id, sport=sport, agent_type="team_form")
         self.cache = cache or DataCache(ttl_seconds=3600)
-        self.espn_retriever = ESPNDataRetriever(cache=self.cache)
+        self.retriever = get_retriever(self.sport, cache=self.cache)
 
     async def execute(self, home_team: str, away_team: str) -> Dict[str, Any]:
         """
@@ -101,7 +102,7 @@ class TeamFormAgent(BaseAgent):
             Form analysis including recent results, tactical patterns, metrics
         """
         # Get ESPN data for recent form
-        recent_form = await self.espn_retriever.get_recent_form(
+        recent_form = await self.retriever.get_recent_form(
             team_name,
             self.sport,
             num_games=5,
@@ -111,7 +112,7 @@ class TeamFormAgent(BaseAgent):
         home_away_split = await self.analyze_home_away_split(team_name)
 
         # Use Bedrock to synthesize comprehensive analysis
-        analysis_prompt = f"""Analyze the current form and tactical evolution of {team_name}:
+        analysis_prompt = f"""As an elite {self.sport} analyst, analyze the current form and tactical evolution of {team_name}:
 
 Recent Results:
 {self._format_match_results(recent_form.get('recent_matches', []))}
@@ -155,7 +156,7 @@ Keep analysis concise (4-5 sentences for commentary notes)."""
             Home/away record and performance patterns
         """
         # Fetch from ESPN
-        form_data = await self.espn_retriever.get_recent_form(team_name, self.sport, 10)
+        form_data = await self.retriever.get_recent_form(team_name, self.sport, 10)
 
         home_away = form_data.get("home_away", {})
 
@@ -197,7 +198,7 @@ Keep analysis concise (4-5 sentences for commentary notes)."""
         Returns:
             Comparative assessment
         """
-        comparison_prompt = f"""Compare the current form of {home_form['team_name']} (home) vs {away_form['team_name']} (away):
+        comparison_prompt = f"""As an elite {self.sport} analyst, compare the current form of {home_form['team_name']} (home) vs {away_form['team_name']} (away):
 
 Home Team Form: {home_form.get('comprehensive_analysis', 'Analysis unavailable')[:200]}...
 
@@ -260,4 +261,4 @@ Keep to 3-4 sentences."""
 
     async def close(self):
         """Clean up resources."""
-        await self.espn_retriever.close()
+        await self.retriever.close()
