@@ -3,11 +3,11 @@ Live Agent — Amazon Nova Sonic
 Real-time Q&A and live query handling during matches.
 Supports dynamic sport types with contextual responses.
 """
-from typing import Optional
+from typing import List, Optional
 
 from agents.base import LiveAgent as BaseLiveAgent
 from agents.research_agent import ResearchAgent
-from config.prompts import get_query_prompt
+from rag import RetrievedDocument
 from tools.dynamodb_tool import write_event, get_recent_events
 
 
@@ -63,19 +63,25 @@ class LiveAgent(BaseLiveAgent):
 
         return brief
 
-    async def handle_text_query(self, query: str) -> str:
+    async def handle_text_query(
+        self,
+        query: str,
+        context: Optional[List[RetrievedDocument]] = None
+    ) -> str:
         """
         Answer live fan question using RAG context and dynamic prompts.
 
         Args:
             query: Fan question
+            context: Optional pre-fetched RAG documents from the API layer
 
         Returns:
             Answer text
         """
         self.log_event("query_received", {
             "query": query[:100],
-            "has_context": bool(self.match_context)
+            "has_context": bool(self.match_context),
+            "has_rag_context": bool(context)
         })
 
         try:
@@ -85,20 +91,23 @@ class LiveAgent(BaseLiveAgent):
                 e.get("description", "") for e in recent_events if e.get("description")
             ])
 
-            # Combine match context with recent events
-            full_context = f"""
-MATCH CONTEXT:
-{self.match_context[:1000]}
+            context_sections = []
+            if self.match_context:
+                context_sections.append(
+                    f"MATCH CONTEXT:\n{self.match_context[:1000]}"
+                )
+            if events_text:
+                context_sections.append(f"RECENT EVENTS:\n{events_text}")
 
-RECENT EVENTS:
-{events_text}
-"""
+            full_context = "\n\n".join(context_sections)
 
             # Get answer from research agent (uses dynamic prompts)
             answer = await self.research_agent.answer_live_query(
                 query,
                 self.home_team,
-                self.away_team
+                self.away_team,
+                retrieved_docs=context,
+                supplemental_context=full_context
             )
 
             # Log Q&A to DynamoDB

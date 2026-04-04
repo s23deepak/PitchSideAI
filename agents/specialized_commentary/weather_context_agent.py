@@ -10,6 +10,7 @@ from datetime import datetime
 import logging
 from agents.base import BaseAgent
 from data_sources import WeatherDataRetriever, DataCache
+from data_sources.factory import get_search_service
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,10 @@ class WeatherContextAgent(BaseAgent):
             agent_type="weather_context",
         )
         self.cache = cache or DataCache(ttl_seconds=1800)  # 30 min for weather
-        self.weather_retriever = WeatherDataRetriever(cache=self.cache)
+        self.weather_retriever = WeatherDataRetriever(
+            cache=self.cache,
+            search_service=get_search_service(cache=self.cache),
+        )
 
     async def execute(
         self,
@@ -143,15 +147,25 @@ class WeatherContextAgent(BaseAgent):
         Returns:
             Weather commentary narrative
         """
-        temp = weather_data.get("temp_c", 20)
-        conditions = weather_data.get("conditions", "clear")
-        wind = weather_data.get("wind_kmh", 0)
-        forecast_trend = forecast.get("general_trend", "Unknown")
-        sport_impact = impact.get("general", "Standard conditions")
+        temp = weather_data.get("temp_c")
+        conditions = weather_data.get("conditions") or weather_data.get("weather_summary", "Weather unavailable")
+        wind = weather_data.get("wind_kmh")
+        forecast_trend = forecast.get("general_trend") or forecast.get("forecast_summary", "Unavailable")
+        sport_impact = impact.get("general", "Weather impact unavailable")
+
+        current_summary = []
+        if temp is not None:
+            current_summary.append(f"{temp}°C")
+        if conditions:
+            current_summary.append(str(conditions))
+        if wind is not None:
+            current_summary.append(f"Wind {wind:.1f} km/h")
+        if not current_summary:
+            current_summary = ["Weather details unavailable"]
 
         prompt = f"""Create a weather commentary narrative for a {self.sport} match:
 
-Current: {temp}°C, {conditions}, Wind {wind:.1f} km/h
+Current: {', '.join(current_summary)}
 Forecast Trend: {forecast_trend}
 Sport Impact: {sport_impact}
 
@@ -172,4 +186,5 @@ Keep to 3-4 sentences, suitable for match commentary."""
 
     async def close(self):
         """Clean up resources."""
-        await self.weather_retriever.close()
+        if hasattr(self.weather_retriever, "close"):
+            await self.weather_retriever.close()

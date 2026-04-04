@@ -16,8 +16,13 @@ pydantic-settings>=2.1.0
 langgraph>=0.0.50
 langchain>=0.1.0
 langchain-aws>=0.1.0
+langchain-community>=0.3.0
 crewai>=0.1.0
 crewai-tools>=0.1.0
+
+# Data Sources
+tavily-python>=0.5.0
+soccerdata>=1.8.0
 
 # Concurrency & Performance
 aioredis>=2.0.1

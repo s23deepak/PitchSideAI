@@ -2,7 +2,7 @@
 Matchup Analysis Agent - Analyze 1v1 player matchups and positional battles.
 
 Identifies critical matchups, positional strengths, and tactical battles
-that will define the match.
+that will define the match. Uses FBref stats for real player comparison.
 """
 
 from typing import Dict, List, Any, Optional
@@ -11,7 +11,7 @@ import asyncio
 import logging
 from agents.base import BaseAgent
 from data_sources import DataCache
-from data_sources.factory import get_retriever
+from data_sources.factory import get_fbref_retriever
 
 logger = logging.getLogger(__name__)
 
@@ -21,9 +21,10 @@ class MatchupAnalysisAgent(BaseAgent):
 
     def __init__(
         self,
-        model_id: str = "us.nova-lite-1:0",  # Lite model for efficiency
+        model_id: str = "us.nova-lite-1:0",
         sport: str = "soccer",
         cache: Optional[DataCache] = None,
+        fbref_retriever: Optional[Any] = None,
     ):
         """Initialize matchup analysis agent."""
         super().__init__(
@@ -32,7 +33,7 @@ class MatchupAnalysisAgent(BaseAgent):
             agent_type="matchup_analysis",
         )
         self.cache = cache or DataCache(ttl_seconds=3600)
-        self.retriever = get_retriever(self.sport, cache=self.cache)
+        self.fbref = fbref_retriever or (get_fbref_retriever(cache=self.cache) if sport == "soccer" else None)
 
     async def execute(
         self,
@@ -119,27 +120,64 @@ class MatchupAnalysisAgent(BaseAgent):
         player1: Dict[str, str],
         player2: Dict[str, str],
     ) -> Optional[Dict[str, Any]]:
-        """Analyze individual player matchup."""
+        """Analyze individual player matchup with real stats."""
+        # Fetch real stats from FBref if available
+        player1_stats = {}
+        player2_stats = {}
+
+        if self.fbref and self.fbref.is_available:
+            try:
+                # Fetch stats for both players in parallel
+                p1_stats, p2_stats = await asyncio.gather(
+                    self.fbref.get_player_season_stats(player1.get('name', ''), stat_type="standard"),
+                    self.fbref.get_player_season_stats(player2.get('name', ''), stat_type="standard"),
+                    return_exceptions=True,
+                )
+                if isinstance(p1_stats, dict):
+                    player1_stats = p1_stats
+                if isinstance(p2_stats, dict):
+                    player2_stats = p2_stats
+            except Exception as exc:
+                logger.warning("FBref stats fetch failed: %s", exc)
+
+        # Build prompt with stats if available
+        stats_context = ""
+        if player1_stats:
+            goals1 = player1_stats.get('goals', 0) or 0
+            assists1 = player1_stats.get('assists', 0) or 0
+            stats_context += f"\n{player1.get('name')}: {goals1}G {assists1}A this season"
+        if player2_stats:
+            goals2 = player2_stats.get('goals', 0) or 0
+            assists2 = player2_stats.get('assists', 0) or 0
+            stats_context += f"\n{player2.get('name')}: {goals2}G {assists2}A this season"
+        if not stats_context:
+            stats_context = "\nNo verified season stats were available for this matchup."
+
         prompt = f"""As an elite {self.sport} analyst, analyze matchup: {player1.get('name', 'Player 1')} vs {player2.get('name', 'Player 2')}
 Position: {player1.get('position', 'Unknown')}
+{stats_context}
 
 Provide:
-1. Advantage assessment
-2. Key factor
-3. Match prediction
+1. Statistical advantage
+2. Tactical edge
+3. Key battle prediction
 
-Keep to 2 sentences."""
+Only analyze from the verified data above and the listed positions. If statistics are unavailable, say that explicitly.
+
+Keep to 2-3 sentences."""
 
         analysis = await self.call_bedrock(
             prompt=prompt,
             temperature=0.3,
-            max_tokens=80,  # 80 for local dev (150 in production)
+            max_tokens=100,
         )
 
         return {
             "player1": player1.get("name", "Unknown"),
             "player2": player2.get("name", "Unknown"),
             "position": player1.get("position", "Unknown"),
+            "player1_stats": player1_stats,
+            "player2_stats": player2_stats,
             "analysis": analysis,
             "importance": "high",
         }
@@ -150,11 +188,27 @@ Keep to 2 sentences."""
         away_lineup: List[Dict[str, str]],
     ) -> Dict[str, Any]:
         """Analyze positional strengths."""
-        positions = ["Defense", "Midfield", "Attack"]
+        home_summary = self._summarize_lineup(home_lineup)
+        away_summary = self._summarize_lineup(away_lineup)
         assessment = {}
 
-        for pos in positions:
-            assessment[pos] = f"{pos}: Competitive battle expected"
+        for zone in ("Defense", "Midfield", "Attack"):
+            key = zone.lower()
+            home_zone = home_summary.get(key, {})
+            away_zone = away_summary.get(key, {})
+            if home_zone.get("contribution", 0) > away_zone.get("contribution", 0):
+                verdict = f"{zone}: slight edge to home side"
+            elif away_zone.get("contribution", 0) > home_zone.get("contribution", 0):
+                verdict = f"{zone}: slight edge to away side"
+            else:
+                verdict = f"{zone}: balanced on verified data"
+            assessment[zone] = {
+                "home_players": home_zone.get("players", 0),
+                "away_players": away_zone.get("players", 0),
+                "home_contribution": home_zone.get("contribution", 0),
+                "away_contribution": away_zone.get("contribution", 0),
+                "verdict": verdict,
+            }
 
         return assessment
 
@@ -165,9 +219,49 @@ Keep to 2 sentences."""
     ) -> Dict[str, Any]:
         """Identify defensive weak points."""
         return {
-            "home_vulnerabilities": ["Fullback coverage", "Set piece defense"],
-            "away_vulnerabilities": ["Transition defense", "Counter-attack"],
+            "home_vulnerabilities": self._infer_vulnerabilities(home_lineup),
+            "away_vulnerabilities": self._infer_vulnerabilities(away_lineup),
         }
+
+    def _summarize_lineup(self, lineup: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        """Summarize players and contributions by zone."""
+        summary = {
+            "defense": {"players": 0, "contribution": 0},
+            "midfield": {"players": 0, "contribution": 0},
+            "attack": {"players": 0, "contribution": 0},
+        }
+
+        for player in lineup:
+            zone = self._position_zone(player.get("position", ""))
+            stats = player.get("stats", {}) if isinstance(player.get("stats"), dict) else {}
+            contribution = (stats.get("goals", 0) or 0) + (stats.get("assists", 0) or 0)
+            summary[zone]["players"] += 1
+            summary[zone]["contribution"] += contribution
+
+        return summary
+
+    def _infer_vulnerabilities(self, lineup: List[Dict[str, Any]]) -> List[str]:
+        """Infer structural vulnerabilities from the verified lineup composition."""
+        summary = self._summarize_lineup(lineup)
+        vulnerabilities = []
+        if summary["defense"]["players"] < 3:
+            vulnerabilities.append("Thin defensive cover in the verified lineup")
+        if summary["midfield"]["players"] < 2:
+            vulnerabilities.append("Limited midfield control based on listed starters")
+        if summary["attack"]["players"] < 2:
+            vulnerabilities.append("Low attacking depth in the verified lineup")
+        if not vulnerabilities:
+            vulnerabilities.append("No obvious structural weakness from verified lineup data")
+        return vulnerabilities
+
+    def _position_zone(self, position: str) -> str:
+        """Map a position label into a broad zone."""
+        pos = (position or "").upper()
+        if pos in {"GK", "CB", "LB", "RB", "LWB", "RWB", "DEFENDER"} or pos.endswith("B"):
+            return "defense"
+        if pos in {"CM", "CDM", "CAM", "LM", "RM", "MIDFIELDER", "MF"} or pos.endswith("M"):
+            return "midfield"
+        return "attack"
 
     async def _generate_tactical_implications(
         self,
@@ -191,4 +285,5 @@ Provide expected tactical adjustments and key battles to watch."""
 
     async def close(self):
         """Clean up resources."""
-        await self.retriever.close()
+        pass
+

@@ -18,6 +18,8 @@ EXTERNAL_API_KEYS: Dict[str, Optional[str]] = {
     "openweathermap": os.getenv("OPENWEATHERMAP_API_KEY"),
     "goal_com": os.getenv("GOAL_COM_API_KEY"),
     "cricbuzz": os.getenv("CRICBUZZ_API_KEY"),
+    "tavily": os.getenv("TAVILY_API_KEY"),
+    "football_data": os.getenv("FOOTBALL_DATA_API_KEY"),
 }
 
 

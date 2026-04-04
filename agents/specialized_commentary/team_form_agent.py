@@ -11,7 +11,7 @@ import asyncio
 import logging
 from agents.base import BaseAgent
 from data_sources import DataCache
-from data_sources.factory import get_retriever
+from data_sources.factory import get_football_data_retriever, get_retriever
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +24,7 @@ class TeamFormAgent(BaseAgent):
         model_id: str = "us.nova-pro-1:0",
         sport: str = "soccer",
         cache: Optional[DataCache] = None,
+        football_data_retriever: Optional[Any] = None,
     ):
         """
         Initialize team form agent.
@@ -36,6 +37,7 @@ class TeamFormAgent(BaseAgent):
         super().__init__(model_id=model_id, sport=sport, agent_type="team_form")
         self.cache = cache or DataCache(ttl_seconds=3600)
         self.retriever = get_retriever(self.sport, cache=self.cache)
+        self.football_data = football_data_retriever or get_football_data_retriever(cache=self.cache)
 
     async def execute(self, home_team: str, away_team: str) -> Dict[str, Any]:
         """
@@ -108,33 +110,39 @@ class TeamFormAgent(BaseAgent):
             num_games=5,
         )
 
-        # Generate tactical analysis
+        # Extract record data from ESPN schema
+        record = recent_form.get('record', {})
+        wins = record.get('wins', 0)
+        draws = record.get('draws', 0)
+        losses = record.get('losses', 0)
+        goals_for = recent_form.get('goals_for', 0)
+        goals_against = recent_form.get('goals_against', 0)
+        form_string = recent_form.get('form_string', '')
         home_away_split = await self.analyze_home_away_split(team_name)
+
+        split_summary = self._format_home_away_split(home_away_split)
 
         # Use Bedrock to synthesize comprehensive analysis
         analysis_prompt = f"""As an elite {self.sport} analyst, analyze the current form and tactical evolution of {team_name}:
 
-Recent Results:
-{self._format_match_results(recent_form.get('recent_matches', []))}
-
-W-D-L: {recent_form.get('w_d_l', [0,0,0])}
-Goals For/Against: {recent_form.get('goals_for', 0):.1f} / {recent_form.get('goals_against', 0):.1f}
-
-Home/Away: {home_away_split.get('home_record', 'N/A')} / {home_away_split.get('away_record', 'N/A')}
+Recent Form: {form_string or 'No data'}
+Record: {wins}W-{draws}D-{losses}L
+Goals For/Against: {goals_for} / {goals_against}
+Home/Away Split: {split_summary}
 
 Provide:
 1. Current Form Status (in-form, declining, stable, resurgent)
-2. Key Performance Trends (defensive solidity, attacking flair, set pieces, transitions)
-3. Momentum Assessment (momentum direction and confidence level)
-4. Tactical Evolution (what's working, what's struggling)
-5. Key Player Performance Impact
+2. Key Performance Trends (defensive record, goal-scoring rate)
+3. Momentum Assessment (direction and confidence level)
+4. Recent Performance Pattern (any notable streaks or fluctuations)
+5. Tactical Implications for upcoming match
 
 Keep analysis concise (4-5 sentences for commentary notes)."""
 
         form_analysis = await self.call_bedrock(
             prompt=analysis_prompt,
             temperature=0.4,
-            max_tokens=200,  # 200 for local dev (400 in production)
+            max_tokens=200,
         )
 
         return {
@@ -146,42 +154,38 @@ Keep analysis concise (4-5 sentences for commentary notes)."""
         }
 
     async def analyze_home_away_split(self, team_name: str) -> Dict[str, Any]:
-        """
-        Analyze team's home vs away performance differential.
+        """Analyze a team's home and away split using football-data standings."""
+        if self.sport != "soccer" or not self.football_data or not self.football_data.is_available:
+            return {}
 
-        Args:
-            team_name: Team name
+        competition_code = self.football_data.resolve_competition_code(team_name)
+        if not competition_code:
+            return {}
 
-        Returns:
-            Home/away record and performance patterns
-        """
-        # Fetch from ESPN
-        form_data = await self.retriever.get_recent_form(team_name, self.sport, 10)
-
-        home_away = form_data.get("home_away", {})
-
-        # Analyze performance difference
-        performance_diff = await self._analyze_performance_differential(
-            home_away.get("home_record", ""),
-            home_away.get("away_record", ""),
-        )
-
+        standings = await self.football_data.get_standings(competition_code)
+        team_rows = self.football_data.get_team_standing(standings, team_name)
         return {
-            "home_record": home_away.get("home_record", "N/A"),
-            "away_record": home_away.get("away_record", "N/A"),
-            "performance_differential": performance_diff,
-            "travel_fatigue_risk": performance_diff.get("travel_impact", "Low"),
+            "competition_code": competition_code,
+            **team_rows,
         }
 
-    def _format_match_results(self, matches: List[Dict[str, Any]]) -> str:
-        """Format recent matches for prompt."""
-        formatted = []
-        for match in matches:
-            formatted.append(
-                f"- {match.get('opponent', 'Unknown')}: {match.get('result', 'Unknown')} "
-                f"(Rating: {match.get('rating', 'N/A')}/10)"
+    def _format_home_away_split(self, split: Dict[str, Any]) -> str:
+        """Format standings splits for prompting."""
+        home_row = split.get("home")
+        away_row = split.get("away")
+        if not home_row and not away_row:
+            return "Unavailable"
+
+        parts = []
+        if home_row:
+            parts.append(
+                f"Home {home_row.get('won', 0)}W-{home_row.get('draw', 0)}D-{home_row.get('lost', 0)}L"
             )
-        return "\n".join(formatted) or "No recent matches"
+        if away_row:
+            parts.append(
+                f"Away {away_row.get('won', 0)}W-{away_row.get('draw', 0)}D-{away_row.get('lost', 0)}L"
+            )
+        return " | ".join(parts)
 
     async def _compare_form(
         self,
@@ -220,45 +224,10 @@ Keep to 3-4 sentences."""
 
         return {
             "comparative_assessment": comparison,
-            "likely_match_narrative": "Home team likely to dominate if they maintain form",
+            "likely_match_narrative": comparison.split(".")[0].strip() if comparison else "Unavailable",
         }
 
-    async def _analyze_performance_differential(
-        self,
-        home_record: str,
-        away_record: str,
-    ) -> Dict[str, Any]:
-        """
-        Calculate home vs away performance differential.
-
-        Args:
-            home_record: Home W-D-L record
-            away_record: Away W-D-L record
-
-        Returns:
-            Analysis of home advantage
-        """
-        # Simple heuristic analysis
-        home_wins = home_record.count("W")
-        away_wins = away_record.count("W")
-        differential = home_wins - away_wins
-
-        if differential > 2:
-            impact = "Very Strong"
-            travel_impact = "Moderate"
-        elif differential > 0:
-            impact = "Moderate"
-            travel_impact = "Low"
-        else:
-            impact = "Weak"
-            travel_impact = "Low"
-
-        return {
-            "home_advantage": impact,
-            "travel_impact": travel_impact,
-            "differential": differential,
-        }
 
     async def close(self):
         """Clean up resources."""
-        await self.retriever.close()
+        return None

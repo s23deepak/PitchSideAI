@@ -85,8 +85,8 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
 
         # PAGE 1: Lineups & Match Info
         page1 = self._organize_lineups_section(
-            home_team,
-            away_team,
+            all_outputs.get("player_research", {}).get("home_team", {}),
+            all_outputs.get("player_research", {}).get("away_team", {}),
             match_datetime,
             venue,
             all_outputs.get("weather", {}),
@@ -129,16 +129,22 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
 
     def _organize_lineups_section(
         self,
-        home_team: str,
-        away_team: str,
+        home_squad: Dict[str, Any],
+        away_squad: Dict[str, Any],
         match_datetime: str,
         venue: str,
         weather: Dict[str, Any],
     ) -> str:
         """Organize PAGE 1 - Lineups & Match Info."""
-        temp = weather.get("current_conditions", {}).get("temperature_c", "20")
-        conditions = weather.get("current_conditions", {}).get("conditions", "clear")
-        wind = weather.get("current_conditions", {}).get("wind_kmh", "0")
+        home_team = home_squad.get("team_name", "Home")
+        away_team = away_squad.get("team_name", "Away")
+        temp = weather.get("current_conditions", {}).get("temperature_c")
+        conditions = weather.get("current_conditions", {}).get("conditions") or "unavailable"
+        wind = weather.get("current_conditions", {}).get("wind_kmh")
+        home_players = home_squad.get("players", [])[:11]
+        away_players = away_squad.get("players", [])[:11]
+
+        lineup_rows = self._format_lineup_rows(home_players, away_players)
 
         from datetime import datetime
         try:
@@ -154,26 +160,16 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
 **Match Details**
 - Date: {friendly_date}
 - Venue: {venue}
-- Weather: {temp}°C, {conditions.replace('_', ' ').title()}, {wind} km/h wind
+- Weather: {self._format_weather_summary(temp, conditions, wind)}
 - Referee: TBD / Unannounced
 
-**Starting XIs**
+**Probable Starters From Available Research**
 
 | {home_team} | Pos | {away_team} |
 |-----------|-----|-----------|
-| GK Player | GK | Away GK |
-| CB Player 1 | CB | Away CB 1 |
-| CB Player 2 | CB | Away CB 2 |
-| LB Player | LB | LB Away |
-| RB Player | RB | RB Away |
-| CM Player 1 | CM | CM Away 1 |
-| CM Player 2 | CM | CM Away 2 |
-| CAM Player | AM | AM Away |
-| LW Player | LW | LW Away |
-| ST Player | ST | ST Away |
-| RW Player | RW | RW Away |
+{lineup_rows}
 
-**Formation**: 4-3-3 vs 3-5-2
+**Lineup Note**: Derived from currently available researched squad data; official XI may differ.
 """
 
     def _organize_team_analysis_section(
@@ -189,6 +185,17 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
 
         form_text = form_analysis.get("comprehensive_analysis", "Form data unavailable")
 
+        form_section = form_text
+        split = form_analysis.get("home_away_split", {})
+        if split:
+            home_row = split.get("home", {})
+            away_row = split.get("away", {})
+            split_text = (
+                f"Home: {home_row.get('won', 0)}W-{home_row.get('draw', 0)}D-{home_row.get('lost', 0)}L | "
+                f"Away: {away_row.get('won', 0)}W-{away_row.get('draw', 0)}D-{away_row.get('lost', 0)}L"
+            )
+            form_section = f"{form_text}\n\nVerified Home/Away Split: {split_text}"
+
         return f"""---
 
 ## PAGE {2 if team_label == 'Home Team' else 3}: {team_label.upper()} ANALYSIS
@@ -196,7 +203,7 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
 **Recent Form** ({team_label})
 
 Composite Analysis:
-{form_text}
+{form_section}
 
 **Key Players** (Sorted by Recent Form)
 
@@ -208,10 +215,7 @@ Composite Analysis:
 
 **Tactical Profile**
 
-- Formation: 4-3-3
-- Pressing: High press in midfield
-- Strength: Possession-based football
-- Weakness: Vulnerable on counter-attack
+- Verified tactical detail: use matchup analysis and team form sections for evidence-backed trends.
 """
 
     def _organize_tactical_section(
@@ -223,7 +227,11 @@ Composite Analysis:
         """Organize tactical analysis section (Pages 4-5)."""
         critical_matchups = matchups.get("critical_matchups", [])
         narrative = historical.get("narrative", "No historical narrative")
-        h2h_record = historical.get("h2h_history", {}).get("total_record", "Unknown")
+        h2h = historical.get("h2h_history", {})
+        h2h_record = (
+            f"{h2h.get('team1_wins', 0)}-{h2h.get('draws', 0)}-{h2h.get('team2_wins', 0)}"
+            if h2h else "Unavailable"
+        )
 
         return f"""---
 
@@ -246,11 +254,7 @@ Recent H2H Narrative:
 
 **Expected Match Dynamic**
 
-1. Opening phase: Home team likely to control possession
-2. Midfield battle: Critical area for both sides
-3. Attacking approach: Counter-attacks likely from Away team
-4. Set pieces: Important tactical element
-5. Final stages: Intensity expected to rise
+{self._format_match_dynamic(matchups, historical, weather)}
 """
 
     def _format_player_list(self, players: List[Dict[str, Any]]) -> str:
@@ -259,13 +263,14 @@ Recent H2H Narrative:
         for i, player in enumerate(players, 1):
             name = player.get("name", "Unknown")
             pos = player.get("position", "N/A")
-            apps = player.get("appearances", 0)
-            goals = player.get("goals", 0)
-            form = player.get("recent_form", "Steady")
-            profile = player.get("profile", "Professional player")[:60] + "..."
+            stats = player.get("stats", {}) if isinstance(player.get("stats"), dict) else {}
+            apps = stats.get("appearances", 0)
+            goals = stats.get("goals", 0)
+            assists = stats.get("assists", 0)
+            profile = player.get("profile", "Player profile unavailable")[:90]
 
             formatted.append(
-                f"**{i}. {name}** ({pos})\n- Apps: {apps} | Goals: {goals} | Form: {form}\n- {profile}\n"
+                f"**{i}. {name}** ({pos})\n- Apps: {apps} | Goals: {goals} | Assists: {assists}\n- {profile}\n"
             )
 
         return "\n".join(formatted) if formatted else "Player data unavailable"
@@ -273,22 +278,40 @@ Recent H2H Narrative:
     def _format_news(self, news: Dict[str, Any]) -> str:
         """Format team news for markdown."""
         injuries = news.get("injuries", [])
-        suspensions = news.get("suspensions", [])
         synthesis = news.get("synthesis", "No major updates")
+        news_items = news.get("news_items", [])[:3]
 
         output = f"**Summary**: {synthesis}\n\n"
+
+        if news_items:
+            output += "**Recent Headlines**:\n"
+            for item in news_items:
+                output += f"- {item.get('title', 'Unknown headline')}\n"
+            output += "\n"
 
         if injuries:
             output += "**Injuries**:\n"
             for inj in injuries:
                 output += f"- {inj.get('player', 'Unknown')}: {inj.get('status', 'unknown')}\n"
 
-        if suspensions:
-            output += "**Suspensions**:\n"
-            for susp in suspensions:
-                output += f"- {susp.get('player', 'Unknown')}: {susp.get('remaining_matches', 1)} match\n"
-
         return output if output else "No news updates"
+
+    def _format_lineup_rows(
+        self,
+        home_players: List[Dict[str, Any]],
+        away_players: List[Dict[str, Any]],
+    ) -> str:
+        """Render two researched squads into a simple three-column lineup table."""
+        rows = []
+        max_len = max(len(home_players), len(away_players), 1)
+        for idx in range(max_len):
+            home = home_players[idx] if idx < len(home_players) else {}
+            away = away_players[idx] if idx < len(away_players) else {}
+            home_name = home.get("name", "-")
+            away_name = away.get("name", "-")
+            pos = home.get("position") or away.get("position") or "-"
+            rows.append(f"| {home_name} | {pos} | {away_name} |")
+        return "\n".join(rows)
 
     def _format_matchups(self, matchups: List[Dict[str, Any]]) -> str:
         """Format key matchups for markdown."""
@@ -301,8 +324,51 @@ Recent H2H Narrative:
 
         return "\n".join(formatted) if formatted else "Matchup analysis unavailable"
 
+    def _format_weather_summary(self, temp: Any, conditions: str, wind: Any) -> str:
+        """Format weather details without fabricating missing values."""
+        parts = []
+        if temp is not None:
+            parts.append(f"{temp}°C")
+        if conditions:
+            parts.append(conditions.replace("_", " ").title())
+        if wind is not None:
+            parts.append(f"{wind} km/h wind")
+        return ", ".join(parts) if parts else "Unavailable"
+
+    def _format_match_dynamic(
+        self,
+        matchups: Dict[str, Any],
+        historical: Dict[str, Any],
+        weather: Dict[str, Any],
+    ) -> str:
+        """Build a concise expected match dynamic from verified sections."""
+        bullets = []
+
+        critical_matchups = matchups.get("critical_matchups", [])
+        if critical_matchups:
+            first = critical_matchups[0]
+            bullets.append(
+                f"1. Key duel: {first.get('player1', 'Unknown')} vs {first.get('player2', 'Unknown')}"
+            )
+
+        h2h = historical.get("h2h_history", {})
+        if h2h:
+            bullets.append(
+                f"2. Historical trend: {h2h.get('team1_wins', 0)}-{h2h.get('draws', 0)}-{h2h.get('team2_wins', 0)} in the available H2H sample"
+            )
+
+        weather_narrative = weather.get("narrative")
+        if weather_narrative:
+            bullets.append(f"3. Weather factor: {weather_narrative.split('.')[0].strip()}")
+
+        if not bullets:
+            return "Evidence-based match dynamic unavailable from current inputs."
+
+        return "\n".join(bullets)
+
     async def _build_json_structure(self, all_outputs: Dict[str, Any]) -> Dict[str, Any]:
         """Build complete JSON structure for embedded data."""
+        data_sources = self._collect_data_sources(all_outputs)
         return {
             "metadata": {
                 "match_id": f"{all_outputs.get('home_team', 'home')}_vs_{all_outputs.get('away_team', 'away')}",
@@ -313,7 +379,7 @@ Recent H2H Narrative:
                 "venue": all_outputs.get("venue", "Unknown"),
                 "generated_at": datetime.utcnow().isoformat(),
                 "preparation_time_ms": 0,
-                "data_sources": ["espn", "openweathermap", "wikipedia", "rag"],
+                "data_sources": data_sources,
             },
             "home_team": self._extract_team_json(
                 all_outputs.get("player_research", {}).get("home_team", {}),
@@ -329,11 +395,30 @@ Recent H2H Narrative:
             "historical_context": all_outputs.get("historical", {}),
             "weather": all_outputs.get("weather", {}),
             "quality_metrics": {
-                "data_completeness": 0.95,
-                "sources_used": 4,
+                "data_completeness": round(min(len(data_sources) / 5, 1.0), 2),
+                "sources_used": len(data_sources),
                 "warnings": [],
             },
         }
+
+    def _collect_data_sources(self, all_outputs: Dict[str, Any]) -> List[str]:
+        """Collect distinct data sources referenced across agent outputs."""
+        sources = set()
+
+        def _walk(value: Any) -> None:
+            if isinstance(value, dict):
+                source = value.get("data_source")
+                if isinstance(source, str) and source:
+                    sources.add(source)
+                for child in value.values():
+                    _walk(child)
+            elif isinstance(value, list):
+                for item in value:
+                    _walk(item)
+
+        _walk(all_outputs)
+        sources.add("espn")
+        return sorted(sources)
 
     def _extract_team_json(
         self,

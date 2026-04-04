@@ -71,7 +71,13 @@ class BaseAgent(ABC):
         """
         Call LLM API (Bedrock, Ollama, OpenAI, or vLLM) with error handling and logging.
         """
-        guardrail = "\n\nCRITICAL INSTRUCTION: You are generating a final output narrative. DO NOT output ANY template placeholders (e.g. [insert player], [team], etc.). Fill out all details using the provided context natively. If you lack context for a claim, do not make the claim at all."
+        guardrail = (
+            "\n\nCRITICAL INSTRUCTION: You are generating a final output narrative. "
+            "DO NOT output template placeholders. DO NOT invent or fabricate statistics, "
+            "records, scores, dates, lineups, injuries, suspensions, biographies, or weather details. "
+            "Only use facts explicitly provided in the prompt context. If data is unavailable, "
+            "state that it is unavailable instead of guessing."
+        )
         prompt = prompt + guardrail
 
         if self.backend != "bedrock":

@@ -1,18 +1,22 @@
 """
-Sport-Specific Data Retriever - Fetch data from goal.com, cricbuzz.com, etc.
+Sport-Specific Data Retriever - Fetch data from FBref, Tavily, and other sources.
 
-Integrates with sport-specific sources to get:
-- Soccer: goal.com lineups, tactics, formations
-- Cricket: cricbuzz.com team info, squad details
-- Other sports: relevant news and tactical information
+Integrates with:
+- FBref: Soccer lineups, tactics, formations, player stats
+- Tavily: Team news, injuries, suspensions, transfers
+- football-data.org: Squad details, standings
 """
 
-import httpx
-from typing import Dict, List, Optional, Any
-from datetime import datetime
 import logging
+from typing import Any, Dict, List, Optional
+from datetime import datetime
+
 from data_sources.cache import DataCache
-import os
+from data_sources.factory import (
+    get_fbref_retriever,
+    get_football_data_retriever,
+    get_search_service,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -20,20 +24,26 @@ logger = logging.getLogger(__name__)
 class SportsSpecificRetriever:
     """Retrieve sport-specific data from specialized sources."""
 
-    def __init__(self, cache: Optional[DataCache] = None):
+    def __init__(
+        self,
+        cache: Optional[DataCache] = None,
+        fbref_retriever: Optional[Any] = None,
+        football_data_retriever: Optional[Any] = None,
+        search_service: Optional[Any] = None,
+    ):
         """
         Initialize sports-specific retriever.
 
         Args:
             cache: Optional DataCache instance
+            fbref_retriever: Optional FBrefRetriever for soccer stats
+            football_data_retriever: Optional FootballDataRetriever for standings/squads
+            search_service: Optional TavilySearchService for news/tactics
         """
         self.cache = cache or DataCache(ttl_seconds=3600)
-        self.http_client = httpx.AsyncClient(
-            timeout=10.0,
-            headers={"User-Agent": "PitchAI-Commentary"},
-        )
-        self.goal_com_api = "https://www.goal.com/en/"
-        self.cricbuzz_api = "https://www.cricbuzz.com/api/"
+        self.fbref = fbref_retriever or get_fbref_retriever(cache=self.cache)
+        self.football_data = football_data_retriever or get_football_data_retriever(cache=self.cache)
+        self.search_service = search_service or get_search_service(cache=self.cache)
 
     async def get_soccer_lineups(
         self,
@@ -41,7 +51,7 @@ class SportsSpecificRetriever:
         away_team: str,
     ) -> Dict[str, Any]:
         """
-        Get soccer team lineups from goal.com data.
+        Get soccer team lineups and formations.
 
         Args:
             home_team: Home team name
@@ -55,7 +65,38 @@ class SportsSpecificRetriever:
         if cached:
             return cached
 
-        lineups = await self._fetch_soccer_lineups_mock(home_team, away_team)
+        lineups = {
+            "home_team": home_team,
+            "away_team": away_team,
+            "home_formation": None,
+            "away_formation": None,
+            "home_lineup": [],
+            "away_lineup": [],
+            "home_bench": [],
+            "away_bench": [],
+            "data_source": "unavailable",
+        }
+
+        # Try Tavily search for predicted lineups
+        if self.search_service and self.search_service.is_available:
+            try:
+                home_lineup = await self.search_service.search_lineup(home_team, "soccer")
+                away_lineup = await self.search_service.search_lineup(away_team, "soccer")
+
+                if home_lineup.get("answer") or away_lineup.get("answer"):
+                    lineups = {
+                        "home_team": home_team,
+                        "away_team": away_team,
+                        "home_summary": home_lineup.get("answer", "")[:300] if home_lineup.get("answer") else "",
+                        "away_summary": away_lineup.get("answer", "")[:300] if away_lineup.get("answer") else "",
+                        "data_source": "tavily_search",
+                        "source_urls": (
+                            [r.get("url", "") for r in home_lineup.get("results", [])]
+                            + [r.get("url", "") for r in away_lineup.get("results", [])]
+                        )[:5],
+                    }
+            except Exception as exc:
+                logger.warning("Tavily lineup search failed: %s", exc)
 
         self.cache.set("soccer_lineups", cache_key, lineups)
         return lineups
@@ -65,7 +106,7 @@ class SportsSpecificRetriever:
         team_name: str,
     ) -> Dict[str, Any]:
         """
-        Get soccer team tactical profile.
+        Get soccer team tactical profile from real sources.
 
         Args:
             team_name: Team name
@@ -77,7 +118,40 @@ class SportsSpecificRetriever:
         if cached:
             return cached
 
-        tactics = await self._fetch_soccer_tactics_mock(team_name)
+        tactics = {
+            "team": team_name,
+            "data_source": "unavailable",
+        }
+
+        # Try FBref for tactical stats
+        if self.fbref and self.fbref.is_available:
+            try:
+                tactical_profile = await self.fbref.get_tactical_profile(team_name)
+                if tactical_profile:
+                    tactics = {
+                        "team": team_name,
+                        "possession_stats": tactical_profile.get("possession_stats", {}),
+                        "defense_stats": tactical_profile.get("defense_stats", {}),
+                        "passing_stats": tactical_profile.get("passing_stats", {}),
+                        "data_source": "fbref",
+                    }
+            except Exception as exc:
+                logger.warning("FBref tactical profile failed for %s: %s", team_name, exc)
+
+        # Fall back to Tavily search
+        if not tactics.get("possession_stats"):
+            if self.search_service and self.search_service.is_available:
+                try:
+                    search_result = await self.search_service.search_team_tactics(team_name, "soccer")
+                    if search_result.get("answer"):
+                        tactics = {
+                            "team": team_name,
+                            "tactical_summary": search_result["answer"][:400],
+                            "source_urls": [r.get("url", "") for r in search_result.get("results", [])],
+                            "data_source": "tavily_search",
+                        }
+                except Exception as exc:
+                    logger.warning("Tavily tactical search failed for %s: %s", team_name, exc)
 
         self.cache.set("soccer_tactics", team_name, tactics)
         return tactics
@@ -85,10 +159,10 @@ class SportsSpecificRetriever:
     async def get_cricket_squad(
         self,
         team_name: str,
-        match_type: str = "ODI",  # ODI, T20, Test
+        match_type: str = "ODI",
     ) -> Dict[str, Any]:
         """
-        Get cricket team squad from cricbuzz.com data.
+        Get cricket team squad from real sources.
 
         Args:
             team_name: Team name
@@ -102,7 +176,30 @@ class SportsSpecificRetriever:
         if cached:
             return cached
 
-        squad = await self._fetch_cricket_squad_mock(team_name, match_type)
+        squad = {
+            "team": team_name,
+            "match_type": match_type,
+            "players": [],
+            "data_source": "unavailable",
+        }
+
+        # Try Tavily search for squad info
+        if self.search_service and self.search_service.is_available:
+            try:
+                search_result = await self.search_service.search(
+                    f"{team_name} {match_type} squad players recent form",
+                    cache_namespace="tavily_cricket_squad",
+                )
+                if search_result.get("answer"):
+                    squad = {
+                        "team": team_name,
+                        "match_type": match_type,
+                        "squad_summary": search_result["answer"][:400],
+                        "source_urls": [r.get("url", "") for r in search_result.get("results", [])],
+                        "data_source": "tavily_search",
+                    }
+            except Exception as exc:
+                logger.warning("Tavily cricket squad search failed for %s: %s", team_name, exc)
 
         self.cache.set("cricket_squad", cache_key, squad)
         return squad
@@ -112,7 +209,7 @@ class SportsSpecificRetriever:
         venue: str,
     ) -> Dict[str, Any]:
         """
-        Get cricket playing conditions at venue.
+        Get cricket playing conditions at venue from real sources.
 
         Args:
             venue: Cricket venue name
@@ -124,7 +221,27 @@ class SportsSpecificRetriever:
         if cached:
             return cached
 
-        conditions = await self._fetch_cricket_conditions_mock(venue)
+        conditions = {
+            "ground": venue,
+            "data_source": "unavailable",
+        }
+
+        # Try Tavily search for ground conditions
+        if self.search_service and self.search_service.is_available:
+            try:
+                search_result = await self.search_service.search(
+                    f"{venue} cricket ground pitch conditions dimensions",
+                    cache_namespace="tavily_cricket_conditions",
+                )
+                if search_result.get("answer"):
+                    conditions = {
+                        "ground": venue,
+                        "conditions_summary": search_result["answer"][:400],
+                        "source_urls": [r.get("url", "") for r in search_result.get("results", [])],
+                        "data_source": "tavily_search",
+                    }
+            except Exception as exc:
+                logger.warning("Tavily cricket conditions search failed for %s: %s", venue, exc)
 
         self.cache.set("cricket_conditions", venue, conditions)
         return conditions
@@ -137,7 +254,7 @@ class SportsSpecificRetriever:
         hours_lookback: int = 24,
     ) -> List[Dict[str, Any]]:
         """
-        Search for recent news about specific player.
+        Search for recent news about specific player from real sources.
 
         Args:
             player_name: Player name
@@ -153,148 +270,68 @@ class SportsSpecificRetriever:
         if cached:
             return cached
 
-        news = await self._search_player_news_mock(
-            player_name,
-            team_name,
-            sport,
-            hours_lookback,
-        )
+        news = []
+
+        # Try Tavily search for player news
+        if self.search_service and self.search_service.is_available:
+            try:
+                search_result = await self.search_service.search(
+                    f"{player_name} {team_name} {sport} latest news injury update availability",
+                    topic="news",
+                    max_results=5,
+                    cache_namespace="tavily_player_news",
+                )
+                if search_result.get("results"):
+                    news = [
+                        {
+                            "title": r.get("title", ""),
+                            "source": r.get("source", ""),
+                            "url": r.get("url", ""),
+                            "summary": r.get("content", "")[:200],
+                            "importance": "medium",
+                        }
+                        for r in search_result.get("results", [])[:5]
+                    ]
+            except Exception as exc:
+                logger.warning("Tavily team news search failed: %s", exc)
 
         self.cache.set("player_news", cache_key, news)
         return news
 
-    # ===== Mock Data Methods =====
-
-    async def _fetch_soccer_lineups_mock(
-        self,
-        home_team: str,
-        away_team: str,
-    ) -> Dict[str, Any]:
-        """Return mock soccer lineups."""
-        return {
-            "home_team": home_team,
-            "away_team": away_team,
-            "home_formation": "4-3-3",
-            "away_formation": "3-5-2",
-            "home_lineup": [
-                {
-                    "player": f"Player {i}",
-                    "position": ["GK", "CB", "LB", "CM", "ST"][i % 5],
-                    "squad_number": 1 + i,
-                    "recent_form": "⭐" * (1 + (i % 5)),
-                }
-                for i in range(11)
-            ],
-            "away_lineup": [
-                {
-                    "player": f"Away Player {i}",
-                    "position": ["GK", "CB", "LB", "CM", "ST"][i % 5],
-                    "squad_number": 1 + i,
-                }
-                for i in range(11)
-            ],
-            "home_bench": [
-                {
-                    "player": f"Substitute {i}",
-                    "position": "MF",
-                    "squad_number": 15 + i,
-                }
-                for i in range(7)
-            ],
-            "away_bench": [
-                {
-                    "player": f"Away Sub {i}",
-                    "position": "FW",
-                    "squad_number": 15 + i,
-                }
-                for i in range(7)
-            ],
-            "referee": "John Doe (England)",
-            "linesmen": ["Ref Assistant 1", "Ref Assistant 2"],
-        }
-
-    async def _fetch_soccer_tactics_mock(self, team_name: str) -> Dict[str, Any]:
-        """Return mock soccer tactical profile."""
-        return {
-            "team": team_name,
-            "primary_formation": "4-3-3",
-            "formation_variations": ["3-5-2", "4-1-4-1"],
-            "attacking_style": "possession-based, wing play",
-            "defensive_organization": "structured, organized pressing",
-            "pressing_trigger": "ball loss in midfield",
-            "transition": "quick counter-attacks through wings",
-            "set_pieces": "well-drilled corner routines",
-            "typical_tactics": [
-                "Dominate possession early game",
-                "Target opponent's fullbacks",
-                "Control midfield with numerical advantage",
-            ],
-        }
-
-    async def _fetch_cricket_squad_mock(
-        self,
-        team_name: str,
-        match_type: str,
-    ) -> Dict[str, Any]:
-        """Return mock cricket squad."""
-        return {
-            "team": team_name,
-            "match_type": match_type,
-            "players": [
-                {
-                    "name": f"Player {i}",
-                    "role": ["Batsman", "Bowler", "All-rounder"][i % 3],
-                    "batting_avg": 30 + (i % 20),
-                    "bowling_avg": 25 + (i % 15) if i % 3 != 0 else None,
-                    "recent_form": "⭐" * (1 + (i % 5)),
-                }
-                for i in range(15)
-            ],
-            "captain": "Captain Name",
-            "vice_captain": "Vice Captain Name",
-        }
-
-    async def _fetch_cricket_conditions_mock(self, venue: str) -> Dict[str, Any]:
-        """Return mock cricket ground conditions."""
-        return {
-            "ground": venue,
-            "capacity": 50000,
-            "pitch_type": "Hard good batting track",
-            "typical_scores_t20": {"first_innings": 160, "second_innings": 155},
-            "typical_scores_odi": {"first_innings": 280, "second_innings": 275},
-            "ground_dimensions": {
-                "straight": 78,
-                "square_boundary": 68,
-                "long_on": 75,
-            },
-            "note": "Good pace and bounce, fast outfield",
-        }
-
-    async def _search_player_news_mock(
-        self,
-        player_name: str,
-        team_name: str,
-        sport: str,
-        hours_lookback: int,
-    ) -> List[Dict[str, Any]]:
-        """Return mock player news items."""
-        return [
-            {
-                "title": f"{player_name} injury update confirmed",
-                "source": "goal.com" if sport == "soccer" else "cricbuzz.com",
-                "date": datetime.utcnow().isoformat(),
-                "summary": f"Latest update on {player_name}'s fitness status",
-                "importance": "high",
-            },
-            {
-                "title": f"{player_name} scored in yesterday's match",
-                "source": "goal.com" if sport == "soccer" else "cricbuzz.com",
-                "date": datetime.utcnow().isoformat(),
-                "summary": "Performance highlights from recent game",
-                "importance": "medium",
-            },
-        ]
-
     async def close(self) -> None:
-        """Close HTTP client."""
-        await self.http_client.aclose()
+        """Compatibility no-op."""
+        return None
+
+    async def get_team_squad(self, team_name: str) -> Dict[str, Any]:
+        """
+        Get team squad with player details from real sources.
+
+        Args:
+            team_name: Team name
+
+        Returns:
+            Squad details with player positions, nationalities
+        """
+        cache_key = team_name.lower()
+        cached = self.cache.get("team_squad", cache_key)
+        if cached:
+            return cached
+
+        squad = {
+            "team": team_name,
+            "squad": [],
+            "data_source": "unavailable",
+        }
+
+        # Try football-data.org for squad
+        if self.football_data and self.football_data.is_available:
+            try:
+                fd_squad = await self.football_data.get_team_squad(team_name)
+                if fd_squad.get("squad"):
+                    squad = fd_squad
+                    squad["data_source"] = "football_data_org"
+            except Exception as exc:
+                logger.warning("Football-data squad retrieval failed for %s: %s", team_name, exc)
+
+        self.cache.set("team_squad", cache_key, squad)
+        return squad

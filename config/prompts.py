@@ -53,7 +53,9 @@ Rules:
 - Reference specific statistics where available
 - Use sport-appropriate terminology ({config.display_name} tactics/formations)
 - Be engaging for commentator broadcast
-- If the question is outside the context, say so
+- Use only facts present in MATCH CONTEXT
+- Do not answer from memory or prior knowledge
+- If the context does not contain a reliable answer, say that you do not have grounded context for it
 
 Answer:
 """

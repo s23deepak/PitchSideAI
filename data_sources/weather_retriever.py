@@ -1,40 +1,38 @@
 """
-Weather Data Retriever - Fetch weather conditions at match venues.
+Weather Data Retriever - Fetch weather conditions at match venues via Tavily search.
 
-Integrates with OpenWeatherMap API to get:
+Integrates with Tavily to get:
 - Current weather at venue (temperature, wind, humidity, conditions)
-- Forecast for match day and surrounding hours
 - Weather impact analysis (how it affects different sports)
 """
 
-import httpx
-from typing import Dict, Optional, Any
-from datetime import datetime
 import logging
+import re
+from typing import Any, Dict, Optional
+from datetime import datetime
+
 from data_sources.cache import DataCache
-import os
 
 logger = logging.getLogger(__name__)
 
 
 class WeatherDataRetriever:
-    """Retrieve weather data from OpenWeatherMap API."""
+    """Retrieve weather data from Tavily search."""
 
-    def __init__(self, cache: Optional[DataCache] = None, api_key: Optional[str] = None):
+    def __init__(
+        self,
+        cache: Optional[DataCache] = None,
+        search_service: Optional[Any] = None,
+    ):
         """
         Initialize weather retriever.
 
         Args:
             cache: Optional DataCache instance
-            api_key: OpenWeatherMap API key
+            search_service: Optional TavilySearchService for web search
         """
         self.cache = cache or DataCache(ttl_seconds=1800)  # 30 min for weather
-        self.api_key = api_key or os.getenv("OPENWEATHERMAP_API_KEY", "mock-key")
-        self.base_url = "https://api.openweathermap.org/data/2.5"
-        self.http_client = httpx.AsyncClient(
-            timeout=10.0,
-            headers={"User-Agent": "PitchAI-Commentary"},
-        )
+        self.search_service = search_service
 
     async def get_match_day_weather(
         self,
@@ -45,7 +43,7 @@ class WeatherDataRetriever:
         sport: str = "soccer",
     ) -> Dict[str, Any]:
         """
-        Get weather at match venue for specific match time.
+        Get weather at match venue for specific match time via Tavily.
 
         Args:
             venue_name: Venue/stadium name
@@ -62,13 +60,28 @@ class WeatherDataRetriever:
         if cached:
             return cached
 
-        weather_data = await self._fetch_weather_mock(
-            venue_name,
-            latitude,
-            longitude,
-            match_datetime,
-            sport,
-        )
+        weather_data = {}
+
+        # Try Tavily search for weather
+        if self.search_service and self.search_service.is_available:
+            try:
+                # Parse date from ISO format
+                date_str = match_datetime.split("T")[0] if "T" in match_datetime else match_datetime
+                search_result = await self.search_service.search_weather(venue_name, date_str)
+                if search_result.get("answer"):
+                    weather_data = self._parse_weather_from_search(
+                        venue_name, latitude, longitude, match_datetime, search_result
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Tavily weather search failed for %s: %s",
+                    venue_name,
+                    exc,
+                )
+
+        # Return empty if search failed
+        if not weather_data:
+            weather_data = self._make_empty_weather(venue_name, latitude, longitude, match_datetime)
 
         self.cache.set("weather_match_day", cache_key, weather_data)
         return weather_data
@@ -82,7 +95,7 @@ class WeatherDataRetriever:
         hours_window: int = 3,
     ) -> Dict[str, Any]:
         """
-        Get weather forecast trend around match time.
+        Get weather forecast trend around match time via Tavily.
 
         Args:
             venue_name: Venue name
@@ -99,13 +112,33 @@ class WeatherDataRetriever:
         if cached:
             return cached
 
-        forecast_data = await self._fetch_forecast_mock(
-            venue_name,
-            latitude,
-            longitude,
-            match_datetime,
-            hours_window,
-        )
+        forecast_data = {}
+
+        # Try Tavily search for forecast
+        if self.search_service and self.search_service.is_available:
+            try:
+                date_str = match_datetime.split("T")[0] if "T" in match_datetime else match_datetime
+                search_result = await self.search_service.search_weather(venue_name, date_str)
+                if search_result.get("answer"):
+                    forecast_data = {
+                        "venue": venue_name,
+                        "match_datetime": match_datetime,
+                        "forecast_summary": search_result["answer"][:500],
+                        "source_urls": [r.get("url", "") for r in search_result.get("results", [])],
+                        "data_source": "tavily_search",
+                    }
+            except Exception as exc:
+                logger.warning("Tavily forecast search failed for %s: %s", venue_name, exc)
+
+        # Return empty if unavailable
+        if not forecast_data:
+            forecast_data = {
+                "venue": venue_name,
+                "match_datetime": match_datetime,
+                "forecast_hours": [],
+                "general_trend": "",
+                "data_source": "unavailable",
+            }
 
         self.cache.set("weather_forecast", cache_key, forecast_data)
         return forecast_data
@@ -125,10 +158,11 @@ class WeatherDataRetriever:
         Returns:
             Impact analysis (how weather affects tactical play)
         """
-        conditions = weather_data.get("conditions", "clear").lower()
-        wind_kmh = weather_data.get("wind_kmh", 0)
-        humidity = weather_data.get("humidity", 50)
-        temp_c = weather_data.get("temp_c", 20)
+        raw_conditions = weather_data.get("conditions") or ""
+        conditions = str(raw_conditions).lower()
+        wind_kmh = self._safe_float(weather_data.get("wind_kmh"), default=0.0)
+        humidity = self._safe_int(weather_data.get("humidity"), default=50)
+        temp_c = self._safe_float(weather_data.get("temp_c"), default=20.0)
 
         # Sport-specific impacts
         impacts = {
@@ -139,11 +173,13 @@ class WeatherDataRetriever:
             "tennis": self._analyze_tennis_weather(wind_kmh, humidity),
         }
 
-        return impacts.get(sport, {"general": "Weather may influence match pace and tactics"})
+        return impacts.get(sport, {"general": ""})
 
     # ===== Weather Impact Analysis =====
 
-    def _analyze_soccer_weather(self, conditions: str, wind_kmh: float, humidity: int) -> Dict[str, str]:
+    def _analyze_soccer_weather(
+        self, conditions: str, wind_kmh: float, humidity: int
+    ) -> Dict[str, str]:
         """Analyze weather impact for soccer."""
         impacts = []
 
@@ -153,142 +189,184 @@ class WeatherDataRetriever:
             impacts.append("Dry pitch favors possession-based play, fast-paced")
 
         if wind_kmh > 15:
-            impacts.append(f"Strong wind ({wind_kmh:.1f} kmh) will affect crosses and long shots")
+            impacts.append(f"Strong wind ({wind_kmh:.1f} kmh) affects crosses and long shots")
         elif wind_kmh < 5:
             impacts.append("Calm conditions favor technical, short-passing football")
 
         if humidity > 80:
             impacts.append("High humidity may slow down pace in second half")
 
-        return {
-            "general": "; ".join(impacts)
-            or "Normal weather conditions expected"
-        }
+        return {"general": "; ".join(impacts) or "Normal weather conditions"}
 
-    def _analyze_cricket_weather(self, conditions: str, wind_kmh: float, humidity: int) -> Dict[str, str]:
+    def _analyze_cricket_weather(
+        self, conditions: str, wind_kmh: float, humidity: int
+    ) -> Dict[str, str]:
         """Analyze weather impact for cricket."""
         impacts = []
 
         if "cloud" in conditions:
             impacts.append("Overcast conditions favor seam bowling")
         if "rain" in conditions:
-            impacts.append("Rain risk - may affect match duration and DLS scoring")
+            impacts.append("Rain risk - may affect match duration")
 
         if wind_kmh > 20:
-            impacts.append("Strong wind may affect fielding and ball trajectory")
+            impacts.append("Strong wind affects fielding and ball trajectory")
 
         if humidity > 75:
-            impacts.append("High humidity may create swing bowling conditions")
+            impacts.append("High humidity creates swing bowling conditions")
 
-        return {
-            "general": "; ".join(impacts)
-            or "Favorable batting conditions expected"
-        }
+        return {"general": "; ".join(impacts) or "Favorable batting conditions"}
 
-    def _analyze_basketball_weather(self, temp_c: float, humidity: int) -> Dict[str, str]:
+    def _analyze_basketball_weather(
+        self, temp_c: float, humidity: int
+    ) -> Dict[str, str]:
         """Analyze weather impact for basketball (mostly indoor)."""
         impacts = []
 
         if temp_c > 30:
-            impacts.append("Hot conditions may affect indoor court climate control")
+            impacts.append("Hot conditions may affect indoor court climate")
         if humidity > 80:
             impacts.append("High humidity may make court conditions slippery")
 
-        return {
-            "general": "; ".join(impacts)
-            or "Normal indoor conditions expected"
-        }
+        return {"general": "; ".join(impacts) or "Normal indoor conditions"}
 
-    def _analyze_rugby_weather(self, conditions: str, wind_kmh: float) -> Dict[str, str]:
+    def _analyze_rugby_weather(
+        self, conditions: str, wind_kmh: float
+    ) -> Dict[str, str]:
         """Analyze weather impact for rugby."""
         impacts = []
 
         if "rain" in conditions:
             impacts.append("Wet conditions favor defensive, close-play rugby")
         if wind_kmh > 15:
-            impacts.append(f"Strong wind will affect kicking game and passes")
+            impacts.append("Strong wind affects kicking game and passes")
 
-        return {
-            "general": "; ".join(impacts)
-            or "Good conditions for open rugby play"
-        }
+        return {"general": "; ".join(impacts) or "Good conditions for open rugby"}
 
-    def _analyze_tennis_weather(self, wind_kmh: float, humidity: int) -> Dict[str, str]:
+    def _analyze_tennis_weather(
+        self, wind_kmh: float, humidity: int
+    ) -> Dict[str, str]:
         """Analyze weather impact for tennis."""
         impacts = []
 
         if wind_kmh > 10:
-            impacts.append(f"Wind ({wind_kmh:.1f} kmh) will affect serve and ball control")
+            impacts.append(f"Wind ({wind_kmh:.1f} kmh) affects serve and ball control")
         if humidity > 70:
-            impacts.append("High humidity may slow down ball speed")
+            impacts.append("High humidity slows down ball speed")
 
-        return {
-            "general": "; ".join(impacts)
-            or "Ideal playing conditions"
-        }
+        return {"general": "; ".join(impacts) or "Ideal playing conditions"}
 
-    # ===== Mock Data Methods =====
+    # ===== Helpers =====
 
-    async def _fetch_weather_mock(
+    def _parse_weather_from_search(
         self,
         venue_name: str,
         latitude: float,
         longitude: float,
         match_datetime: str,
-        sport: str,
+        search_result: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """Return mock weather data."""
+        """Parse Tavily search results into weather structure."""
+        answer = search_result.get("answer", "")
+        urls = [r.get("url", "") for r in search_result.get("results", [])]
+        conditions = self._extract_conditions(answer)
+        temp_c = self._extract_float(answer, r"(-?\d+(?:\.\d+)?)\s*°?\s*C")
+        humidity = self._extract_int(answer, r"(\d{1,3})\s*%\s*humidity")
+        wind_kmh = self._extract_float(answer, r"(\d+(?:\.\d+)?)\s*(?:km/?h|kmh|kph)")
+
         return {
             "venue": venue_name,
             "coordinates": {"lat": latitude, "lon": longitude},
             "match_datetime": match_datetime,
-            "conditions": "partly_cloudy",
-            "temp_c": 22,
-            "feels_like_c": 21,
-            "humidity": 65,
-            "wind_kmh": 12,
-            "wind_direction": "NW",
-            "pressure_mb": 1013,
-            "visibility_km": 10,
-            "uv_index": 5,
+            "conditions": conditions,
+            "temp_c": temp_c,
+            "humidity": humidity,
+            "wind_kmh": wind_kmh,
+            "weather_summary": answer[:300] if answer else "",
+            "source_urls": urls[:3],
             "last_updated": datetime.utcnow().isoformat(),
+            "data_source": "tavily_search",
         }
 
-    async def _fetch_forecast_mock(
+    def _make_empty_weather(
         self,
         venue_name: str,
         latitude: float,
         longitude: float,
         match_datetime: str,
-        hours_window: int,
     ) -> Dict[str, Any]:
-        """Return mock forecast data."""
+        """Return empty weather data (no fabrication)."""
+        logger.warning("Weather data unavailable for %s", venue_name)
         return {
             "venue": venue_name,
+            "coordinates": {"lat": latitude, "lon": longitude},
             "match_datetime": match_datetime,
-            "forecast_hours": [
-                {
-                    "time": f"19:00",
-                    "temp_c": 22,
-                    "conditions": "partly_cloudy",
-                    "wind_kmh": 10,
-                },
-                {
-                    "time": f"20:00",
-                    "temp_c": 21,
-                    "conditions": "clear",
-                    "wind_kmh": 12,
-                },
-                {
-                    "time": f"21:00",
-                    "temp_c": 19,
-                    "conditions": "clear",
-                    "wind_kmh": 14,
-                },
-            ],
-            "general_trend": "Improving conditions, winds picking up",
+            "conditions": "",
+            "weather_summary": "",
+            "temp_c": None,
+            "humidity": None,
+            "wind_kmh": None,
+            "last_updated": datetime.utcnow().isoformat(),
+            "data_source": "unavailable",
         }
 
+    def _extract_conditions(self, text: str) -> str:
+        """Extract a simple weather condition from free text."""
+        lowered = text.lower()
+        for key, value in (
+            ("thunderstorm", "thunderstorm"),
+            ("storm", "storm"),
+            ("heavy rain", "rain"),
+            ("rain", "rain"),
+            ("partly cloudy", "partly_cloudy"),
+            ("mostly cloudy", "cloudy"),
+            ("cloudy", "cloudy"),
+            ("sunny", "clear"),
+            ("clear", "clear"),
+            ("snow", "snow"),
+        ):
+            if key in lowered:
+                return value
+        return ""
+
+    def _extract_float(self, text: str, pattern: str) -> Optional[float]:
+        """Extract a float using a regex pattern."""
+        match = re.search(pattern, text, re.IGNORECASE)
+        if not match:
+            return None
+        try:
+            return float(match.group(1))
+        except (TypeError, ValueError):
+            return None
+
+    def _extract_int(self, text: str, pattern: str) -> Optional[int]:
+        """Extract an int using a regex pattern."""
+        match = re.search(pattern, text, re.IGNORECASE)
+        if not match:
+            return None
+        try:
+            return int(match.group(1))
+        except (TypeError, ValueError):
+            return None
+
+    def _safe_float(self, value: Any, default: float) -> float:
+        """Return a float fallback when a value is missing or invalid."""
+        try:
+            if value is None:
+                return default
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _safe_int(self, value: Any, default: int) -> int:
+        """Return an int fallback when a value is missing or invalid."""
+        try:
+            if value is None:
+                return default
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
     async def close(self) -> None:
-        """Close HTTP client."""
-        await self.http_client.aclose()
+        """Compatibility no-op."""
+        return None

@@ -1,6 +1,6 @@
-import { useState, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
-const BACKEND = import.meta.env.VITE_BACKEND_URL || ''
+const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
 
 const ICON_MAP = {
     'High Press': '⬆️',
@@ -63,47 +63,160 @@ function SoccerPitch({ detection }) {
 export default function TacticalOverlay({ sport, detection, setDetection }) {
     const [loading, setLoading] = useState(false)
     const [previewUrl, setPreviewUrl] = useState(null)
-    const fileInputRef = useRef()
+    const [previewType, setPreviewType] = useState('image')
+    const [analysisSource, setAnalysisSource] = useState('frame')
+    const [errorMessage, setErrorMessage] = useState('')
+    const imageInputRef = useRef()
+    const videoInputRef = useRef()
+    const objectUrlRef = useRef(null)
 
-    const handleFileChange = async (e) => {
+    useEffect(() => {
+        return () => {
+            if (objectUrlRef.current) {
+                URL.revokeObjectURL(objectUrlRef.current)
+            }
+        }
+    }, [])
+
+    const resetPreviewUrl = (nextUrl = null, type = 'image', revokeExisting = false) => {
+        if (revokeExisting && objectUrlRef.current) {
+            URL.revokeObjectURL(objectUrlRef.current)
+            objectUrlRef.current = null
+        }
+        setPreviewType(type)
+        setPreviewUrl(nextUrl)
+    }
+
+    const analyzeFrameB64 = async (frameB64, timestamp = null) => {
+        const res = await fetch(`${BACKEND}/api/v1/frame/analyze`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ frame_b64: frameB64, sport, timestamp }),
+        })
+
+        const data = await res.json()
+        if (data.status !== 'success') {
+            throw new Error(data.detail || data.error || 'Frame analysis failed')
+        }
+
+        setDetection(data.analysis)
+    }
+
+    const handleImageChange = async (e) => {
         const file = e.target.files[0]
         if (!file) return
+
         setLoading(true)
+        setErrorMessage('')
+        setAnalysisSource('frame')
 
         const reader = new FileReader()
         reader.onload = async (ev) => {
             const dataUrl = ev.target.result
-            setPreviewUrl(dataUrl)
+            resetPreviewUrl(dataUrl, 'image', true)
             const b64 = dataUrl.split(',')[1]
             try {
-                const res = await fetch(`${BACKEND}/api/v1/frame/analyze`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ frame_b64: b64, sport }),
-                })
-                const data = await res.json()
-                if (data.status === 'success') {
-                    setDetection(data.analysis)
-                } else {
-                    console.error('Frame analysis returned error:', data)
-                }
+                await analyzeFrameB64(b64)
             } catch (err) {
                 console.error('Frame analysis failed', err)
+                setErrorMessage(err.message || 'Frame analysis failed')
             } finally {
                 setLoading(false)
-                if (fileInputRef.current) {
-                    fileInputRef.current.value = ''
+                if (imageInputRef.current) {
+                    imageInputRef.current.value = ''
                 }
             }
         }
         reader.readAsDataURL(file)
     }
 
+    const extractFrameFromVideo = (file) => new Promise((resolve, reject) => {
+        const videoUrl = URL.createObjectURL(file)
+        const video = document.createElement('video')
+        video.preload = 'metadata'
+        video.muted = true
+        video.playsInline = true
+        video.src = videoUrl
+
+        const fail = (message) => {
+            URL.revokeObjectURL(videoUrl)
+            reject(new Error(message))
+        }
+
+        video.onerror = () => fail('Could not read the selected video')
+
+        video.onloadedmetadata = () => {
+            const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0
+            const captureTime = duration > 0 ? Math.min(Math.max(duration * 0.25, 0.1), Math.max(duration - 0.1, 0.1)) : 0
+            video.currentTime = captureTime
+        }
+
+        video.onseeked = () => {
+            try {
+                const canvas = document.createElement('canvas')
+                canvas.width = video.videoWidth || 1280
+                canvas.height = video.videoHeight || 720
+                const context = canvas.getContext('2d')
+                if (!context) {
+                    fail('Could not create a frame preview from this video')
+                    return
+                }
+
+                context.drawImage(video, 0, 0, canvas.width, canvas.height)
+                const frameDataUrl = canvas.toDataURL('image/jpeg', 0.9)
+                resolve({
+                    frameDataUrl,
+                    videoUrl,
+                    timestampMs: Math.round((video.currentTime || 0) * 1000),
+                })
+            } catch (err) {
+                fail(err.message || 'Video frame extraction failed')
+            }
+        }
+    })
+
+    const handleVideoChange = async (e) => {
+        const file = e.target.files[0]
+        if (!file) return
+
+        setLoading(true)
+        setErrorMessage('')
+        setAnalysisSource('video')
+
+        try {
+            const { frameDataUrl, videoUrl, timestampMs } = await extractFrameFromVideo(file)
+            if (objectUrlRef.current) {
+                URL.revokeObjectURL(objectUrlRef.current)
+            }
+            objectUrlRef.current = videoUrl
+            resetPreviewUrl(videoUrl, 'video')
+            await analyzeFrameB64(frameDataUrl.split(',')[1], timestampMs)
+        } catch (err) {
+            console.error('Video analysis failed', err)
+            setErrorMessage(err.message || 'Video analysis failed')
+        } finally {
+            setLoading(false)
+            if (videoInputRef.current) {
+                videoInputRef.current.value = ''
+            }
+        }
+    }
+
     return (
         <div className="tactical-section" style={{ flexDirection: 'column', alignItems: 'center', width: '100%', gap: '1.5rem' }}>
             <div className="pitch-container" style={{ width: '100%', position: 'relative' }}>
                 {previewUrl ? (
-                    <img src={previewUrl} alt="Uploaded Frame" style={{ width: '100%', borderRadius: 8, boxShadow: '0 4px 12px rgba(0,0,0,0.2)', objectFit: 'contain' }} />
+                    previewType === 'video' ? (
+                        <video
+                            src={previewUrl}
+                            controls
+                            muted
+                            playsInline
+                            style={{ width: '100%', borderRadius: 8, boxShadow: '0 4px 12px rgba(0,0,0,0.2)', objectFit: 'contain' }}
+                        />
+                    ) : (
+                        <img src={previewUrl} alt="Uploaded Frame" style={{ width: '100%', borderRadius: 8, boxShadow: '0 4px 12px rgba(0,0,0,0.2)', objectFit: 'contain' }} />
+                    )
                 ) : (
                     <SoccerPitch detection={detection} />
                 )}
@@ -115,20 +228,51 @@ export default function TacticalOverlay({ sport, detection, setDetection }) {
             </div>
 
             <div className="tactical-controls" style={{ width: '100%' }}>
-                <button
-                    className="upload-frame-btn"
-                    onClick={() => fileInputRef.current.click()}
-                    disabled={loading}
-                    style={{ width: '100%', padding: '14px', fontSize: '1.1rem', fontWeight: 600 }}
-                >
-                    {loading ? <><span className="spinner" /> Analyzing Frame...</> : <>📸 Upload Live Broadcast Frame</>}
-                </button>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                    <button
+                        className="upload-frame-btn"
+                        onClick={() => imageInputRef.current.click()}
+                        disabled={loading}
+                        style={{ width: '100%', padding: '14px', fontSize: '1rem', fontWeight: 600 }}
+                    >
+                        {loading && analysisSource === 'frame'
+                            ? <><span className="spinner" /> Analyzing Frame...</>
+                            : <>📸 Upload Frame</>
+                        }
+                    </button>
+                    <button
+                        className="upload-frame-btn"
+                        onClick={() => videoInputRef.current.click()}
+                        disabled={loading}
+                        style={{ width: '100%', padding: '14px', fontSize: '1rem', fontWeight: 600 }}
+                    >
+                        {loading && analysisSource === 'video'
+                            ? <><span className="spinner" /> Extracting Video Frame...</>
+                            : <>🎬 Upload Short Video</>
+                        }
+                    </button>
+                </div>
+                <div style={{ marginTop: 10, color: 'var(--text-secondary)', fontSize: 12 }}>
+                    Video uploads extract one representative frame in-browser and send that frame for analysis.
+                </div>
+                {errorMessage && (
+                    <div style={{ marginTop: 10, color: 'var(--accent-red)', fontSize: 12 }}>
+                        {errorMessage}
+                    </div>
+                )}
                 <input
-                    ref={fileInputRef}
+                    ref={imageInputRef}
                     type="file"
                     accept="image/*"
                     style={{ display: 'none' }}
-                    onChange={handleFileChange}
+                    onChange={handleImageChange}
+                />
+                <input
+                    ref={videoInputRef}
+                    type="file"
+                    accept="video/*"
+                    style={{ display: 'none' }}
+                    onChange={handleVideoChange}
                 />
             </div>
         </div>

@@ -23,6 +23,20 @@ from config import (
 logger = logging.getLogger(__name__)
 
 
+def _has_configured_opensearch_endpoint(endpoint: Optional[str]) -> bool:
+    """Return True only for real, non-placeholder OpenSearch endpoints."""
+    if not endpoint:
+        return False
+
+    normalized = endpoint.strip().lower()
+    placeholder_markers = (
+        "your-opensearch-endpoint",
+        "your-endpoint",
+        "example"
+    )
+    return not any(marker in normalized for marker in placeholder_markers)
+
+
 class RAGStrategy(str, Enum):
     """Available RAG retrieval strategies."""
     SEMANTIC = "semantic"  # Pure semantic similarity
@@ -58,7 +72,7 @@ class AdvancedRAGRetriever:
 
         # Initialize OpenSearch client
         credentials = boto3.Session().get_credentials()
-        if credentials and OPENSEARCH_ENDPOINT:
+        if credentials and _has_configured_opensearch_endpoint(OPENSEARCH_ENDPOINT):
             awsauth = AWS4Auth(
                 credentials.access_key,
                 credentials.secret_key,
@@ -74,6 +88,8 @@ class AdvancedRAGRetriever:
                 connection_class=RequestsHttpConnection
             )
         else:
+            if OPENSEARCH_ENDPOINT and not _has_configured_opensearch_endpoint(OPENSEARCH_ENDPOINT):
+                logger.warning("OpenSearch endpoint is using a placeholder value; falling back to local RAG store")
             self.os_client = None
             self.local_store: List[Dict[str, Any]] = []
 

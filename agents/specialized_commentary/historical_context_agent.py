@@ -10,8 +10,8 @@ from datetime import datetime
 import asyncio
 import logging
 from agents.base import BaseAgent
-from data_sources import WikipediaRetriever, DataCache
-from data_sources.factory import get_retriever
+from data_sources import DataCache
+from data_sources.factory import get_football_data_retriever, get_retriever, get_search_service
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +24,8 @@ class HistoricalContextAgent(BaseAgent):
         model_id: str = "us.nova-pro-1:0",
         sport: str = "soccer",
         cache: Optional[DataCache] = None,
+        football_data_retriever: Optional[Any] = None,
+        search_service: Optional[Any] = None,
     ):
         """Initialize historical context agent."""
         super().__init__(
@@ -32,8 +34,9 @@ class HistoricalContextAgent(BaseAgent):
             agent_type="historical_context",
         )
         self.cache = cache or DataCache(ttl_seconds=86400)  # 24 hours for historical data
+        self.football_data = football_data_retriever or get_football_data_retriever(cache=self.cache)
+        self.search_service = search_service or get_search_service(cache=self.cache)
         self.retriever = get_retriever(self.sport, cache=self.cache)
-        self.wiki_retriever = WikipediaRetriever(cache=self.cache)
 
     async def execute(self, home_team: str, away_team: str) -> Dict[str, Any]:
         """Execute full historical context analysis."""
@@ -78,19 +81,20 @@ class HistoricalContextAgent(BaseAgent):
         # Synthesize into narrative
         narrative_prompt = f"""As an elite {self.sport} analyst, create a compelling match narrative for {home_team} vs {away_team}:
 
-Historical Record: {h2h_history.get('total_record', 'Unknown')}
+Head-to-Head Record: {h2h_history.get('team1_wins', 0)}-{h2h_history.get('draws', 0)}-{h2h_history.get('team2_wins', 0)} (W-D-L)
+Total Matches: {h2h_history.get('total_matches', 0)}
 
-Recent H2H:
+Recent H2H Results:
 {self._format_h2h(h2h_history.get('recent_matches', []))}
 
 Key Storylines:
 {self._format_storylines(storylines)}
 
 Provide:
-1. Historical context (rivalry, tradition, significance)
-2. Current storyline (what makes THIS match special)
-3. Redemption/Revenge Arcs (if applicable)
-4. Expected Drama (based on history)
+1. Historical context (rivalry significance, pattern)
+2. Current storyline narrative
+3. Expected dynamic based on history
+4. Notable H2H trends
 
 Keep to 4-5 sentences focused on storytelling."""
 
@@ -114,7 +118,7 @@ Keep to 4-5 sentences focused on storytelling."""
         matches: int = 10,
     ) -> Dict[str, Any]:
         """
-        Get H2H historical data between teams.
+        Get H2H historical data between teams from football-data.org.
 
         Args:
             team1: First team
@@ -124,23 +128,49 @@ Keep to 4-5 sentences focused on storytelling."""
         Returns:
             H2H record and match details
         """
-        h2h_data = await self.retriever.get_head_to_head(
-            team1,
-            team2,
-            self.sport,
-        )
+        h2h_data = {}
 
-        # Analyze patterns
-        recent_matches = h2h_data.get("recent_matches", [])
+        # Try football-data.org for H2H
+        if self.football_data and self.football_data.is_available:
+            try:
+                h2h_data = await self.football_data.get_head_to_head(
+                    team1,
+                    team2,
+                    limit=matches,
+                )
+            except Exception as exc:
+                logger.warning("Football-data H2H failed for %s vs %s: %s", team1, team2, exc)
+
+        if not h2h_data:
+            try:
+                espn_h2h = await self.retriever.get_head_to_head(team1, team2, self.sport)
+            except Exception as exc:
+                logger.warning("ESPN H2H fallback failed for %s vs %s: %s", team1, team2, exc)
+                espn_h2h = {}
+
+            h2h_data = {
+                "total_matches": 0,
+                "team1_wins": espn_h2h.get("home_record", {}).get("wins", 0),
+                "team2_wins": espn_h2h.get("away_record", {}).get("wins", 0),
+                "draws": espn_h2h.get("home_record", {}).get("draws", 0),
+                "recent_results": [],
+                "note": espn_h2h.get("note", "Historical record unavailable"),
+            }
+
+        # Analyze patterns from H2H data
+        recent_matches = h2h_data.get("recent_results", [])
         patterns = self._analyze_h2h_patterns(recent_matches)
 
         return {
             "home_team": team1,
             "away_team": team2,
-            "total_record": h2h_data.get("total_record", "Unknown"),
+            "total_matches": h2h_data.get("total_matches", 0),
+            "team1_wins": h2h_data.get("team1_wins", 0),
+            "team2_wins": h2h_data.get("team2_wins", 0),
+            "draws": h2h_data.get("draws", 0),
             "recent_matches": recent_matches,
             "patterns": patterns,
-            "historical_trend": h2h_data.get("patterns", "No clear pattern"),
+            "note": h2h_data.get("note", ""),
         }
 
     async def identify_key_storylines(
@@ -149,47 +179,60 @@ Keep to 4-5 sentences focused on storytelling."""
         away_team: str,
     ) -> List[Dict[str, str]]:
         """
-        Identify compelling narrative elements.
+        Identify compelling narrative elements via web search.
 
         Args:
             home_team: Home team
             away_team: Away team
 
         Returns:
-            List of storyline objects
+            List of storyline objects from real sources
         """
         storylines = []
 
-        # Generic storylines (in production, would pull from sports news APIs)
-        potential_storylines = [
-            {
-                "type": "rivalry",
-                "title": f"Classic {home_team} vs {away_team} rivalry",
-                "description": "Two historic rivals meet again in crucial encounter",
-            },
-            {
-                "type": "redemption",
-                "title": "Revenge match",
-                "description": f"{away_team} looking to avenge recent loss to {home_team}",
-            },
-            {
-                "type": "milestone",
-                "title": "Historic occasion",
-                "description": "Important match for both sides' respective campaigns",
-            },
-        ]
+        # Search for match storylines via Tavily
+        if self.search_service and self.search_service.is_available:
+            try:
+                search_result = await self.search_service.search_match_storylines(
+                    home_team, away_team, self.sport
+                )
+                if search_result.get("results"):
+                    # Convert search results into storyline format
+                    for result in search_result.get("results", [])[:3]:
+                        storylines.append({
+                            "type": "news",
+                            "title": result.get("title", ""),
+                            "description": result.get("content", "")[:200],
+                            "source": result.get("source", ""),
+                        })
+            except Exception as exc:
+                logger.warning("Tavily storylines search failed: %s", exc)
 
-        return potential_storylines[:2]  # Return top 2 storylines
+        # Fall back to minimal storylines if search failed
+        if not storylines:
+            storylines = [
+                {
+                    "type": "matchup",
+                    "title": f"{home_team} vs {away_team}",
+                    "description": "Two teams meet in upcoming fixture",
+                }
+            ]
+
+        return storylines
 
     def _format_h2h(self, matches: List[Dict[str, Any]]) -> str:
         """Format H2H matches for prompt."""
+        if not matches:
+            return "Limited H2H history"
+
         formatted = []
         for match in matches[:5]:  # Last 5 matches
-            formatted.append(
-                f"- {match.get('date', 'Unknown')}: {match.get('result', 'Unknown')} "
-                f"({match.get('key_moment', 'Decisive moment')})"
-            )
-        return "\n".join(formatted) or "Limited H2H history"
+            date = match.get('date', 'Unknown date')
+            score = match.get('score', '?-?')
+            home = match.get('home', '')
+            away = match.get('away', '')
+            formatted.append(f"- {date}: {home} {score} {away}")
+        return "\n".join(formatted)
 
     def _format_storylines(self, storylines: List[Dict[str, str]]) -> str:
         """Format storylines for prompt."""
@@ -201,20 +244,28 @@ Keep to 4-5 sentences focused on storytelling."""
     def _analyze_h2h_patterns(self, matches: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Analyze patterns in H2H history."""
         if not matches:
-            return {"pattern": "Limited historical data"}
+            return {"pattern": "Limited historical data", "consistency": "Unknown"}
 
-        # Count outcomes
-        wins = sum(1 for m in matches if "W" in m.get("result", ""))
-        draws = sum(1 for m in matches if "D" in m.get("result", ""))
+        winners = [m.get("winner") for m in matches if m.get("winner") and m.get("winner") != "Draw"]
+        draws = sum(1 for m in matches if m.get("winner") == "Draw")
 
-        trend = "Competitive" if wins == draws else "Dominated" if wins > draws else "Under pressure"
+        total = len(matches)
+        if total > 0:
+            if draws >= total / 3:
+                trend = "Highly competitive"
+            elif winners and len(set(winners)) == 1:
+                trend = "One-sided"
+            else:
+                trend = "Balanced"
+        else:
+            trend = "Unknown"
 
         return {
             "pattern": trend,
-            "consistency": "High" if len(set(m.get("result", "") for m in matches)) < 2 else "Variable",
+            "competitiveness": "High" if draws >= total / 3 else "Low",
         }
 
     async def close(self):
         """Clean up resources."""
-        await self.retriever.close()
-        await self.wiki_retriever.close()
+        pass
+

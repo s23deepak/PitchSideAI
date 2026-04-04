@@ -1,8 +1,8 @@
 """
 News Agent - Gather current team news, injuries, and lineup confirmations.
 
-Fetches latest team news, injury status, suspensions, and lineup changes
-for pre-match communication.
+Fetches latest team news, injury status, and lineup changes for pre-match communication
+via Tavily search and structured sports data APIs.
 """
 
 from typing import Dict, List, Any, Optional
@@ -11,7 +11,7 @@ import asyncio
 import logging
 from agents.base import BaseAgent
 from data_sources import DataCache
-from data_sources.factory import get_retriever
+from data_sources.factory import get_retriever, get_search_service
 
 logger = logging.getLogger(__name__)
 
@@ -21,14 +21,16 @@ class NewsAgent(BaseAgent):
 
     def __init__(
         self,
-        model_id: str = "us.nova-sonic-1:0",
+        model_id: str = "us.nova-lite-1:0",
         sport: str = "soccer",
         cache: Optional[DataCache] = None,
+        search_service: Optional[Any] = None,
     ):
         """Initialize news agent."""
         super().__init__(model_id=model_id, sport=sport, agent_type="news")
         self.cache = cache or DataCache(ttl_seconds=1800)  # 30 min for news
         self.retriever = get_retriever(self.sport, cache=self.cache)
+        self.search_service = search_service or get_search_service(cache=self.cache)
 
     async def execute(self, home_team: str, away_team: str) -> Dict[str, Any]:
         """Execute news gathering for both teams."""
@@ -64,8 +66,8 @@ class NewsAgent(BaseAgent):
             details={
                 "home_team": home_team,
                 "away_team": away_team,
-                "injuries_found": len(
-                    home_news.get("injuries", []) + away_news.get("injuries", [])
+                "news_items": len(
+                    home_news.get("news_items", []) + away_news.get("news_items", [])
                 ),
                 "duration_ms": duration_ms,
             },
@@ -83,92 +85,134 @@ class NewsAgent(BaseAgent):
 
     async def get_team_news(self, team_name: str) -> Dict[str, Any]:
         """
-        Get comprehensive team news.
+        Get comprehensive team news from real sources.
 
         Args:
             team_name: Team name
 
         Returns:
-            News including injuries, suspensions, lineup status
+            News including injuries, suspensions, latest updates
         """
-        espn_news_list = await self.retriever.get_team_news(team_name, self.sport)
-        headlines = [item.get("headline", "") for item in espn_news_list if isinstance(item, dict)]
-        recent_headlines = " | ".join(headlines[:3]) if headlines else "None known"
+        espn_news, injuries = await asyncio.gather(
+            self.retriever.get_team_news(team_name, self.sport),
+            self.retriever.get_injuries(team_name, self.sport),
+        )
 
-        # Get lineup status
+        news_items = [
+            {
+                "title": item.get("headline", ""),
+                "content": item.get("description", "")[:200],
+                "source": "ESPN",
+                "url": item.get("url", ""),
+            }
+            for item in espn_news[:5]
+            if item.get("headline")
+        ]
+
+        # Fetch team news via Tavily search
+        if self.search_service and self.search_service.is_available:
+            try:
+                search_result = await self.search_service.search_team_news(
+                    team_name, self.sport
+                )
+                if search_result.get("results"):
+                    tavily_items = [
+                        {
+                            "title": r.get("title", ""),
+                            "content": r.get("content", "")[:200],
+                            "source": r.get("source", ""),
+                            "url": r.get("url", ""),
+                        }
+                        for r in search_result.get("results", [])[:5]
+                    ]
+                    news_items = self._dedupe_news(news_items + tavily_items)
+            except Exception as exc:
+                logger.warning("Tavily news search failed for %s: %s", team_name, exc)
+
         lineup_status = await self._get_lineup_confirmation_status(team_name)
 
-        # Get actual injuries from roster instead of news
-        injuries = await self.retriever.get_injuries(team_name, self.sport)
-
         # Synthesize into news report
-        news_synthesis_prompt = f"""As an elite {self.sport} analyst, create a concise team news report for {team_name}:
+        news_synthesis_prompt = f"""As an elite {self.sport} analyst, create a concise team news summary for {team_name}:
 
-Recent Headlines: {recent_headlines}
+Recent News:
+{self._format_news_items(news_items)}
 
 Injuries: {self._format_injuries(injuries)}
 
-Suspensions: None known
-
-Late Changes: None known
-
-Lineup Status: {lineup_status.get('status', 'TBD')}
+Lineup Status: {lineup_status.get('status', 'Unavailable')}
 
 Provide:
-1. Key personnel absences impacting team strength
-2. Tactical adjustments expected due to absences
-3. Expected lineups (if known)
+1. Key updates affecting team readiness
+2. Player availability status
+3. Any tactical adjustments expected
 
 Keep to 3-4 sentences."""
 
         synthesis = await self.call_bedrock(
             prompt=news_synthesis_prompt,
             temperature=0.2,
-            max_tokens=120,  # 120 for local dev (250 in production)
+            max_tokens=120,
         )
 
         return {
             "team_name": team_name,
+            "news_items": news_items,
             "injuries": injuries,
-            "suspensions": [],
-            "last_minute_changes": "None known",
             "lineup_status": lineup_status,
+            "last_minute_changes": news_items[0].get("title", "") if news_items else "None",
             "synthesis": synthesis,
             "last_updated": datetime.utcnow().isoformat(),
+            "data_source": "combined" if news_items or injuries else "unavailable",
         }
 
-    async def _get_lineup_confirmation_status(
-        self,
-        team_name: str,
-    ) -> Dict[str, Any]:
-        """Check lineup confirmation status."""
-        # In production, would check official team news
-        return {
-            "status": "pencil_confirmed",
-            "confirmed_count": 9,
-            "uncertain_count": 2,
-            "likely_changes": "Possible rest for key players",
-        }
+    def _format_news_items(self, news_items: List[Dict[str, str]]) -> str:
+        """Format news items for prompt."""
+        if not news_items:
+            return "No recent news available"
+
+        formatted = []
+        for item in news_items[:3]:
+            title = item.get("title", "")
+            if title:
+                formatted.append(f"- {title}")
+        return "\n".join(formatted) or "No recent news"
 
     def _format_injuries(self, injuries: List[Dict[str, Any]]) -> str:
-        """Format injuries for prompt."""
+        """Format injury list for prompting."""
         if not injuries:
-            return "None known"
-        formatted = []
-        for inj in injuries[:3]:  # Top 3 injuries
-            formatted.append(f"{inj.get('player', 'Unknown')} ({inj.get('status', 'out')})")
-        return ", ".join(formatted)
+            return "None reported"
+        return ", ".join(
+            f"{inj.get('player', 'Unknown')} ({inj.get('status', 'Unavailable')})"
+            for inj in injuries[:4]
+        )
 
-    def _format_suspensions(self, suspensions: List[Dict[str, Any]]) -> str:
-        """Format suspensions for prompt."""
-        if not suspensions:
-            return "None"
-        formatted = []
-        for susp in suspensions:
-            formatted.append(
-                f"{susp.get('player', 'Unknown')} ({susp.get('remaining_matches', 1)} match)"
-            )
-        return ", ".join(formatted)
+    async def _get_lineup_confirmation_status(self, team_name: str) -> Dict[str, Any]:
+        """Infer lineup certainty from web search results."""
+        if self.search_service and self.search_service.is_available:
+            try:
+                search_result = await self.search_service.search_lineup(team_name, self.sport)
+                answer = (search_result.get("answer") or "").lower()
+                if answer:
+                    if "confirmed" in answer or "official lineup" in answer:
+                        return {"status": "confirmed", "summary": search_result.get("answer", "")[:160]}
+                    if "predicted" in answer or "expected" in answer:
+                        return {"status": "predicted", "summary": search_result.get("answer", "")[:160]}
+                    return {"status": "reported", "summary": search_result.get("answer", "")[:160]}
+            except Exception as exc:
+                logger.warning("Lineup status search failed for %s: %s", team_name, exc)
+        return {"status": "unavailable", "summary": ""}
+
+    def _dedupe_news(self, items: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        """Deduplicate news items by title while preserving order."""
+        seen = set()
+        deduped = []
+        for item in items:
+            title = item.get("title", "").strip().lower()
+            if not title or title in seen:
+                continue
+            seen.add(title)
+            deduped.append(item)
+        return deduped
 
     async def _synthesize_critical_updates(
         self,
@@ -178,22 +222,26 @@ Keep to 3-4 sentences."""
         """Extract critical updates from both teams' news."""
         critical = []
 
-        # Check for major injuries
-        all_injuries = home_news.get("injuries", []) + away_news.get("injuries", [])
-        if any(inj.get("status") == "out" for inj in all_injuries):
-            critical.append("Major absence to impact match")
+        if home_news.get("injuries") or away_news.get("injuries"):
+            critical.append("Verified injury absences may affect selection")
 
-        # Check for suspensions
-        if home_news.get("suspensions") or away_news.get("suspensions"):
-            critical.append("Suspension affecting key player")
+        # Check for injury-related keywords
+        all_items = home_news.get("news_items", []) + away_news.get("news_items", [])
+        for item in all_items:
+            content = (item.get("title", "") + " " + item.get("content", "")).lower()
+            if any(word in content for word in ["injury", "injured", "out", "doubtful"]):
+                critical.append(f"Injury concern: {item.get('title', '')}")
+                break
 
-        # Check late changes
-        if (home_news.get("last_minute_changes") or away_news.get("last_minute_changes")):
-            critical.append("Expected late lineup adjustments")
+        # Check for suspension keywords
+        for item in all_items:
+            content = (item.get("title", "") + " " + item.get("content", "")).lower()
+            if any(word in content for word in ["suspension", "banned", "suspended"]):
+                critical.append(f"Suspension: {item.get('title', '')}")
+                break
 
-        return critical if critical else ["No critical updates"]
+        return critical[:2] if critical else ["No critical updates"]
 
     async def close(self):
         """Clean up resources."""
-        await self.retriever.close()
-        await self.sports_retriever.close()
+        pass
