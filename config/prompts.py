@@ -154,6 +154,64 @@ Provide a detailed tactical analysis:
 Be specific with {config.display_name} terminology and strategic concepts.
 """
 
+    @staticmethod
+    def video_sequence_prompt(sport: str, sequence_summary: str) -> str:
+        """Prompt for summarizing tactical evolution across frame or window detections."""
+        config = get_sport_config(sport)
+
+        return f"""
+    You are an elite {config.display_name} tactical analyst reviewing a sequence of timestamped detections from the same video clip.
+
+    Each timestamped entry may represent either a sampled frame or a short native-video window.
+
+SEQUENCE SUMMARY:
+{sequence_summary}
+
+Produce valid JSON only:
+{{
+    "temporal_change": "...",
+    "primary_tactical_label": "...",
+    "primary_timestamp_ms": 0,
+    "confidence": 0.0,
+    "commentary_cue": "..."
+}}
+
+Rules:
+- Explain how the tactic evolves over time rather than repeating one frame.
+- Use only evidence from the sequence summary.
+- `primary_timestamp_ms` must be one timestamp from the summary.
+- `confidence` must be between 0.0 and 1.0.
+"""
+
+    @staticmethod
+    def video_clip_prompt(sport: str) -> str:
+        """Prompt for native video understanding over an entire clip."""
+        config = get_sport_config(sport)
+        tactical_labels = ", ".join(get_tactical_labels(sport)[:10])
+
+        return f"""
+You are an elite {config.display_name} tactical analyst watching a short video clip.
+
+Available tactical categories: {tactical_labels}
+
+Analyze the clip as a continuous sequence, not as a still image. Focus on tactical changes, transitions, player spacing, and how the pattern evolves over time.
+
+Respond ONLY with valid JSON:
+{{
+    "temporal_change": "...",
+    "primary_tactical_label": "...",
+    "primary_timestamp_ms": 0,
+    "confidence": 0.0,
+    "commentary_cue": "..."
+}}
+
+Rules:
+- `primary_timestamp_ms` should identify the most important moment in the clip.
+- `temporal_change` must describe how the tactic develops across time.
+- `commentary_cue` should be ready for live broadcast.
+- Use only what is visible in the clip.
+"""
+
 
 # Backward compatibility functions
 def get_research_prompt(home_team: str, away_team: str, sport: str = "soccer") -> str:
@@ -179,3 +237,13 @@ def get_commentary_prompt(sport: str, match_context: str, recent_events: str) ->
 def get_tactical_prompt(sport: str, patterns: str) -> str:
     """Get tactical analysis prompt."""
     return SystemPrompts.tactical_analysis_prompt(sport, patterns)
+
+
+def get_video_sequence_prompt(sport: str, sequence_summary: str) -> str:
+    """Get video sequence tactical summary prompt."""
+    return SystemPrompts.video_sequence_prompt(sport, sequence_summary)
+
+
+def get_video_clip_prompt(sport: str) -> str:
+    """Get native video clip tactical prompt."""
+    return SystemPrompts.video_clip_prompt(sport)

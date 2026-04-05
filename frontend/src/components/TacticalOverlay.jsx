@@ -1,6 +1,147 @@
 import { useEffect, useRef, useState } from 'react'
 
 const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
+const MIN_FALLBACK_VIDEO_SAMPLES = 8
+const MAX_FALLBACK_FRAME_DIMENSION = 960
+const FALLBACK_FRAME_QUALITY = 0.72
+const THUMBNAIL_SIGNATURE_WIDTH = 48
+const THUMBNAIL_SIGNATURE_HEIGHT = 27
+const ADAPTIVE_PROBE_MIN_INTERVAL_SECONDS = 0.2
+const ADAPTIVE_BASELINE_RATIO = 0.6
+const ADAPTIVE_MIN_SPACING_RATIO = 0.5
+const VIDEO_SAMPLING_PRESETS = {
+    balanced: {
+        label: 'Balanced',
+        intervalSeconds: 0.75,
+        maxFrames: 24,
+        description: 'Good coverage with moderate upload size.',
+    },
+    'high-detail': {
+        label: 'High Detail',
+        intervalSeconds: 0.5,
+        maxFrames: 36,
+        description: 'Denser local fallback for tactical movement.',
+    },
+    'max-detail': {
+        label: 'Max Detail',
+        intervalSeconds: 0.33,
+        maxFrames: 48,
+        description: 'Most temporal detail, with heavier local uploads.',
+    },
+}
+const VIDEO_SAMPLING_MODES = {
+    uniform: {
+        label: 'Uniform Coverage',
+        description: 'Even spacing across the full clip.',
+    },
+    adaptive: {
+        label: 'Transition Aware',
+        description: 'Keeps full-clip coverage and adds more frames around visual changes.',
+    },
+}
+const DEFAULT_VIDEO_SAMPLING_PRESET = VIDEO_SAMPLING_PRESETS[import.meta.env.VITE_FALLBACK_VIDEO_SAMPLING_PRESET]
+    ? import.meta.env.VITE_FALLBACK_VIDEO_SAMPLING_PRESET
+    : 'high-detail'
+const DEFAULT_VIDEO_SAMPLING_MODE = VIDEO_SAMPLING_MODES[import.meta.env.VITE_FALLBACK_VIDEO_SAMPLING_MODE]
+    ? import.meta.env.VITE_FALLBACK_VIDEO_SAMPLING_MODE
+    : 'adaptive'
+
+function uniqueSortedTimes(times) {
+    const sorted = [...times].sort((left, right) => left - right)
+    const unique = []
+
+    for (const time of sorted) {
+        if (!unique.length || Math.abs(unique[unique.length - 1] - time) > 0.05) {
+            unique.push(time)
+        }
+    }
+
+    return unique
+}
+
+function downsampleTimes(times, maxFrames) {
+    const unique = uniqueSortedTimes(times)
+    if (unique.length <= maxFrames) {
+        return unique
+    }
+
+    const selected = []
+    for (let index = 0; index < maxFrames; index += 1) {
+        const position = Math.round((index * (unique.length - 1)) / (maxFrames - 1))
+        selected.push(unique[position])
+    }
+
+    return uniqueSortedTimes(selected)
+}
+
+function buildUniformSampleTimes(duration, intervalSeconds, maxFrames) {
+    if (!duration || duration <= 0) {
+        return [0]
+    }
+
+    const startTime = duration > 0.2 ? 0.1 : 0
+    const latestTime = Math.max(duration - 0.1, startTime)
+    const times = [startTime]
+
+    for (let time = startTime + intervalSeconds; time < latestTime; time += intervalSeconds) {
+        times.push(time)
+    }
+
+    if (latestTime > startTime) {
+        times.push(latestTime)
+    }
+
+    return downsampleTimes(times, Math.max(1, maxFrames))
+}
+
+function computeFrameDifference(leftSignature, rightSignature) {
+    if (!leftSignature || !rightSignature || leftSignature.length !== rightSignature.length) {
+        return 0
+    }
+
+    let totalDifference = 0
+    for (let index = 0; index < leftSignature.length; index += 4) {
+        totalDifference += Math.abs(leftSignature[index] - rightSignature[index])
+        totalDifference += Math.abs(leftSignature[index + 1] - rightSignature[index + 1])
+        totalDifference += Math.abs(leftSignature[index + 2] - rightSignature[index + 2])
+    }
+
+    return totalDifference / (leftSignature.length / 4)
+}
+
+function buildAdaptiveSampleTimes(duration, intervalSeconds, maxFrames, probeFrames) {
+    const baselineCount = Math.max(
+        MIN_FALLBACK_VIDEO_SAMPLES,
+        Math.min(maxFrames, Math.ceil(maxFrames * ADAPTIVE_BASELINE_RATIO))
+    )
+    const baselineTimes = buildUniformSampleTimes(duration, intervalSeconds, baselineCount)
+    const minSpacingSeconds = Math.max(ADAPTIVE_PROBE_MIN_INTERVAL_SECONDS, intervalSeconds * ADAPTIVE_MIN_SPACING_RATIO)
+    const selectedTimes = [...baselineTimes]
+
+    const scoredCandidates = []
+    for (let index = 1; index < probeFrames.length; index += 1) {
+        const score = computeFrameDifference(probeFrames[index - 1].signature, probeFrames[index].signature)
+        scoredCandidates.push({
+            timeSeconds: probeFrames[index].timeSeconds,
+            score,
+        })
+    }
+
+    scoredCandidates.sort((left, right) => right.score - left.score)
+
+    for (const candidate of scoredCandidates) {
+        if (selectedTimes.length >= maxFrames) {
+            break
+        }
+
+        const hasSpacing = selectedTimes.every((time) => Math.abs(time - candidate.timeSeconds) >= minSpacingSeconds)
+        if (hasSpacing) {
+            selectedTimes.push(candidate.timeSeconds)
+        }
+    }
+
+    return downsampleTimes(selectedTimes, maxFrames)
+}
 
 const ICON_MAP = {
     'High Press': '⬆️',
@@ -60,12 +201,14 @@ function SoccerPitch({ detection }) {
     )
 }
 
-export default function TacticalOverlay({ sport, detection, setDetection }) {
+export default function TacticalOverlay({ sport, matchSession, detection, setDetection, sendMatchEvent, sendTacticalDetection }) {
     const [loading, setLoading] = useState(false)
     const [previewUrl, setPreviewUrl] = useState(null)
     const [previewType, setPreviewType] = useState('image')
     const [analysisSource, setAnalysisSource] = useState('frame')
     const [errorMessage, setErrorMessage] = useState('')
+    const [videoSamplingPreset, setVideoSamplingPreset] = useState(DEFAULT_VIDEO_SAMPLING_PRESET)
+    const [videoSamplingMode, setVideoSamplingMode] = useState(DEFAULT_VIDEO_SAMPLING_MODE)
     const imageInputRef = useRef()
     const videoInputRef = useRef()
     const objectUrlRef = useRef(null)
@@ -91,7 +234,7 @@ export default function TacticalOverlay({ sport, detection, setDetection }) {
         const res = await fetch(`${BACKEND}/api/v1/frame/analyze`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ frame_b64: frameB64, sport, timestamp }),
+            body: JSON.stringify({ frame_b64: frameB64, sport, timestamp, match_session: matchSession }),
         })
 
         const data = await res.json()
@@ -99,7 +242,61 @@ export default function TacticalOverlay({ sport, detection, setDetection }) {
             throw new Error(data.detail || data.error || 'Frame analysis failed')
         }
 
+        const detectionWithTimestamp = {
+            ...data.analysis,
+            timestamp_ms: data.timestamp ?? timestamp ?? null,
+        }
+
+        setDetection(detectionWithTimestamp)
+
+        if (detectionWithTimestamp?.confidence > 0.6) {
+            if (sendTacticalDetection) {
+                await sendTacticalDetection(detectionWithTimestamp)
+            } else if (sendMatchEvent && data.analysis?.actionable_insight) {
+                await sendMatchEvent(data.analysis.actionable_insight)
+            }
+        }
+    }
+
+    const analyzeVideoFrames = async (frames) => {
+        const readFileAsDataUrl = (file) => new Promise((resolve, reject) => {
+            const reader = new FileReader()
+            reader.onload = (event) => resolve(event.target?.result)
+            reader.onerror = () => reject(new Error('Could not read the selected video file'))
+            reader.readAsDataURL(file)
+        })
+
+        const fileDataUrl = await readFileAsDataUrl(frames.file)
+        const mimeType = frames.file.type || 'video/mp4'
+        const inferredFormat = mimeType.split('/')[1]?.replace('3gpp', 'three_gp') || 'mp4'
+
+        const res = await fetch(`${BACKEND}/api/v1/video/analyze`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                video_b64: fileDataUrl.split(',')[1],
+                video_format: inferredFormat,
+                frames_b64: frames.samples.map((frame) => frame.frameDataUrl.split(',')[1]),
+                timestamps_ms: frames.samples.map((frame) => frame.timestampMs),
+                sport,
+                match_session: matchSession,
+            }),
+        })
+
+        const data = await res.json()
+        if (data.status !== 'success') {
+            throw new Error(data.detail || data.error || 'Video analysis failed')
+        }
+
         setDetection(data.analysis)
+
+        if (data.analysis?.confidence > 0.6) {
+            if (sendTacticalDetection) {
+                await sendTacticalDetection(data.analysis)
+            } else if (sendMatchEvent && data.analysis?.actionable_insight) {
+                await sendMatchEvent(data.analysis.actionable_insight)
+            }
+        }
     }
 
     const handleImageChange = async (e) => {
@@ -130,13 +327,15 @@ export default function TacticalOverlay({ sport, detection, setDetection }) {
         reader.readAsDataURL(file)
     }
 
-    const extractFrameFromVideo = (file) => new Promise((resolve, reject) => {
+    const extractFramesFromVideo = (file) => new Promise((resolve, reject) => {
         const videoUrl = URL.createObjectURL(file)
         const video = document.createElement('video')
         video.preload = 'metadata'
         video.muted = true
         video.playsInline = true
         video.src = videoUrl
+        const preset = VIDEO_SAMPLING_PRESETS[videoSamplingPreset] || VIDEO_SAMPLING_PRESETS[DEFAULT_VIDEO_SAMPLING_PRESET]
+        const mode = VIDEO_SAMPLING_MODES[videoSamplingMode] ? videoSamplingMode : DEFAULT_VIDEO_SAMPLING_MODE
 
         const fail = (message) => {
             URL.revokeObjectURL(videoUrl)
@@ -145,32 +344,116 @@ export default function TacticalOverlay({ sport, detection, setDetection }) {
 
         video.onerror = () => fail('Could not read the selected video')
 
-        video.onloadedmetadata = () => {
-            const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0
-            const captureTime = duration > 0 ? Math.min(Math.max(duration * 0.25, 0.1), Math.max(duration - 0.1, 0.1)) : 0
-            video.currentTime = captureTime
-        }
+        const seekAndCapture = (timeSeconds, onCapture) => new Promise((resolveCapture, rejectCapture) => {
+            const handleSeeked = () => {
+                try {
+                    resolveCapture(onCapture())
+                } catch (err) {
+                    rejectCapture(err)
+                }
+            }
 
-        video.onseeked = () => {
+            video.addEventListener('seeked', handleSeeked, { once: true })
+            video.currentTime = timeSeconds
+        })
+
+        const captureFrameAt = (timeSeconds) => seekAndCapture(timeSeconds, () => {
+                    const sourceWidth = video.videoWidth || 1280
+                    const sourceHeight = video.videoHeight || 720
+                    const maxDimension = Math.max(sourceWidth, sourceHeight)
+                    const scale = maxDimension > MAX_FALLBACK_FRAME_DIMENSION
+                        ? MAX_FALLBACK_FRAME_DIMENSION / maxDimension
+                        : 1
+                    const canvas = document.createElement('canvas')
+                    canvas.width = Math.max(1, Math.round(sourceWidth * scale))
+                    canvas.height = Math.max(1, Math.round(sourceHeight * scale))
+                    const context = canvas.getContext('2d')
+                    if (!context) {
+                        rejectFrame(new Error('Could not create a frame preview from this video'))
+                        return
+                    }
+
+                    context.drawImage(video, 0, 0, canvas.width, canvas.height)
+                    return {
+                        frameDataUrl: canvas.toDataURL('image/jpeg', FALLBACK_FRAME_QUALITY),
+                        timestampMs: Math.round((video.currentTime || 0) * 1000),
+                    }
+        })
+
+        const captureThumbnailAt = (timeSeconds) => seekAndCapture(timeSeconds, () => {
+            const canvas = document.createElement('canvas')
+            canvas.width = THUMBNAIL_SIGNATURE_WIDTH
+            canvas.height = THUMBNAIL_SIGNATURE_HEIGHT
+            const context = canvas.getContext('2d', { willReadFrequently: true })
+            if (!context) {
+                throw new Error('Could not inspect the selected video for transition-aware sampling')
+            }
+
+            context.drawImage(video, 0, 0, canvas.width, canvas.height)
+            return {
+                timeSeconds,
+                signature: context.getImageData(0, 0, canvas.width, canvas.height).data,
+            }
+        })
+
+        video.onloadedmetadata = async () => {
             try {
-                const canvas = document.createElement('canvas')
-                canvas.width = video.videoWidth || 1280
-                canvas.height = video.videoHeight || 720
-                const context = canvas.getContext('2d')
-                if (!context) {
-                    fail('Could not create a frame preview from this video')
+                const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0
+                if (!duration) {
+                    const firstFrame = await captureFrameAt(0)
+                    resolve({
+                        file,
+                        samples: [firstFrame],
+                        videoUrl,
+                    })
                     return
                 }
 
-                context.drawImage(video, 0, 0, canvas.width, canvas.height)
-                const frameDataUrl = canvas.toDataURL('image/jpeg', 0.9)
+                const targetSampleCount = Math.min(
+                    preset.maxFrames,
+                    Math.max(MIN_FALLBACK_VIDEO_SAMPLES, Math.ceil(duration / preset.intervalSeconds))
+                )
+                const uniformTimes = buildUniformSampleTimes(duration, preset.intervalSeconds, targetSampleCount)
+                let sampleTimes = uniformTimes
+
+                if (mode === 'adaptive' && uniformTimes.length < preset.maxFrames) {
+                    const probeIntervalSeconds = Math.max(ADAPTIVE_PROBE_MIN_INTERVAL_SECONDS, preset.intervalSeconds / 2)
+                    const probeLimit = Math.min(96, Math.max(targetSampleCount, preset.maxFrames * 2))
+                    const probeTimes = buildUniformSampleTimes(duration, probeIntervalSeconds, probeLimit)
+                    const probeFrames = []
+
+                    for (const probeTime of probeTimes) {
+                        probeFrames.push(await captureThumbnailAt(probeTime))
+                    }
+
+                    sampleTimes = buildAdaptiveSampleTimes(duration, preset.intervalSeconds, preset.maxFrames, probeFrames)
+                }
+
+                const frames = []
+                for (const sampleTime of sampleTimes) {
+                    // Sequential seeking preserves temporal order and keeps extraction reliable.
+                    frames.push(await captureFrameAt(sampleTime))
+                }
+
                 resolve({
-                    frameDataUrl,
+                    file,
+                    samples: frames,
                     videoUrl,
-                    timestampMs: Math.round((video.currentTime || 0) * 1000),
                 })
             } catch (err) {
                 fail(err.message || 'Video frame extraction failed')
+            }
+        }
+
+        video.onseeked = null
+
+        video.onloadeddata = () => {
+            try {
+                const canvas = document.createElement('canvas')
+                canvas.width = 1
+                canvas.height = 1
+            } catch {
+                // no-op; ensures browser decodes initial frame before seeking on some engines
             }
         }
     })
@@ -184,13 +467,13 @@ export default function TacticalOverlay({ sport, detection, setDetection }) {
         setAnalysisSource('video')
 
         try {
-            const { frameDataUrl, videoUrl, timestampMs } = await extractFrameFromVideo(file)
+            const { file: extractedFile, samples, videoUrl } = await extractFramesFromVideo(file)
             if (objectUrlRef.current) {
                 URL.revokeObjectURL(objectUrlRef.current)
             }
             objectUrlRef.current = videoUrl
             resetPreviewUrl(videoUrl, 'video')
-            await analyzeFrameB64(frameDataUrl.split(',')[1], timestampMs)
+            await analyzeVideoFrames({ file: extractedFile, samples })
         } catch (err) {
             console.error('Video analysis failed', err)
             setErrorMessage(err.message || 'Video analysis failed')
@@ -201,6 +484,9 @@ export default function TacticalOverlay({ sport, detection, setDetection }) {
             }
         }
     }
+
+    const activePreset = VIDEO_SAMPLING_PRESETS[videoSamplingPreset] || VIDEO_SAMPLING_PRESETS[DEFAULT_VIDEO_SAMPLING_PRESET]
+    const activeMode = VIDEO_SAMPLING_MODES[videoSamplingMode] || VIDEO_SAMPLING_MODES[DEFAULT_VIDEO_SAMPLING_MODE]
 
     return (
         <div className="tactical-section" style={{ flexDirection: 'column', alignItems: 'center', width: '100%', gap: '1.5rem' }}>
@@ -247,13 +533,65 @@ export default function TacticalOverlay({ sport, detection, setDetection }) {
                         style={{ width: '100%', padding: '14px', fontSize: '1rem', fontWeight: 600 }}
                     >
                         {loading && analysisSource === 'video'
-                            ? <><span className="spinner" /> Extracting Video Frame...</>
+                            ? <><span className="spinner" /> Sampling Video...</>
                             : <>🎬 Upload Short Video</>
                         }
                     </button>
                 </div>
+                <div style={{ marginTop: 12, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                    <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        <span style={{ color: 'var(--text-secondary)', fontSize: 11, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase' }}>
+                            Sampling Preset
+                        </span>
+                        <select
+                            value={videoSamplingPreset}
+                            onChange={(event) => setVideoSamplingPreset(event.target.value)}
+                            disabled={loading}
+                            style={{
+                                background: 'var(--bg-card)',
+                                border: '1px solid var(--border)',
+                                borderRadius: 8,
+                                color: 'var(--text-primary)',
+                                padding: '10px 12px',
+                                fontSize: 13,
+                                outline: 'none',
+                            }}
+                        >
+                            {Object.entries(VIDEO_SAMPLING_PRESETS).map(([presetKey, preset]) => (
+                                <option key={presetKey} value={presetKey}>
+                                    {preset.label}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
+                    <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        <span style={{ color: 'var(--text-secondary)', fontSize: 11, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase' }}>
+                            Fallback Mode
+                        </span>
+                        <select
+                            value={videoSamplingMode}
+                            onChange={(event) => setVideoSamplingMode(event.target.value)}
+                            disabled={loading}
+                            style={{
+                                background: 'var(--bg-card)',
+                                border: '1px solid var(--border)',
+                                borderRadius: 8,
+                                color: 'var(--text-primary)',
+                                padding: '10px 12px',
+                                fontSize: 13,
+                                outline: 'none',
+                            }}
+                        >
+                            {Object.entries(VIDEO_SAMPLING_MODES).map(([modeKey, modeConfig]) => (
+                                <option key={modeKey} value={modeKey}>
+                                    {modeConfig.label}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
+                </div>
                 <div style={{ marginTop: 10, color: 'var(--text-secondary)', fontSize: 12 }}>
-                    Video uploads extract one representative frame in-browser and send that frame for analysis.
+                    {activePreset.description} {activeMode.description} Current fallback targets roughly one frame every {activePreset.intervalSeconds.toFixed(2)} seconds, capped at {activePreset.maxFrames} frames.
                 </div>
                 {errorMessage && (
                     <div style={{ marginTop: 10, color: 'var(--accent-red)', fontSize: 12 }}>

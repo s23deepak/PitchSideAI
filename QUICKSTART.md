@@ -8,6 +8,12 @@
 - Docker (optional)
 - AWS Account with Bedrock access
 
+Recommended backend split:
+- Cloud: Bedrock
+- Self-hosted: vLLM with `Qwen/Qwen2.5-VL-7B-Instruct`
+- Lightweight local: Ollama with `qwen2.5:3b` and `qwen2.5vl:3b`
+- Mixed local: commentary notes on Ollama with `qwen2.5:3b`, video on vLLM with `Qwen/Qwen2.5-VL-3B-Instruct-AWQ`
+
 ### Option 1: Local Development (Fastest)
 
 ```bash
@@ -16,7 +22,7 @@ git clone <repo> && cd PitchAI
 cp .env.example .env
 
 # 2. Install dependencies
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
@@ -25,14 +31,30 @@ cd frontend && npm install && cd ..
 # 3. Configure AWS credentials in .env
 # Edit: AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
 
+# Optional local/self-hosted profiles:
+# - Self-hosted vLLM: set LLM_BACKEND=vllm, VLLM_MODEL=Qwen/Qwen2.5-7B-Instruct,
+#   VLLM_VISION_MODEL=Qwen/Qwen2.5-VL-7B-Instruct
+# - Lightweight Ollama: set LLM_BACKEND=ollama, OLLAMA_MODEL=qwen2.5:3b,
+#   OLLAMA_VISION_MODEL=qwen2.5vl:3b
+# - Mixed local: set COMMENTARY_NOTES_LLM_BACKEND=ollama, VISION_LLM_BACKEND=vllm,
+#   OLLAMA_MODEL=qwen2.5:3b, VLLM_BASE_URL=http://localhost:8000,
+#   VLLM_VISION_MODEL=Qwen/Qwen2.5-VL-3B-Instruct-AWQ
+
 # 4. Run backend
-python -m uvicorn api.server:app --reload --port 8080
+python3 -m uvicorn api.server:app --reload --port 8080
 
 # 5. Run frontend (new terminal)
 cd frontend && npm run dev
 ```
 
 **Access**: http://localhost:5173
+
+### Tactical Notes Smoke Test
+1. Generate commentary notes from the setup banner.
+2. Open the `Tactical Brief` tab in the notes panel.
+3. Upload a frame or short clip.
+4. With `LLM_BACKEND=bedrock`, or with `LLM_BACKEND=vllm` plus a video-capable `VLLM_VISION_MODEL`, the uploaded clip is analyzed as native video. If a full clip exceeds the active vLLM context window, the backend retries it as overlapping native-video windows before falling back to the sampled frames already sent by TacticalOverlay.
+5. Check the commentary sidebar for a live `Analyst Note` followed by generated tactical commentary.
 
 ### Option 2: Docker Compose (Recommended for Testing)
 
@@ -114,6 +136,17 @@ curl -X POST http://localhost:8080/api/v1/query \
 curl http://localhost:8080/api/v1/events?n=10
 ```
 
+### Prepare Commentary Notes
+```bash
+curl -X POST http://localhost:8080/api/v1/commentary/prepare-notes \
+  -H "Content-Type: application/json" \
+  -d '{
+    "home_team": "Manchester United",
+    "away_team": "Liverpool",
+    "sport": "soccer"
+  }'
+```
+
 ---
 
 ## 🔧 Configuration
@@ -189,7 +222,7 @@ curl -X POST http://localhost:8080/api/v1/research \
 lsof -i :8080
 
 # Kill it or use different port
-python -m uvicorn api.server:app --port 9000
+python3 -m uvicorn api.server:app --port 9000
 ```
 
 ### AWS Credentials Error

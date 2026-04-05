@@ -1,12 +1,24 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import './index.css'
 import PushToTalk from './components/PushToTalk'
 import TacticalOverlay from './components/TacticalOverlay'
 import MatchNotes from './components/MatchNotes'
 import EventFeed from './components/EventFeed'
 import CommentaryNotesViewer from './components/CommentaryNotesViewer'
+import CommentaryFeed from './components/CommentaryFeed'
 
 const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
+
+function buildMatchSessionKey(homeTeam, awayTeam, sport) {
+    const slugify = (value) =>
+        (value || '')
+            .trim()
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-+|-+$/g, '') || 'unknown'
+
+    return `${slugify(sport)}#${slugify(homeTeam)}#vs#${slugify(awayTeam)}`
+}
 
 export default function App() {
     const [homeTeam, setHomeTeam] = useState('Manchester United')
@@ -19,6 +31,117 @@ export default function App() {
     const [buildStatus, setBuildStatus] = useState(null) // null | 'loading' | 'ready' | 'error'
     const [preparationTime, setPreparationTime] = useState(0)
     const [detection, setDetection] = useState(null)
+    const [liveCommentary, setLiveCommentary] = useState([])
+    const [liveSessionReady, setLiveSessionReady] = useState(false)
+    const wsRef = useRef(null)
+    const sessionPromiseRef = useRef(null)
+    const activeSessionKeyRef = useRef(null)
+    const matchSession = buildMatchSessionKey(homeTeam, awayTeam, sport)
+
+    useEffect(() => {
+        if (wsRef.current) {
+            wsRef.current.close()
+            wsRef.current = null
+        }
+        sessionPromiseRef.current = null
+        activeSessionKeyRef.current = null
+        setLiveSessionReady(false)
+        setLiveCommentary([])
+    }, [matchSession])
+
+    useEffect(() => () => wsRef.current?.close(), [])
+
+    const ensureLiveSession = async () => {
+        if (!homeTeam || !awayTeam) {
+            return false
+        }
+
+        if (
+            wsRef.current?.readyState === WebSocket.OPEN &&
+            activeSessionKeyRef.current === matchSession &&
+            liveSessionReady
+        ) {
+            return true
+        }
+
+        if (sessionPromiseRef.current) {
+            return sessionPromiseRef.current
+        }
+
+        const wsUrl = BACKEND.replace(/^http/, 'ws') + '/ws/live'
+        const ws = new WebSocket(wsUrl)
+        wsRef.current = ws
+        activeSessionKeyRef.current = matchSession
+
+        sessionPromiseRef.current = new Promise((resolve, reject) => {
+            let settled = false
+
+            ws.onopen = () => {
+                ws.send(JSON.stringify({ type: 'init', home_team: homeTeam, away_team: awayTeam, sport }))
+            }
+
+            ws.onmessage = (e) => {
+                try {
+                    const msg = JSON.parse(e.data)
+                    if (msg.type === 'ready') {
+                        setLiveSessionReady(true)
+                        if (!settled) {
+                            settled = true
+                            resolve(true)
+                        }
+                    } else if (msg.type === 'status') {
+                        setLiveSessionReady(false)
+                    } else if (msg.type === 'commentary') {
+                        setLiveCommentary((prev) => [msg, ...prev].slice(0, 100))
+                    } else if (msg.type === 'error' && !settled) {
+                        settled = true
+                        reject(new Error(msg.message || 'Live session failed'))
+                    }
+                } catch {
+                    /* ignore malformed frames */
+                }
+            }
+
+            ws.onerror = (err) => {
+                console.warn('WS error', err)
+                setLiveSessionReady(false)
+                if (!settled) {
+                    settled = true
+                    reject(new Error('Live session connection failed'))
+                }
+            }
+
+            ws.onclose = () => {
+                wsRef.current = null
+                sessionPromiseRef.current = null
+                setLiveSessionReady(false)
+            }
+        }).finally(() => {
+            sessionPromiseRef.current = null
+        })
+
+        return sessionPromiseRef.current
+    }
+
+    useEffect(() => {
+        if (matchReady) {
+            ensureLiveSession().catch((err) => console.warn('Live session init failed', err))
+        }
+    }, [matchReady]) // eslint-disable-line react-hooks/exhaustive-deps
+
+    const sendMatchEvent = async (description) => {
+        const ready = await ensureLiveSession()
+        if (ready && wsRef.current?.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({ type: 'match_event', description }))
+        }
+    }
+
+    const sendTacticalDetection = async (analysis) => {
+        const ready = await ensureLiveSession()
+        if (ready && wsRef.current?.readyState === WebSocket.OPEN && analysis) {
+            wsRef.current.send(JSON.stringify({ type: 'tactical_detection', analysis }))
+        }
+    }
 
     const buildCommentaryNotes = async () => {
         setBuildingNotes(true)
@@ -68,7 +191,7 @@ export default function App() {
                     <div className="header-badge">Live Agents 🗣️</div>
                 </div>
                 <div className="header-match">
-                    {matchReady
+                    {(matchReady || liveSessionReady)
                         ? <><strong>{homeTeam}</strong> vs <strong>{awayTeam}</strong> — {sport}</>
                         : 'Configure a match to begin'}
                 </div>
@@ -140,55 +263,64 @@ export default function App() {
                         sport={sport}
                     />
 
-                    {commentaryData && <CommentaryNotesViewer data={commentaryData} />}
-                    {!commentaryData && <TacticalOverlay sport={sport} detection={detection} setDetection={setDetection} />}
+                    {/* TacticalOverlay always visible — upload frame / video at any time */}
+                    <TacticalOverlay
+                        sport={sport}
+                        matchSession={matchSession}
+                        detection={detection}
+                        setDetection={setDetection}
+                        sendMatchEvent={sendMatchEvent}
+                        sendTacticalDetection={sendTacticalDetection}
+                    />
+
+                    {/* Commentary notes appear below the pitch once generated */}
+                    {commentaryData && <CommentaryNotesViewer data={commentaryData} liveDetection={detection} />}
                 </div>
 
                 {/* Right — sidebar */}
                 <div className="dashboard-sidebar">
-                    {/* Match Notes OR Tactical Detection */}
-                    {!commentaryData && (
-                        <>
-                            {detection ? (
-                                <div className="tactical-info" style={{ width: '100%', minWidth: 300 }}>
-                                    <div className="detection-card">
-                                        <div className="detection-label">Tactical Label</div>
-                                        <div className="detection-value">
-                                            {detection.tactical_label}
-                                        </div>
-                                        {detection.key_observation && (
-                                            <div className="detection-sub">{detection.key_observation}</div>
-                                        )}
-                                        {detection.confidence != null && (
-                                            <>
-                                                <div className="confidence-bar">
-                                                    <div className="confidence-fill" style={{ width: `${detection.confidence * 100}%` }} />
-                                                </div>
-                                                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-                                                    {Math.round(detection.confidence * 100)}% confidence
-                                                </div>
-                                            </>
-                                        )}
-                                    </div>
-
-                                    <div className="detection-card">
-                                        <div className="detection-label">Formation (Home)</div>
-                                        <div className="detection-value">{detection.formation_home || '4-3-3'}</div>
-                                    </div>
-
-                                    <div className="detection-card">
-                                        <div className="detection-label">Formation (Away)</div>
-                                        <div className="detection-value">{detection.formation_away || '4-2-3-1'}</div>
-                                    </div>
-                                </div>
-                            ) : (
-                                <MatchNotes notes={[]} loading={buildingNotes} />
-                            )}
-
-                            {/* Event Feed (bottom half) */}
-                            <EventFeed />
-                        </>
+                    {/* Live Commentary Feed — once match is ready */}
+                    {(matchReady || liveSessionReady || liveCommentary.length > 0) && (
+                        <CommentaryFeed messages={liveCommentary} sendMatchEvent={sendMatchEvent} />
                     )}
+
+                    {/* Tactical detection card */}
+                    {detection && (
+                        <div className="tactical-info" style={{ width: '100%', minWidth: 300 }}>
+                            <div className="detection-card">
+                                <div className="detection-label">Tactical Label</div>
+                                <div className="detection-value">{detection.tactical_label}</div>
+                                {detection.key_observation && (
+                                    <div className="detection-sub">{detection.key_observation}</div>
+                                )}
+                                {detection.confidence != null && (
+                                    <>
+                                        <div className="confidence-bar">
+                                            <div className="confidence-fill" style={{ width: `${detection.confidence * 100}%` }} />
+                                        </div>
+                                        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+                                            {Math.round(detection.confidence * 100)}% confidence
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+                            <div className="detection-card">
+                                <div className="detection-label">Formation (Home)</div>
+                                <div className="detection-value">{detection.formation_home || '4-3-3'}</div>
+                            </div>
+                            <div className="detection-card">
+                                <div className="detection-label">Formation (Away)</div>
+                                <div className="detection-value">{detection.formation_away || '4-2-3-1'}</div>
+                            </div>
+                        </div>
+                    )}
+
+                    {!detection && !matchReady && (
+                        <MatchNotes notes={[]} loading={buildingNotes} />
+                    )}
+
+                    {/* Event Feed always visible */}
+                    <EventFeed matchSession={matchSession} />
                 </div>
             </div>
         </div>

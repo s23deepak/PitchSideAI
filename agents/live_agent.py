@@ -24,6 +24,7 @@ class LiveAgent(BaseLiveAgent):
         self.match_context = ""
         self.home_team = ""
         self.away_team = ""
+        self.match_session = "active_match"
 
     async def execute(self, query: str) -> str:
         """Alias for handle_text_query for orchestration compatibility."""
@@ -33,7 +34,8 @@ class LiveAgent(BaseLiveAgent):
         self,
         home_team: str,
         away_team: str,
-        sport: Optional[str] = None
+        sport: Optional[str] = None,
+        match_session: Optional[str] = None,
     ) -> str:
         """
         Initialize live session with pre-match research.
@@ -51,6 +53,8 @@ class LiveAgent(BaseLiveAgent):
 
         self.home_team = home_team
         self.away_team = away_team
+        if match_session:
+            self.match_session = match_session
 
         self.log_event("session_started", {
             "home_team": home_team,
@@ -86,7 +90,7 @@ class LiveAgent(BaseLiveAgent):
 
         try:
             # Get recent match events for real-time context
-            recent_events = await get_recent_events(5)
+            recent_events = await get_recent_events(5, match_session=self.match_session)
             events_text = "\n".join([
                 e.get("description", "") for e in recent_events if e.get("description")
             ])
@@ -120,7 +124,8 @@ class LiveAgent(BaseLiveAgent):
                     "sport": self.sport,
                     "home_team": self.home_team,
                     "away_team": self.away_team
-                }
+                },
+                match_session=self.match_session,
             )
 
             return answer
@@ -156,7 +161,8 @@ class LiveAgent(BaseLiveAgent):
                 {
                     "audio_size": len(audio_bytes),
                     "sport": self.sport
-                }
+                },
+                match_session=self.match_session,
             )
 
             return response
@@ -204,7 +210,8 @@ Commentary:
             {
                 "commentary": commentary,
                 "sport": self.sport
-            }
+            },
+            match_session=self.match_session,
         )
 
         return commentary

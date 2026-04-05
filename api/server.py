@@ -6,16 +6,20 @@ import base64
 import json
 import logging
 import asyncio
+from collections import defaultdict
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 import structlog
 
 from config import AWS_REGION, PORT, LOG_LEVEL
+from config.sports import SportType
 from core import setup_logging, get_logger, get_rate_limiter, RateLimitConfig
 from core.exceptions import RateLimitError, WorkflowExecutionError
 from orchestration.engine import get_orchestrator
@@ -24,11 +28,24 @@ from rag import get_rag_retriever, RAGStrategy
 from agents.live_agent import LiveAgent
 from agents.vision_agent import VisionAgent
 from agents.research_agent import ResearchAgent
-from tools.dynamodb_tool import get_recent_events
+from tools.dynamodb_tool import build_match_session_key, get_recent_events, write_event
 
 # Setup production logging
 setup_logging(level=LOG_LEVEL, json_logs=True)
 logger = get_logger(__name__)
+
+NATIVE_VIDEO_BACKENDS = {"bedrock", "vllm"}
+
+
+def _is_context_length_error(exc: Exception) -> bool:
+    """Detect model-input-overflow errors from OpenAI-compatible backends."""
+    message = str(exc).lower()
+    return (
+        "maximum context length" in message
+        or "input length" in message
+        or "context length" in message
+        or "too many tokens" in message
+    )
 
 
 # ── Request/Response Models ────────────────────────────────────────────────────
@@ -43,8 +60,25 @@ class ResearchRequest(BaseModel):
 class FrameAnalysisRequest(BaseModel):
     """Request for video frame tactical analysis."""
     frame_b64: str = Field(..., description="Base64-encoded JPEG")
-    sport: str = Field(default="soccer", pattern="^(soccer|cricket)$")
+    sport: str = Field(
+        default="soccer",
+        pattern="^(soccer|cricket|basketball|tennis|rugby|american_football|hockey|baseball)$"
+    )
     timestamp: Optional[int] = None
+    match_session: Optional[str] = None
+
+
+class VideoAnalysisRequest(BaseModel):
+    """Request for multi-frame video tactical analysis."""
+    video_b64: Optional[str] = None
+    video_format: Optional[str] = Field(default="mp4", pattern="^(mkv|mov|mp4|webm|flv|mpeg|mpg|wmv|three_gp)$")
+    frames_b64: Optional[list[str]] = Field(default=None, min_length=2, max_length=64)
+    timestamps_ms: Optional[list[int]] = Field(default=None, min_length=2, max_length=64)
+    sport: str = Field(
+        default="soccer",
+        pattern="^(soccer|cricket|basketball|tennis|rugby|american_football|hockey|baseball)$"
+    )
+    match_session: Optional[str] = None
 
 
 class QueryRequest(BaseModel):
@@ -52,7 +86,9 @@ class QueryRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=500)
     home_team: str = Field(default="Team A")
     away_team: str = Field(default="Team B")
+    sport: str = Field(default="soccer", pattern="^(soccer|cricket|basketball|tennis|rugby|american_football|hockey|baseball)$")
     rag_strategy: str = Field(default="hybrid", pattern="^(semantic|keyword|hybrid|cross_encoder)$")
+    match_session: Optional[str] = None
 
 
 class CommentaryNotesRequest(BaseModel):
@@ -106,6 +142,125 @@ async def lifespan(app: FastAPI):
     logger.info("PitchSide AI backend shutting down.")
 
 
+# ── Connection Manager ─────────────────────────────────────────────────────────
+
+class ConnectionManager:
+    """Tracks active WebSocket connections and broadcasts to sessions."""
+
+    def __init__(self):
+        self._sessions: dict[str, list[WebSocket]] = defaultdict(list)
+
+    async def connect(self, session_id: str, ws: WebSocket) -> None:
+        self._sessions[session_id].append(ws)
+
+    def disconnect(self, session_id: str, ws: WebSocket) -> None:
+        self._sessions[session_id] = [w for w in self._sessions[session_id] if w is not ws]
+
+    async def broadcast(self, session_id: str, message: dict) -> None:
+        payload = json.dumps(message)
+        dead: list[WebSocket] = []
+        for ws in list(self._sessions.get(session_id, [])):
+            try:
+                await ws.send_text(payload)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self.disconnect(session_id, ws)
+
+    async def send(self, ws: WebSocket, message: dict) -> None:
+        try:
+            await ws.send_text(json.dumps(message))
+        except Exception:
+            pass
+
+
+manager = ConnectionManager()
+
+
+def _format_video_timestamp_ms(timestamp_ms: int | float | None) -> str | None:
+    """Format a millisecond timestamp into mm:ss or hh:mm:ss."""
+    if not isinstance(timestamp_ms, (int, float)) or timestamp_ms < 0:
+        return None
+
+    total_seconds = int(timestamp_ms // 1000)
+    minutes, seconds = divmod(total_seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes:02d}:{seconds:02d}"
+
+
+def _format_tactical_commentary_note(analysis: dict) -> str:
+    """Create a compact analyst note from a tactical detection payload."""
+    label = (analysis.get("tactical_label") or "Tactical read").strip()
+    observation = (analysis.get("key_observation") or "No observation provided.").strip()
+    insight = (analysis.get("actionable_insight") or "").strip()
+    confidence = analysis.get("confidence")
+    video_timestamp_ms = analysis.get("timestamp_ms")
+    video_moments = analysis.get("video_moments") or []
+    clip_start = _format_video_timestamp_ms(analysis.get("clip_start_timestamp_ms"))
+    clip_end = _format_video_timestamp_ms(analysis.get("clip_end_timestamp_ms"))
+
+    confidence_text = ""
+    if isinstance(confidence, (int, float)):
+        confidence_text = f" ({round(confidence * 100)}% confidence)"
+
+    if len(video_moments) > 1 and clip_start and clip_end:
+        transition_points = []
+        for moment in video_moments[:4]:
+            moment_time = _format_video_timestamp_ms(moment.get("timestamp_ms"))
+            moment_label = moment.get("tactical_label")
+            if moment_time and moment_label:
+                transition_points.append(f"{moment_time} {moment_label}")
+        transitions_text = "; ".join(transition_points)
+        primary_time = _format_video_timestamp_ms(video_timestamp_ms)
+        note = (
+            f"Analyst note across {clip_start}–{clip_end}: {observation} "
+            f"Sequence: {transitions_text}."
+        )
+        if primary_time:
+            note += f" Primary moment at {primary_time}: {label}{confidence_text}."
+        else:
+            note += f" Primary moment: {label}{confidence_text}."
+    else:
+        time_text = ""
+        formatted = _format_video_timestamp_ms(video_timestamp_ms)
+        if formatted:
+            time_text = f" at {formatted}"
+        note = f"Analyst note{time_text}: {label}{confidence_text}. {observation}"
+
+    if insight:
+        note += f" Commentary cue: {insight}"
+    return note
+
+
+async def _periodic_commentary(
+    session_id: str,
+    agent,
+    match_session: str,
+    interval: int = 60,
+) -> None:
+    """Background task: generate contextual commentary every `interval` seconds."""
+    await asyncio.sleep(interval)
+    while True:
+        try:
+            recent = await get_recent_events(5, match_session=match_session)
+            events_text = "; ".join(
+                e.get("description", "") for e in recent if e.get("description")
+            )
+            seed = f"Match update — recent context: {events_text}" if events_text else "Ongoing match update"
+            text = await agent.generate_live_commentary(seed)
+            await manager.broadcast(session_id, {
+                "type": "commentary",
+                "text": text,
+                "source": "timer",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            logger.error("periodic_commentary_failed", error=str(exc))
+        await asyncio.sleep(interval)
+
+
 # ── Create FastAPI App ─────────────────────────────────────────────────────────
 
 app = FastAPI(
@@ -126,10 +281,20 @@ app.add_middleware(
 )
 
 # Shared agent instances
-vision_soccer = VisionAgent(sport="soccer")
-vision_cricket = VisionAgent(sport="cricket")
+vision_agents: dict[str, VisionAgent] = {
+    SportType.SOCCER.value: VisionAgent(sport=SportType.SOCCER.value),
+    SportType.CRICKET.value: VisionAgent(sport=SportType.CRICKET.value),
+}
 research_agent = ResearchAgent()
 orchestrator = get_orchestrator()
+
+
+def get_vision_agent(sport: str) -> VisionAgent:
+    """Return a cached vision agent for the requested sport."""
+    normalized_sport = (sport or SportType.SOCCER.value).strip().lower()
+    if normalized_sport not in vision_agents:
+        vision_agents[normalized_sport] = VisionAgent(sport=normalized_sport)
+    return vision_agents[normalized_sport]
 
 
 # ── Health & Status Endpoints ──────────────────────────────────────────────────
@@ -231,8 +396,8 @@ async def analyze_frame(req: FrameAnalysisRequest) -> dict:
     logger.log_event("frame_analysis_requested", {"sport": req.sport})
 
     try:
-        agent = vision_soccer if req.sport == "soccer" else vision_cricket
-        result = await agent.analyze_frame_b64(req.frame_b64)
+        agent = get_vision_agent(req.sport)
+        result = await agent.analyze_frame_b64(req.frame_b64, match_session=req.match_session)
 
         return {
             "status": "success",
@@ -242,6 +407,104 @@ async def analyze_frame(req: FrameAnalysisRequest) -> dict:
 
     except Exception as exc:
         logger.error("frame_analysis_failed", error=str(exc))
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/v1/video/analyze", dependencies=[Depends(rate_limit_check)])
+async def analyze_video(req: VideoAnalysisRequest) -> dict:
+    """Analyze an uploaded video clip using full native video, native windows, or sampled frames."""
+    agent = get_vision_agent(req.sport)
+    native_video_enabled = agent.backend in NATIVE_VIDEO_BACKENDS
+    use_native_video = native_video_enabled and bool(req.video_b64)
+    native_video_fallback_reason: str | None = None
+    analysis_path = "sampled_frames"
+    native_video_used = False
+
+    logger.log_event(
+        "video_analysis_requested",
+        {
+            "sport": req.sport,
+            "native_video_requested": bool(req.video_b64),
+            "native_video_enabled": native_video_enabled,
+            "native_video": use_native_video,
+            "frames": len(req.frames_b64 or []),
+        },
+    )
+
+    try:
+        if use_native_video:
+            try:
+                sequence_analysis = await agent.analyze_video_clip_b64(
+                    req.video_b64,
+                    video_format=req.video_format or "mp4",
+                    match_session=req.match_session,
+                )
+                analysis_path = sequence_analysis.get("native_video_strategy") or "full_clip"
+                native_video_used = True
+            except Exception as exc:
+                if not _is_context_length_error(exc) or not req.frames_b64 or not req.timestamps_ms:
+                    raise
+
+                try:
+                    sequence_analysis = await agent.analyze_video_clip_windowed_b64(
+                        req.video_b64,
+                        video_format=req.video_format or "mp4",
+                        match_session=req.match_session,
+                    )
+                    native_video_fallback_reason = "native full-clip input exceeded model context length; used overlapping native-video windows"
+                    analysis_path = sequence_analysis.get("native_video_strategy") or "windowed"
+                    native_video_used = True
+                    logger.warning(
+                        "video_analysis_native_windowed",
+                        sport=req.sport,
+                        backend=agent.backend,
+                        reason=native_video_fallback_reason,
+                        windows=sequence_analysis.get("video_window_count"),
+                    )
+                except Exception as window_exc:
+                    native_video_fallback_reason = (
+                        "native full-clip input exceeded model context length; "
+                        f"windowed native-video analysis failed: {window_exc}; falling back to sampled frames"
+                    )
+                    logger.warning(
+                        "video_analysis_native_fallback",
+                        sport=req.sport,
+                        backend=agent.backend,
+                        reason=native_video_fallback_reason,
+                        frames=len(req.frames_b64),
+                    )
+                    sequence_analysis = await agent.analyze_video_sequence_b64(
+                        req.frames_b64,
+                        timestamps_ms=req.timestamps_ms,
+                        match_session=req.match_session,
+                    )
+                    analysis_path = sequence_analysis.get("native_video_strategy") or "sampled_frames"
+        else:
+            if not req.frames_b64 or not req.timestamps_ms:
+                raise HTTPException(
+                    status_code=400,
+                    detail="frames_b64 and timestamps_ms are required when native video analysis is unavailable for the active backend",
+                )
+            if len(req.frames_b64) != len(req.timestamps_ms):
+                raise HTTPException(status_code=400, detail="frames_b64 and timestamps_ms must have the same length")
+
+            sequence_analysis = await agent.analyze_video_sequence_b64(
+                req.frames_b64,
+                timestamps_ms=req.timestamps_ms,
+                match_session=req.match_session,
+            )
+            analysis_path = sequence_analysis.get("native_video_strategy") or "sampled_frames"
+
+        return {
+            "status": "success",
+            "analysis": sequence_analysis,
+            "native_video_enabled": native_video_enabled,
+            "native_video_used": native_video_used,
+            "analysis_path": analysis_path,
+            "fallback_reason": native_video_fallback_reason,
+        }
+    except Exception as exc:
+        logger.error("video_analysis_failed", error=str(exc))
         raise HTTPException(status_code=500, detail=str(exc))
 
 
@@ -270,7 +533,10 @@ async def text_query(req: QueryRequest) -> dict:
         )
 
         # Answer query using retrieved context
-        agent = LiveAgent()
+        agent = LiveAgent(sport=req.sport)
+        agent.home_team = req.home_team
+        agent.away_team = req.away_team
+        agent.match_session = req.match_session or build_match_session_key(req.home_team, req.away_team, req.sport)
         answer = await agent.handle_text_query(
             req.query,
             context=documents
@@ -295,104 +561,257 @@ async def text_query(req: QueryRequest) -> dict:
 # ── Events Endpoint ────────────────────────────────────────────────────────────
 
 @app.get("/api/v1/events")
-async def get_events(n: int = 20):
+async def get_events(n: int = 20, match_session: Optional[str] = None):
     """Get recent match events."""
     try:
-        events = await get_recent_events(n)
+        events = await get_recent_events(n, match_session=match_session)
         return {
             "status": "success",
             "events": events,
-            "count": len(events)
+            "count": len(events),
+            "match_session": match_session or "active_match",
         }
     except Exception as exc:
         logger.error("events_fetch_failed", error=str(exc))
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-# ── WebSocket — Live Audio Streaming ───────────────────────────────────────────
+@app.get("/api/v1/events/stream")
+async def events_stream(request: Request, n: int = 20, match_session: Optional[str] = None):
+    """Server-Sent Events stream — pushes new DynamoDB events every 3 seconds."""
+    async def generator():
+        last_id: Optional[str] = None
+        while True:
+            if await request.is_disconnected():
+                break
+            try:
+                events = await get_recent_events(n, match_session=match_session)
+                newest_id = events[0].get("id") if events else None
+                if newest_id and newest_id != last_id:
+                    last_id = newest_id
+                    yield f"data: {json.dumps(events)}\n\n"
+            except Exception as exc:
+                logger.error("sse_poll_failed", error=str(exc))
+            await asyncio.sleep(3)
+
+    return StreamingResponse(
+        generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# ── WebSocket — Live Session ────────────────────────────────────────────────────
 
 @app.websocket("/ws/live")
 async def live_audio_ws(websocket: WebSocket):
     """
-    WebSocket endpoint for bidirectional live audio streaming.
+    Bidirectional WebSocket for live match sessions.
 
-    Protocol:
-    1. Client sends: {"type": "init", "home_team": "...", "away_team": "...", "sport": "..."}
-    2. Client streams audio chunks
-    3. Server streams back audio responses + text
+    Text frames (JSON):
+      -> {"type": "init",        "home_team": "...", "away_team": "...", "sport": "..."}
+      -> {"type": "match_event", "description": "Haaland scores! 1-0 in 34'"}
+            -> {"type": "tactical_detection", "analysis": {"tactical_label": "...", ...}}
+      -> {"type": "query",       "text": "Who scored the last goal?"}
+      <- {"type": "ready",       "message": "..."}
+            <- {"type": "commentary",  "text": "...", "source": "event|timer|detection|analysis", "timestamp": "..."}
+      <- {"type": "answer",      "text": "...", "timestamp": "..."}
+
+    Binary frames: raw audio bytes (future Nova Sonic integration)
     """
     await websocket.accept()
-    logger.info("New live audio session connected")
+    logger.info("New live session connected")
 
     agent = LiveAgent()
     workflow_id: Optional[str] = None
+    periodic_task: Optional[asyncio.Task] = None
+    match_session: Optional[str] = None
 
     try:
-        # Step 1: Receive session initialization
+        # Step 1: Init message
         init_data = await websocket.receive_text()
         init = json.loads(init_data)
 
         home_team = init.get("home_team", "Home Team")
         away_team = init.get("away_team", "Away Team")
         sport = init.get("sport", "soccer")
+        match_session = build_match_session_key(home_team, away_team, sport)
 
-        # Create workflow context
         context = WorkflowContext(
-            match_id=f"{home_team}_{away_team}",
+            match_id=match_session,
             home_team=home_team,
             away_team=away_team,
             sport=sport,
-            session_id=str(websocket.client)
+            session_id=str(websocket.client),
         )
-
         workflow_id = await orchestrator.start_workflow(context)
 
-        await websocket.send_text(json.dumps({
+        await manager.connect(workflow_id, websocket)
+
+        await manager.send(websocket, {
             "type": "status",
-            "message": f"🔬 Researching {home_team} vs {away_team}... Stand by.",
-            "workflow_id": workflow_id
-        }))
+            "message": f"Researching {home_team} vs {away_team}...",
+            "workflow_id": workflow_id,
+            "match_session": match_session,
+        })
 
-        # Initialize session
-        await agent.start_session(home_team, away_team, sport)
+        await agent.start_session(home_team, away_team, sport, match_session=match_session)
 
-        await websocket.send_text(json.dumps({
+        await manager.send(websocket, {
             "type": "ready",
-            "message": "✅ Ready! Push to talk and ask me anything."
-        }))
+            "message": "Session ready. Commentary will fire on events, frame detections, and every 60 s.",
+            "match_session": match_session,
+        })
 
-        # Step 2: Stream audio chunks
+        # Start periodic commentary background task
+        periodic_task = asyncio.create_task(
+            _periodic_commentary(workflow_id, agent, match_session)
+        )
+
+        # Step 2: Message loop — handles text (events/queries) and binary (audio)
         while True:
             try:
-                audio_chunk = await asyncio.wait_for(
-                    websocket.receive_bytes(),
-                    timeout=60.0
-                )
-                await agent.stream_audio(audio_chunk, websocket)
-
+                msg = await asyncio.wait_for(websocket.receive(), timeout=120.0)
             except asyncio.TimeoutError:
-                await websocket.send_text(json.dumps({
+                await manager.send(websocket, {
                     "type": "info",
-                    "message": "Session idle timeout. Please reconnect."
-                }))
+                    "message": "Session idle. Reconnect to continue.",
+                })
                 break
+
+            if msg["type"] == "websocket.disconnect":
+                break
+
+            # ── Text frames ────────────────────────────────────────────────────
+            if msg.get("text"):
+                try:
+                    data = json.loads(msg["text"])
+                except json.JSONDecodeError:
+                    continue
+
+                msg_type = data.get("type")
+
+                if msg_type == "match_event":
+                    description = data.get("description", "").strip()
+                    if not description:
+                        continue
+                    text = await agent.generate_live_commentary(description)
+                    await manager.broadcast(workflow_id, {
+                        "type": "commentary",
+                        "text": text,
+                        "source": "event",
+                        "trigger": description,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    })
+
+                elif msg_type == "tactical_detection":
+                    analysis = data.get("analysis") or {}
+                    if not isinstance(analysis, dict):
+                        continue
+
+                    note_text = _format_tactical_commentary_note(analysis)
+                    timestamp = datetime.now(timezone.utc).isoformat()
+
+                    await write_event(
+                        "tactical_analyst_note",
+                        note_text,
+                        {
+                            "analysis": analysis,
+                            "sport": sport,
+                            "home_team": home_team,
+                            "away_team": away_team,
+                        },
+                        match_session=match_session,
+                    )
+
+                    await manager.broadcast(workflow_id, {
+                        "type": "commentary",
+                        "text": note_text,
+                        "source": "detection",
+                        "label": analysis.get("tactical_label"),
+                        "confidence": analysis.get("confidence"),
+                        "videoTimestampMs": analysis.get("timestamp_ms"),
+                        "videoRangeLabel": (
+                            f"{_format_video_timestamp_ms(analysis.get('clip_start_timestamp_ms'))}–{_format_video_timestamp_ms(analysis.get('clip_end_timestamp_ms'))}"
+                            if _format_video_timestamp_ms(analysis.get('clip_start_timestamp_ms')) and _format_video_timestamp_ms(analysis.get('clip_end_timestamp_ms'))
+                            else None
+                        ),
+                        "trigger": analysis.get("actionable_insight") or analysis.get("key_observation"),
+                        "timestamp": timestamp,
+                    })
+
+                    commentary_seed = (
+                        analysis.get("sequence_summary")
+                        or analysis.get("actionable_insight")
+                        or analysis.get("key_observation")
+                        or analysis.get("tactical_label")
+                    )
+                    temporal_change = analysis.get("key_observation")
+                    if analysis.get("video_moments"):
+                        commentary_seed = (
+                            f"Video clip from {analysis.get('clip_start_timestamp_ms', 0)} ms to "
+                            f"{analysis.get('clip_end_timestamp_ms', 0)} ms. "
+                            f"Sequence: {analysis.get('sequence_summary', '')}. "
+                            f"Temporal read: {temporal_change}."
+                        )
+
+                    if commentary_seed:
+                        timestamp_prefix = ""
+                        timestamp_ms = analysis.get("timestamp_ms")
+                        if isinstance(timestamp_ms, (int, float)) and timestamp_ms >= 0:
+                            total_seconds = int(timestamp_ms // 1000)
+                            minutes, seconds = divmod(total_seconds, 60)
+                            hours, minutes = divmod(minutes, 60)
+                            formatted = f"{hours:02d}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes:02d}:{seconds:02d}"
+                            timestamp_prefix = f"Video timestamp {formatted}: "
+
+                        text = await agent.generate_live_commentary(
+                            f"{timestamp_prefix}{commentary_seed}"
+                        )
+                        await manager.broadcast(workflow_id, {
+                            "type": "commentary",
+                            "text": text,
+                            "source": "analysis",
+                            "label": analysis.get("tactical_label"),
+                            "confidence": analysis.get("confidence"),
+                            "videoTimestampMs": analysis.get("timestamp_ms"),
+                            "videoRangeLabel": (
+                                f"{_format_video_timestamp_ms(analysis.get('clip_start_timestamp_ms'))}–{_format_video_timestamp_ms(analysis.get('clip_end_timestamp_ms'))}"
+                                if _format_video_timestamp_ms(analysis.get('clip_start_timestamp_ms')) and _format_video_timestamp_ms(analysis.get('clip_end_timestamp_ms'))
+                                else None
+                            ),
+                            "trigger": analysis.get("actionable_insight") or analysis.get("key_observation"),
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        })
+
+                elif msg_type == "query":
+                    query_text = data.get("text", "").strip()
+                    if not query_text:
+                        continue
+                    answer = await agent.handle_text_query(query_text)
+                    await manager.send(websocket, {
+                        "type": "answer",
+                        "text": answer,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    })
+
+            # ── Binary frames (audio) ──────────────────────────────────────────
+            elif msg.get("bytes"):
+                await agent.stream_audio(msg["bytes"])
 
     except WebSocketDisconnect:
         logger.info("Live session disconnected", workflow_id=workflow_id)
-        if workflow_id:
-            await orchestrator.finalize_workflow(workflow_id)
 
     except Exception as exc:
         logger.error("live_session_error", error=str(exc), exc_info=True)
-        try:
-            await websocket.send_text(json.dumps({
-                "type": "error",
-                "message": f"Session error: {str(exc)}"
-            }))
-        except:
-            pass
+        await manager.send(websocket, {"type": "error", "message": str(exc)})
+
+    finally:
+        if periodic_task:
+            periodic_task.cancel()
         if workflow_id:
-            await orchestrator.finalize_workflow(workflow_id, success=False)
+            manager.disconnect(workflow_id, websocket)
+            await orchestrator.finalize_workflow(workflow_id)
 
 
 # ── Commentary Notes Endpoint ──────────────────────────────────────────────────

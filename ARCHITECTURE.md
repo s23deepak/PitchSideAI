@@ -2,7 +2,7 @@
 
 ## System Overview
 
-PitchSide AI v2.0 is a production-grade, enterprise-level sports AI platform built on top of Amazon Bedrock's Nova models. The system implements advanced multi-agent orchestration, high-concurrency handling, and intelligent RAG strategies.
+PitchSide AI v2.0 is a production-grade, enterprise-level sports AI platform built around Amazon Bedrock's Nova models, with optional Ollama, OpenAI, and vLLM backends behind the same agent interface. The system implements advanced multi-agent orchestration, high-concurrency handling, and intelligent RAG strategies.
 
 ## Core Components
 
@@ -99,14 +99,78 @@ FastAPI backend integrated with orchestration and advanced features.
 - `GET /status` - System metrics
 - `POST /api/v1/research` - Pre-match research
 - `POST /api/v1/frame/analyze` - Tactical analysis
+- `POST /api/v1/video/analyze` - Full native video on Bedrock/vLLM, overlapping native-window retry on vLLM context overflow, sampled-frame fallback elsewhere
 - `POST /api/v1/query` - Advanced Q&A with RAG
-- `WebSocket /ws/live` - Live audio streaming
+- `GET /api/v1/events` - Fetch recent DynamoDB events (JSON)
+- `GET /api/v1/events/stream` - SSE stream of DynamoDB events scoped by `match_session` (push, 3 s poll)
+- `WebSocket /ws/live` - Bidirectional live match session
+
+**WebSocket `/ws/live` Protocol:**
+
+| Direction | Message |
+|---|---|
+| Client → Server | `{"type":"init","home_team":"...","away_team":"...","sport":"..."}` |
+| Client → Server | `{"type":"match_event","description":"Haaland scores! 34'"}` |
+| Client → Server | `{"type":"tactical_detection","analysis":{"tactical_label":"High Press",...}}` |
+| Client → Server | `{"type":"query","text":"Who scored?"}` |
+| Client → Server | Binary audio bytes (future Nova Sonic integration) |
+| Server → Client | `{"type":"commentary","text":"...","source":"event\|timer\|detection\|analysis","timestamp":"..."}` |
+| Server → Client | `{"type":"answer","text":"...","timestamp":"..."}` |
+| Server → Client | `{"type":"ready","message":"..."}` |
+
+**ConnectionManager:** Tracks active WebSocket connections per `workflow_id` (session). `broadcast(session_id, msg)` fans out to all connected tabs.
+
+**Event Scoping:** DynamoDB writes and reads are partitioned by a deterministic `match_session` key derived from sport + home team + away team, so the SSE event feed no longer mixes unrelated matches.
+
+**Periodic Commentary:** After session init, a background `asyncio.Task` (`_periodic_commentary`) fires `LiveAgent.generate_live_commentary()` every 60 s, seeded from recent DynamoDB events, and broadcasts the result to all session clients.
 
 **Middleware:**
 - CORS middleware (production-configured)
 - GZip compression
 - Rate limiting via dependency injection
 - Error handling with proper HTTP codes
+
+## Running Commentary Pipeline
+
+### Event Sources → Commentary Flow
+
+```
+[TacticalOverlay] → confidence > 0.6 → /ws/live (text "tactical_detection") ─────┐
+[TacticalOverlay video upload] → full native clip → native windows on overflow → sampled frames ─┤
+[CommentaryFeed input] → user types match event → /ws/live (text "match_event") ──┼─► server
+[Periodic timer, 60 s] → _periodic_commentary task ─────────────────────────────────┘
+                                                                                     │
+                                     tactical_detection ─► analyst note broadcast ───┤
+                                     tactical_detection ─► LiveAgent.generate_live_commentary()
+                                     match_event/timer  ─► LiveAgent.generate_live_commentary()
+                                                                                     │
+                                                    ConnectionManager.broadcast()
+                                                                                     │
+                            {"type":"commentary","source":"detection|analysis|event|timer",...}
+                                                                                     │
+                                                    App.jsx → liveCommentary state
+                                                                                     │
+                                                   CommentaryFeed + Tactical Brief UI
+```
+
+### SSE Event Feed
+
+```
+DynamoDB (write_event, scoped by match_session) ──→ /api/v1/events/stream?match_session=... ──→ EventSource (EventFeed.jsx)
+                                                   3 s poll / push                                   real-time browser update
+```
+
+### Three Commentary Triggers
+
+| Trigger | Source | Threshold |
+|---|---|---|
+| Vision detection analyst note | `TacticalOverlay` uploads frame | `confidence > 0.6` |
+| Video clip analysis | `POST /api/v1/video/analyze` | Native Bedrock or vLLM video when available, otherwise sampled frames |
+| Vision detection commentary | Generated after `tactical_detection` is received | Detection must include insight/observation |
+| Manual event | User types in `CommentaryFeed` input | Any non-empty text |
+| Periodic timer | `_periodic_commentary` background task | Every 60 s |
+
+---
 
 ## High Concurrency Architecture
 
@@ -432,6 +496,6 @@ black .
 
 ---
 
-**Document Version**: 2.0
-**Last Updated**: March 27, 2026
+**Document Version**: 2.1
+**Last Updated**: April 2026
 **Author**: PitchSide AI Team

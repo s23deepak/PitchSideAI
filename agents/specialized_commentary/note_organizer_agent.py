@@ -82,6 +82,7 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
         away_team = all_outputs.get("away_team", "Away")
         match_datetime = all_outputs.get("match_datetime", "TBD")
         venue = all_outputs.get("venue", "Unknown")
+        tactical_brief = self._build_tactical_brief(all_outputs)
 
         # PAGE 1: Lineups & Match Info
         page1 = self._organize_lineups_section(
@@ -110,6 +111,9 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
 
         # PAGE 4-5: Tactical Analysis & Storylines
         page45 = self._organize_tactical_section(
+            home_team,
+            away_team,
+            tactical_brief,
             all_outputs.get("matchups", {}),
             all_outputs.get("historical", {}),
             all_outputs.get("weather", {}),
@@ -220,6 +224,9 @@ Composite Analysis:
 
     def _organize_tactical_section(
         self,
+        home_team: str,
+        away_team: str,
+        tactical_brief: Dict[str, Any],
         matchups: Dict[str, Any],
         historical: Dict[str, Any],
         weather: Dict[str, Any],
@@ -232,14 +239,41 @@ Composite Analysis:
             f"{h2h.get('team1_wins', 0)}-{h2h.get('draws', 0)}-{h2h.get('team2_wins', 0)}"
             if h2h else "Unavailable"
         )
+        zone_edges = tactical_brief.get("zone_edges", [])
+        pressure_points = tactical_brief.get("pressure_points", [])
+        commentary_angles = tactical_brief.get("commentary_angles", [])
 
         return f"""---
 
 ## PAGES 4-5: TACTICAL ANALYSIS & STORYLINES
 
+**Tactical Snapshot**
+
+{tactical_brief.get('summary', 'Verified tactical snapshot unavailable.')}
+
+### Zone-by-Zone Edge
+
+{self._format_bullets(zone_edges)}
+
+### How {home_team} Can Tilt The Match
+
+{tactical_brief.get('home_plan', 'Home-side tactical route unavailable.')}
+
+### How {away_team} Can Tilt The Match
+
+{tactical_brief.get('away_plan', 'Away-side tactical route unavailable.')}
+
 **Key 1v1 Matchups**
 
 {self._format_matchups(critical_matchups)}
+
+### Pressure Points To Mention Early
+
+{self._format_bullets(pressure_points)}
+
+### Commentary Angles To Keep Ready
+
+{self._format_bullets(commentary_angles)}
 
 **Historical Context**
 
@@ -256,6 +290,42 @@ Recent H2H Narrative:
 
 {self._format_match_dynamic(matchups, historical, weather)}
 """
+
+    def _build_tactical_brief(self, all_outputs: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a concise tactical brief from verified workflow outputs."""
+        home_team = all_outputs.get("home_team", "Home")
+        away_team = all_outputs.get("away_team", "Away")
+        team_form = all_outputs.get("team_form", {})
+        matchups = all_outputs.get("matchups", {})
+        historical = all_outputs.get("historical", {})
+        weather = all_outputs.get("weather", {})
+
+        comparative = team_form.get("comparative_analysis", {}).get("comparative_assessment", "")
+        tactical_implications = matchups.get("tactical_implications", "")
+        summary_parts = [
+            self._first_sentence(tactical_implications),
+            self._first_sentence(comparative),
+            self._first_sentence(weather.get("narrative", "")),
+        ]
+        summary = " ".join(part for part in summary_parts if part).strip()
+        if not summary:
+            summary = "Current inputs point to a balanced tactical battle, with matchup edges and weather cues carrying the strongest evidence."
+
+        return {
+            "summary": summary,
+            "zone_edges": self._format_zone_edges(matchups.get("positional_strength", {})),
+            "home_plan": self._extract_team_plan(team_form.get("home_team", {}), home_team),
+            "away_plan": self._extract_team_plan(team_form.get("away_team", {}), away_team),
+            "pressure_points": self._build_pressure_points(home_team, away_team, matchups.get("weak_points", {})),
+            "commentary_angles": self._build_commentary_angles(
+                home_team,
+                away_team,
+                matchups,
+                historical,
+                weather,
+                comparative,
+            ),
+        }
 
     def _format_player_list(self, players: List[Dict[str, Any]]) -> str:
         """Format player list for markdown."""
@@ -324,6 +394,11 @@ Recent H2H Narrative:
 
         return "\n".join(formatted) if formatted else "Matchup analysis unavailable"
 
+    def _format_bullets(self, items: List[str]) -> str:
+        """Format a list of text items as markdown bullets."""
+        clean_items = [item.strip() for item in items if isinstance(item, str) and item.strip()]
+        return "\n".join(f"- {item}" for item in clean_items) if clean_items else "- No verified note available"
+
     def _format_weather_summary(self, temp: Any, conditions: str, wind: Any) -> str:
         """Format weather details without fabricating missing values."""
         parts = []
@@ -366,9 +441,110 @@ Recent H2H Narrative:
 
         return "\n".join(bullets)
 
+    def _format_zone_edges(self, positional_strength: Dict[str, Any]) -> List[str]:
+        """Summarize zone-level advantages for tactical notes."""
+        if not positional_strength:
+            return ["Zone-level edge unavailable from current lineup evidence."]
+
+        zone_order = ["Defense", "Midfield", "Attack"]
+        zone_edges = []
+        for zone in zone_order:
+            zone_data = positional_strength.get(zone, {})
+            verdict = zone_data.get("verdict")
+            if verdict:
+                zone_edges.append(verdict)
+        return zone_edges or ["Zone-level edge unavailable from current lineup evidence."]
+
+    def _extract_team_plan(self, form_analysis: Dict[str, Any], team_name: str) -> str:
+        """Extract a concise tactical route from the form-analysis summary."""
+        analysis = form_analysis.get("comprehensive_analysis", "")
+        plan = self._first_two_sentences(analysis)
+        if plan:
+            return plan
+        return f"Verified tactical route for {team_name} is limited, so lean on live phase cues and matchup swings."
+
+    def _build_pressure_points(
+        self,
+        home_team: str,
+        away_team: str,
+        weak_points: Dict[str, Any],
+    ) -> List[str]:
+        """Turn weak-point data into commentary-friendly notes."""
+        pressure_points = []
+        for note in weak_points.get("home_vulnerabilities", [])[:2]:
+            pressure_points.append(f"{home_team}: {note}")
+        for note in weak_points.get("away_vulnerabilities", [])[:2]:
+            pressure_points.append(f"{away_team}: {note}")
+        return pressure_points or ["No clear structural pressure point surfaced from verified lineup data."]
+
+    def _build_commentary_angles(
+        self,
+        home_team: str,
+        away_team: str,
+        matchups: Dict[str, Any],
+        historical: Dict[str, Any],
+        weather: Dict[str, Any],
+        comparative: str,
+    ) -> List[str]:
+        """Build quick commentary cues from validated workflow outputs."""
+        angles = []
+
+        first_matchup = (matchups.get("critical_matchups") or [{}])[0]
+        if first_matchup.get("player1") and first_matchup.get("player2"):
+            angles.append(
+                f"Open with the duel between {first_matchup['player1']} and {first_matchup['player2']}."
+            )
+
+        historical_pattern = historical.get("h2h_history", {}).get("patterns", {}).get("pattern")
+        if historical_pattern:
+            angles.append(f"Frame the rivalry as a {historical_pattern.lower()} head-to-head pattern.")
+
+        weather_lever = self._first_sentence(weather.get("narrative", ""))
+        if weather_lever:
+            angles.append(f"Weather cue: {weather_lever}")
+
+        comparative_line = self._first_sentence(comparative)
+        if comparative_line:
+            angles.append(f"Form cue: {comparative_line}")
+
+        if not angles:
+            angles.append(f"Lead with how {home_team} and {away_team} handle the first tactical swing in midfield.")
+
+        return angles[:4]
+
+    def _first_sentence(self, text: str) -> str:
+        """Return the first sentence-like segment from text."""
+        if not isinstance(text, str):
+            return ""
+        cleaned = " ".join(text.split()).strip()
+        if not cleaned:
+            return ""
+        for separator in (". ", "\n", "! ", "? "):
+            if separator in cleaned:
+                return cleaned.split(separator, 1)[0].strip().rstrip(".!?") + "."
+        return cleaned if cleaned.endswith((".", "!", "?")) else f"{cleaned}."
+
+    def _first_two_sentences(self, text: str) -> str:
+        """Return up to two sentence-like segments from text."""
+        if not isinstance(text, str):
+            return ""
+        cleaned = " ".join(text.split()).strip()
+        if not cleaned:
+            return ""
+        sentence_endings = []
+        for idx, char in enumerate(cleaned):
+            if char in ".!?":
+                sentence_endings.append(idx)
+                if len(sentence_endings) == 2:
+                    break
+        if sentence_endings:
+            return cleaned[: sentence_endings[-1] + 1].strip()
+        return cleaned
+
     async def _build_json_structure(self, all_outputs: Dict[str, Any]) -> Dict[str, Any]:
         """Build complete JSON structure for embedded data."""
         data_sources = self._collect_data_sources(all_outputs)
+        tactical_brief = self._build_tactical_brief(all_outputs)
         return {
             "metadata": {
                 "match_id": f"{all_outputs.get('home_team', 'home')}_vs_{all_outputs.get('away_team', 'away')}",
@@ -392,6 +568,7 @@ Recent H2H Narrative:
                 all_outputs.get("news", {}).get("away_team", {}),
             ),
             "matchup_analysis": all_outputs.get("matchups", {}),
+            "tactical_brief": tactical_brief,
             "historical_context": all_outputs.get("historical", {}),
             "weather": all_outputs.get("weather", {}),
             "quality_metrics": {

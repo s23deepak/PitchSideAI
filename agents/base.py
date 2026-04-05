@@ -12,12 +12,48 @@ from datetime import datetime
 import httpx
 from core import get_logger
 from config import (
-    LLM_BACKEND, OLLAMA_BASE_URL, OLLAMA_MODEL,
+    COMMENTARY_NOTES_LLM_BACKEND, LLM_BACKEND, OLLAMA_BASE_URL, OLLAMA_MODEL, OLLAMA_VISION_MODEL,
     OPENAI_API_KEY, OPENAI_MODEL,
-    VLLM_BASE_URL, VLLM_MODEL,
+    VISION_LLM_BACKEND, VLLM_BASE_URL, VLLM_MODEL, VLLM_VISION_MODEL,
 )
 
 logger = get_logger(__name__)
+
+
+OPENAI_COMPATIBLE_NATIVE_VIDEO_BACKENDS = {"vllm"}
+COMMENTARY_NOTES_AGENT_TYPES = {
+    "historical_context",
+    "matchup_analysis",
+    "news",
+    "note_organizer",
+    "player_research",
+    "team_form",
+    "weather_context",
+}
+VIDEO_DATA_URL_MIME_TYPES = {
+    "flv": "video/x-flv",
+    "mkv": "video/x-matroska",
+    "mov": "video/quicktime",
+    "mp4": "video/mp4",
+    "mpeg": "video/mpeg",
+    "mpg": "video/mpeg",
+    "three_gp": "video/3gpp",
+    "webm": "video/webm",
+    "wmv": "video/x-ms-wmv",
+}
+
+
+def _get_video_data_url_mime_type(video_format: Optional[str]) -> str:
+    normalized_format = (video_format or "mp4").strip().lower()
+    return VIDEO_DATA_URL_MIME_TYPES.get(normalized_format, f"video/{normalized_format}")
+
+
+def _resolve_backend(agent_type: str) -> str:
+    if agent_type == "vision" and VISION_LLM_BACKEND:
+        return VISION_LLM_BACKEND
+    if agent_type in COMMENTARY_NOTES_AGENT_TYPES and COMMENTARY_NOTES_LLM_BACKEND:
+        return COMMENTARY_NOTES_LLM_BACKEND
+    return LLM_BACKEND
 
 
 class BaseAgent(ABC):
@@ -38,16 +74,15 @@ class BaseAgent(ABC):
         self.sport = sport
         self.agent_type = agent_type
         self.logger = get_logger(f"agent.{agent_type}")
-        self.backend = LLM_BACKEND
+        self.backend = _resolve_backend(agent_type)
         self.model_id = model_id
 
         if self.backend == "bedrock":
             import boto3
             self.bedrock_client = boto3.client("bedrock-runtime", region_name="us-east-1")
         elif self.backend == "ollama":
-            import os
             if self.agent_type == "vision":
-                self.model_id = os.getenv("OLLAMA_VISION_MODEL", "llama3.2-vision")
+                self.model_id = OLLAMA_VISION_MODEL
             else:
                 self.model_id = OLLAMA_MODEL
             self.bedrock_client = None
@@ -55,7 +90,7 @@ class BaseAgent(ABC):
             self.model_id = OPENAI_MODEL
             self.bedrock_client = None
         elif self.backend == "vllm":
-            self.model_id = VLLM_MODEL
+            self.model_id = VLLM_VISION_MODEL if self.agent_type == "vision" else VLLM_MODEL
             self.bedrock_client = None
         else:
             raise ValueError(f"Unknown LLM_BACKEND: {self.backend}")
@@ -66,6 +101,8 @@ class BaseAgent(ABC):
         temperature: float = 0.5,
         max_tokens: Optional[int] = None,
         image_data: Optional[bytes] = None,
+        video_data: Optional[bytes] = None,
+        video_format: Optional[str] = None,
         response_format: str = "text"
     ) -> str:
         """
@@ -81,7 +118,15 @@ class BaseAgent(ABC):
         prompt = prompt + guardrail
 
         if self.backend != "bedrock":
-            return await self._call_openai_compatible(prompt, temperature, max_tokens, image_data, response_format)
+            return await self._call_openai_compatible(
+                prompt,
+                temperature,
+                max_tokens,
+                image_data,
+                video_data,
+                video_format,
+                response_format,
+            )
 
         start_time = datetime.utcnow()
 
@@ -95,6 +140,14 @@ class BaseAgent(ABC):
                     "image": {
                         "format": "jpeg",
                         "source": {"bytes": image_data}
+                    }
+                })
+
+            if video_data:
+                content.append({
+                    "video": {
+                        "format": video_format or "mp4",
+                        "source": {"bytes": video_data}
                     }
                 })
 
@@ -161,12 +214,28 @@ class BaseAgent(ABC):
             return VLLM_BASE_URL, None
         raise ValueError(f"No OpenAI-compatible config for backend: {self.backend}")
 
+    @staticmethod
+    def _extract_message_text(content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            text_parts = []
+            for item in content:
+                if isinstance(item, dict):
+                    text_value = item.get("text")
+                    if text_value:
+                        text_parts.append(text_value)
+            return "\n".join(text_parts)
+        return str(content)
+
     async def _call_openai_compatible(
         self,
         prompt: str,
         temperature: float = 0.5,
         max_tokens: Optional[int] = None,
         image_data: Optional[bytes] = None,
+        video_data: Optional[bytes] = None,
+        video_format: Optional[str] = None,
         response_format: str = "text"
     ) -> str:
         """Call any OpenAI-compatible API (Ollama, OpenAI, vLLM)."""
@@ -182,6 +251,15 @@ class BaseAgent(ABC):
                     "type": "image_url",
                     "image_url": {"url": f"data:{mime_type};base64,{b64_image}"}
                 })
+            if video_data:
+                if self.backend not in OPENAI_COMPATIBLE_NATIVE_VIDEO_BACKENDS:
+                    raise ValueError(f"Native video input is not supported for backend: {self.backend}")
+                b64_video = base64.b64encode(video_data).decode("utf-8")
+                mime_type = _get_video_data_url_mime_type(video_format)
+                content.append({
+                    "type": "video_url",
+                    "video_url": {"url": f"data:{mime_type};base64,{b64_video}"}
+                })
             content.append({"type": "text", "text": prompt})
 
             payload = {
@@ -191,7 +269,8 @@ class BaseAgent(ABC):
                 "stream": False,
             }
             if max_tokens:
-                payload["max_tokens"] = max_tokens
+                max_tokens_key = "max_completion_tokens" if self.backend == "vllm" else "max_tokens"
+                payload[max_tokens_key] = max_tokens
             if response_format == "json":
                 payload["response_format"] = {"type": "json_object"}
 
@@ -205,9 +284,16 @@ class BaseAgent(ABC):
                     json=payload,
                     headers=headers,
                 )
-                response.raise_for_status()
+                if response.is_error:
+                    response_text = response.text.strip()
+                    error_message = (
+                        f"{self.backend} chat completion failed with status {response.status_code}: {response_text}"
+                        if response_text
+                        else f"{self.backend} chat completion failed with status {response.status_code}"
+                    )
+                    raise ValueError(error_message)
 
-            result = response.json()["choices"][0]["message"]["content"]
+            result = self._extract_message_text(response.json()["choices"][0]["message"]["content"])
 
             duration_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
             self.logger.log_performance(

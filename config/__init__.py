@@ -38,6 +38,11 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
 # ── Runtime overrides (env wins over defaults.py) ─────────────────────────────
 LLM_BACKEND    = os.getenv("LLM_BACKEND",    _d.LLM_BACKEND)
+VISION_LLM_BACKEND = os.getenv("VISION_LLM_BACKEND", _d.VISION_LLM_BACKEND)
+COMMENTARY_NOTES_LLM_BACKEND = os.getenv(
+    "COMMENTARY_NOTES_LLM_BACKEND",
+    _d.COMMENTARY_NOTES_LLM_BACKEND,
+)
 PORT           = int(os.getenv("PORT",        _d.PORT))
 HOST           = os.getenv("HOST",            _d.HOST)
 LOG_LEVEL      = os.getenv("LOG_LEVEL",       _d.LOG_LEVEL)
@@ -46,6 +51,7 @@ LOG_FILE       = os.getenv("LOG_FILE",        _d.LOG_FILE)
 
 OLLAMA_BASE_URL    = os.getenv("OLLAMA_BASE_URL",    _d.OLLAMA_BASE_URL)
 OLLAMA_MODEL       = os.getenv("OLLAMA_MODEL",       _d.OLLAMA_MODEL)
+OLLAMA_VISION_MODEL = os.getenv("OLLAMA_VISION_MODEL", _d.OLLAMA_VISION_MODEL)
 OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", _d.OLLAMA_EMBED_MODEL)
 
 OPENAI_MODEL       = os.getenv("OPENAI_MODEL",       _d.OPENAI_MODEL)
@@ -53,6 +59,7 @@ OPENAI_EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", _d.OPENAI_EMBED_MODEL)
 
 VLLM_BASE_URL    = os.getenv("VLLM_BASE_URL",    _d.VLLM_BASE_URL)
 VLLM_MODEL       = os.getenv("VLLM_MODEL",       _d.VLLM_MODEL)
+VLLM_VISION_MODEL = os.getenv("VLLM_VISION_MODEL", VLLM_MODEL or _d.VLLM_VISION_MODEL)
 VLLM_EMBED_MODEL = os.getenv("VLLM_EMBED_MODEL", _d.VLLM_EMBED_MODEL)
 
 RATE_LIMIT_RPM          = int(os.getenv("RATE_LIMIT_RPM",          _d.RATE_LIMIT_RPM))
@@ -62,6 +69,11 @@ REQUEST_TIMEOUT_SECONDS = int(os.getenv("REQUEST_TIMEOUT_SECONDS", _d.REQUEST_TI
 
 AUDIO_SAMPLE_RATE     = int(os.getenv("AUDIO_SAMPLE_RATE",     _d.AUDIO_SAMPLE_RATE))
 FRAME_SAMPLE_INTERVAL = int(os.getenv("FRAME_SAMPLE_INTERVAL", _d.FRAME_SAMPLE_INTERVAL))
+NATIVE_VIDEO_WINDOW_SECONDS = float(os.getenv("NATIVE_VIDEO_WINDOW_SECONDS", _d.NATIVE_VIDEO_WINDOW_SECONDS))
+NATIVE_VIDEO_WINDOW_OVERLAP_SECONDS = float(
+    os.getenv("NATIVE_VIDEO_WINDOW_OVERLAP_SECONDS", _d.NATIVE_VIDEO_WINDOW_OVERLAP_SECONDS)
+)
+NATIVE_VIDEO_MAX_WINDOWS = int(os.getenv("NATIVE_VIDEO_MAX_WINDOWS", _d.NATIVE_VIDEO_MAX_WINDOWS))
 
 _cors_env    = os.getenv("CORS_ORIGINS", "")
 CORS_ORIGINS = _cors_env.split(",") if _cors_env else _d.CORS_ORIGINS

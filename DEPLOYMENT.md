@@ -4,6 +4,8 @@
 
 This guide covers deploying PitchSide AI as a production-grade, highly-concurrent multimodal sports AI platform.
 
+Update: `/ws/live` now accepts explicit `tactical_detection` messages, broadcasting an immediate analyst note followed by generated tactical commentary. The commentary-notes UI also exposes a dedicated Tactical Brief tab sourced from the organizer JSON payload.
+
 ## Architecture
 
 ```
@@ -32,6 +34,12 @@ This guide covers deploying PitchSide AI as a production-grade, highly-concurren
 ```
 
 ## Deployment Options
+
+Recommended model split:
+- Cloud production: Bedrock
+- Self-hosted production: vLLM with `Qwen/Qwen2.5-VL-7B-Instruct`
+- Lightweight local development: Ollama with `qwen2.5:3b` and `qwen2.5vl:3b`
+- Mixed local development: `COMMENTARY_NOTES_LLM_BACKEND=ollama`, `VISION_LLM_BACKEND=vllm`, `OLLAMA_MODEL=qwen2.5:3b`, `VLLM_BASE_URL=http://localhost:8000`, `VLLM_VISION_MODEL=Qwen/Qwen2.5-VL-3B-Instruct-AWQ`
 
 ### Option 1: Docker Compose (Local Development)
 
@@ -104,6 +112,13 @@ PitchSide AI implements advanced multi-agent workflows:
 2. **Vision Agent** (Nova Lite) - Real-time tactical recognition
 3. **Live Agent** (Nova Sonic) - Speech translation & Q&A
 4. **Commentary Agent** - Match commentary generation
+
+### Live Tactical Session Flow
+- Client sends `tactical_detection` frames over `/ws/live` after frame analysis clears the confidence threshold.
+- Video uploads hit `POST /api/v1/video/analyze`; Bedrock and vLLM deployments with a video-capable `VLLM_VISION_MODEL` first attempt full native clip analysis, then retry as overlapping native-video windows when a vLLM context limit is hit, and only then fall back to dense sampled frames across the clip duration.
+- Server broadcasts a formatted analyst note with source `detection` to all tabs in the session.
+- Server then generates a second broadcast commentary item with source `analysis`, seeded from the detection insight.
+- DynamoDB stores the analyst note as a structured event in Bedrock-backed deployments.
 
 ### Orchestration Engine
 - **Task Queue**: Async job processing with priority

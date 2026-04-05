@@ -8,8 +8,8 @@ The refactored agent system is built on a **scalable, sport-agnostic architectur
 
 ✅ **Dynamic Sport Support** - Single codebase for 6+ sports (Soccer, Cricket, Basketball, Tennis, Rugby, more)
 ✅ **Centralized Prompts** - System prompts stored separately, configurable per sport
-✅ **Base Agent Class** - Common patterns (logging, error handling, Bedrock calls)
-✅ **No vLLM Required** - Direct Bedrock API integration (no local inference)
+✅ **Base Agent Class** - Common patterns (logging, error handling, multi-backend model calls)
+✅ **Backend Abstraction** - Bedrock by default, with Ollama, OpenAI, and vLLM support behind the same agent interface
 ✅ **Complex & Efficient** - More sophisticated than prototypes, production-ready
 ✅ **Better Logging** - Structured event tracking and performance monitoring
 
@@ -80,7 +80,7 @@ async research_multiple_topics(home_team, away_team, topics: List[str]) -> Dict[
 
 ### 2. **VisionAgent** (Nova Lite)
 
-**Purpose**: Real-time frame analysis and tactical recognition
+**Purpose**: Real-time frame analysis, tactical recognition, and Bedrock-native clip analysis
 
 **Methods**:
 ```python
@@ -95,11 +95,24 @@ async analyze_frame(image_data: bytes) -> Dict[str, Any]
 async analyze_frame_b64(b64_str: str) -> Dict[str, Any]
     → Analyze base64-encoded JPEG
     → Handles decoding and framing
+    → Feeds both the Tactical Brief UI and the live `tactical_detection` WebSocket path
 
 async analyze_frame_sequence(frames: List[bytes], interval: int = 1) -> List[Dict]
     → Analyze multiple frames efficiently
     → Skip-by-interval for optimization
     → Perfect for scene changes or highlight moments
+
+async analyze_video_sequence(frames: List[bytes], timestamps_ms: List[int] | None = None) -> Dict[str, Any]
+    → Summarize temporal change across sampled frames
+    → Used as the fallback path when the active backend lacks native video input
+
+async analyze_video_clip(video_data: bytes, video_format: str) -> Dict[str, Any]
+    → Analyze an uploaded clip natively through Bedrock or vLLM video input
+    → Returns the primary tactical phase, key temporal change, and commentary cue
+
+async analyze_video_clip_windowed(video_data: bytes, video_format: str) -> Dict[str, Any]
+    → Split a longer clip into overlapping native-video windows with OpenCV
+    → Analyze each window natively, then merge them into one tactical summary
 ```
 
 **Dynamic Outputs**:
@@ -135,6 +148,7 @@ async generate_live_commentary(event_description: str) -> str
     → Generate commentary for match event
     → Sport-adaptive response
     → Real-time engagement
+    → Also used for tactical detections after the server emits the explicit analyst note
 ```
 
 ### 4. **CommentaryAgent** (Nova Pro)
@@ -491,13 +505,14 @@ vision_result = orchestrator.get_task_result(vision_task)
 
 ---
 
-## Why No vLLM?
+## Backend Strategy
 
-1. **Bedrock Handles Hosting** - AWS manages model infrastructure
-2. **No Local Inference Needed** - Direct API calls are simpler, more reliable
-3. **Cost Effective** - Pay-per-use pricing, no idle GPU costs
-4. **Scaling** - AWS infrastructure auto-scales
-5. **Simplicity** - No local model management, version conflicts, or GPU requirements
+1. **Bedrock Stays Default** - AWS-managed Nova models remain the primary production path.
+2. **vLLM Enables Native Local Video** - Video-capable VLMs can now receive uploaded clips directly through the OpenAI-compatible server.
+3. **Windowed Native Retry Protects vLLM** - When a full clip exceeds the active vLLM context length, the backend retries the upload as overlapping native-video windows and merges the results.
+4. **Ollama Remains Image-Only Here** - Tactical video still works locally through dense sampled-frame fallback when native clip input is unavailable.
+5. **Single Agent Interface** - All of these backends still route through `BaseAgent`, so agent logic remains backend-agnostic.
+6. **Operational Choice** - Teams can trade off managed infrastructure, self-hosting, and model selection without forking the agent layer.
 
 ---
 
