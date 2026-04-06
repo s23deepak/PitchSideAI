@@ -187,3 +187,31 @@ npm run dev
 4. On Bedrock or on vLLM with a video-capable `VLLM_VISION_MODEL`, confirm the clip produces timestamped commentary from native video analysis. Larger vLLM uploads now retry as overlapping native-video windows before the backend falls back to the TacticalOverlay sampled-frame payload.
 5. Confirm the sidebar shows an `Analyst Note` entry followed by generated `Tactical Commentary`.
 6. In Bedrock-backed environments, confirm the DynamoDB event feed updates only for the current match session.
+
+
+
+```
+cd /home/deepu/PitchAI
+source .venv/bin/activate
+vllm serve Qwen/Qwen2.5-VL-3B-Instruct-AWQ \
+  --host 0.0.0.0 \
+  --port 8000 \
+  --trust-remote-code \
+  --quantization awq_marlin \
+  --dtype half \
+  --gpu-memory-utilization 0.75 \
+  --max-model-len 4096 \
+  --max-num-seqs 1 \
+  --enforce-eager
+```
+
+```
+cd /home/deepu/PitchAI
+source .venv/bin/activate
+python -m uvicorn api.server:app --reload --port 8080
+```
+
+```
+cd /home/deepu/PitchAI/frontend
+npm run dev
+```

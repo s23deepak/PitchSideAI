@@ -87,15 +87,19 @@ export default function PushToTalk({ matchReady, homeTeam, awayTeam, sport }) {
 
     const handleTextQuery = async (e) => {
         e.preventDefault()
-        if (!transcript || !matchReady) return
+        if (!transcript) return
         setStatus('speaking')
-        const res = await fetch(`${BACKEND}/api/v1/query`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ query: transcript, home_team: homeTeam, away_team: awayTeam }),
-        })
-        const data = await res.json()
-        setAgentReply(data.answer)
+        try {
+            const res = await fetch(`${BACKEND}/api/v1/query`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ query: transcript, home_team: homeTeam, away_team: awayTeam, sport }),
+            })
+            const data = await res.json()
+            setAgentReply(data.answer || data.detail || 'No answer returned.')
+        } catch (err) {
+            setAgentReply(`Error: ${err.message}`)
+        }
         setStatus('idle')
     }
 
@@ -114,8 +118,8 @@ export default function PushToTalk({ matchReady, homeTeam, awayTeam, sport }) {
                 onMouseUp={stopListening}
                 onTouchStart={startListening}
                 onTouchEnd={stopListening}
-                disabled={!matchReady || status === 'speaking'}
-                title={matchReady ? 'Hold to talk' : 'Build match notes first'}
+                disabled={status === 'speaking'}
+                title="Hold to talk"
             >
                 {btnLabel}
             </button>
@@ -123,16 +127,16 @@ export default function PushToTalk({ matchReady, homeTeam, awayTeam, sport }) {
             <div className="ptt-info">
                 <div className="ptt-title">Ask the Match</div>
                 <div className="ptt-subtitle">
-                    {status === 'idle' && (matchReady ? 'Hold mic to ask anything — pitch knowledge, rules, tactics.' : 'Build Match Notes first to enable Q&A.')}
+                    {status === 'idle' && 'Hold mic or type below to ask anything — pitch knowledge, rules, tactics.'}
                     {status === 'listening' && '🔴 Listening — release to send...'}
-                    {status === 'speaking' && '🔊 Gemini is answering...'}
+                    {status === 'speaking' && '🔊 Answering...'}
                     {status === 'error' && '⚠️ Connection error. Retry.'}
                 </div>
             </div>
 
-            <div className="ptt-transcript">
+            <div className="ptt-transcript" style={{ minHeight: 120, maxHeight: 300, overflowY: 'auto', padding: 12, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8 }}>
                 {agentReply
-                    ? <span className="agent-msg">🤖 {agentReply}</span>
+                    ? <span className="agent-msg" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>🤖 {agentReply}</span>
                     : <span style={{ color: 'var(--text-muted)' }}>Agent responses appear here...</span>
                 }
             </div>
@@ -141,13 +145,12 @@ export default function PushToTalk({ matchReady, homeTeam, awayTeam, sport }) {
             <form onSubmit={handleTextQuery} style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
                 <input
                     type="text"
-                    placeholder={matchReady ? "Type a question..." : "Build Match Notes first..."}
+                    placeholder="Type a question..."
                     value={transcript}
                     onChange={e => setTranscript(e.target.value)}
-                    disabled={!matchReady}
-                    style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text-primary)', padding: '6px 12px', fontFamily: 'inherit', fontSize: 13, opacity: matchReady ? 1 : 0.5 }}
+                    style={{ flex: 1, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text-primary)', padding: '10px 14px', fontFamily: 'inherit', fontSize: 14 }}
                 />
-                <button type="submit" className="btn btn-secondary" disabled={!matchReady}>Send</button>
+                <button type="submit" className="btn btn-secondary" disabled={status === 'speaking'}>Send</button>
             </form>
         </div>
     )

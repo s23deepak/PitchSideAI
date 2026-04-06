@@ -46,22 +46,23 @@ You are a real-time {config.display_name} analyst assistant providing instant co
 MATCH CONTEXT (pre-researched data):
 {context}
 
+=== STRICT GROUNDING RULES (apply before answering) ===
+1. You may ONLY use facts that appear verbatim or nearly verbatim in the MATCH CONTEXT above.
+2. If the MATCH CONTEXT does not contain the answer, you MUST reply:
+   "I don't have grounded context for that — the match data I was given doesn't cover this."
+3. NEVER guess, infer, or recall facts from your training data. A wrong answer is worse than no answer.
+4. Do not speculate about scores, opponents, dates, or results unless they are explicitly stated above.
+=====================================================
+
 FAN QUESTION: {query}
 
-Rules:
-- Answer concisely in 2-3 sentences
-- Reference specific statistics where available
-- Use sport-appropriate terminology ({config.display_name} tactics/formations)
-- Be engaging for commentator broadcast
-- Use only facts present in MATCH CONTEXT
-- Do not answer from memory or prior knowledge
-- If the context does not contain a reliable answer, say that you do not have grounded context for it
+Answer concisely in 2-3 sentences using ONLY the context above. If unsure, say so.
 
 Answer:
 """
 
     @staticmethod
-    def frame_analysis_prompt(sport: str, include_formations: bool = True) -> str:
+    def frame_analysis_prompt(sport: str, include_formations: bool = True, temporal_context: dict | None = None) -> str:
         """
         Dynamic frame analysis prompt based on sport.
         """
@@ -80,10 +81,23 @@ Answer:
             for label, definition in config.tactical_definitions.items():
                 definitions_str += f'- "{label}": {definition}\n'
 
+        temporal_note = ""
+        if temporal_context:
+            fi = temporal_context.get("frame_index", 0)
+            total = temporal_context.get("total_frames", 1)
+            ts_ms = temporal_context.get("timestamp_ms", 0)
+            total_sec = int(ts_ms // 1000)
+            mins, secs = divmod(total_sec, 60)
+            temporal_note = (
+                f"\nThis is frame {fi + 1} of {total} from a video clip "
+                f"(timestamp {mins:02d}:{secs:02d}). "
+                f"Consider what tactical phase is developing at this point in the sequence."
+            )
+
         return f"""
 You are an elite {config.display_name} tactical analyst with expertise in real-time pattern recognition.
 
-Analyze this video frame and provide tactical insights.
+Analyze this video frame and provide tactical insights.{temporal_note}
 
 Identify tactical situation from options: {labels_str} ...
 {definitions_str}
@@ -177,10 +191,15 @@ Produce valid JSON only:
 }}
 
 Rules:
-- Explain how the tactic evolves over time rather than repeating one frame.
+- Synthesize a coherent tactical narrative across the full clip duration.
+- Adjacent windows or frames may overlap in time — deduplicate observations that describe the same event or phase rather than counting them twice.
+- Explain how the tactic evolves, transitions, or escalates over time.
+- If the same tactical label appears across multiple timestamps, describe whether it was sustained, intensified, or shifted.
 - Use only evidence from the sequence summary.
-- `primary_timestamp_ms` must be one timestamp from the summary.
-- `confidence` must be between 0.0 and 1.0.
+- `temporal_change` should read like a single analyst's continuous account of the clip, not a list of individual frames.
+- `primary_timestamp_ms` must be one timestamp from the summary — pick the tactically decisive moment.
+- `confidence` must be between 0.0 and 1.0 — reflect certainty about the overall tactical read, not a single frame.
+- `commentary_cue` should be a broadcast-ready sentence a commentator could use on air.
 """
 
     @staticmethod
@@ -224,9 +243,9 @@ def get_query_prompt(context: str, query: str, sport: str = "soccer") -> str:
     return SystemPrompts.live_query_prompt(context, query, sport)
 
 
-def get_frame_prompt(sport: str = "soccer") -> str:
+def get_frame_prompt(sport: str = "soccer", temporal_context: dict | None = None) -> str:
     """Get frame analysis prompt."""
-    return SystemPrompts.frame_analysis_prompt(sport)
+    return SystemPrompts.frame_analysis_prompt(sport, temporal_context=temporal_context)
 
 
 def get_commentary_prompt(sport: str, match_context: str, recent_events: str) -> str:

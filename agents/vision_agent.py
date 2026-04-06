@@ -3,6 +3,7 @@ Vision Agent — Amazon Nova Lite
 Real-time tactical pattern recognition for video frames.
 Dynamically adapts to any sport type.
 """
+import asyncio
 import base64
 import os
 import tempfile
@@ -37,12 +38,14 @@ class VisionAgent(BaseVisionAgent):
         """Alias for analyze_frame for orchestration compatibility."""
         return await self.analyze_frame(image_data)
 
-    async def analyze_frame(self, image_data: bytes, match_session: str | None = None) -> Dict[str, Any]:
+    async def analyze_frame(self, image_data: bytes, match_session: str | None = None, temporal_context: dict | None = None) -> Dict[str, Any]:
         """
         Analyze a video frame for tactical patterns.
 
         Args:
             image_data: Raw JPEG frame bytes
+            match_session: Optional match session key for DynamoDB scoping
+            temporal_context: Optional dict with frame_index, total_frames, timestamp_ms for video sequence context
 
         Returns:
             Tactical analysis dict with confidence scores
@@ -51,8 +54,8 @@ class VisionAgent(BaseVisionAgent):
             "image_size": len(image_data)
         })
 
-        # Get dynamic prompt based on sport
-        prompt = get_frame_prompt(self.sport)
+        # Get dynamic prompt based on sport (with temporal context when analyzing as part of a video)
+        prompt = get_frame_prompt(self.sport, temporal_context=temporal_context)
 
         # Call model with image
         response_text = await self.call_bedrock(
@@ -147,15 +150,47 @@ class VisionAgent(BaseVisionAgent):
         timestamps_ms: List[int] | None = None,
         match_session: str | None = None,
     ) -> Dict[str, Any]:
-        """Analyze multiple sampled frames and summarize temporal tactical changes."""
+        """Analyze multiple sampled frames in parallel and summarize tactical changes."""
         timestamps_ms = timestamps_ms or [index * 1000 for index in range(len(frames))]
-        analyses: List[Dict[str, Any]] = []
+        clip_duration_ms = timestamps_ms[-1] if timestamps_ms else len(frames) * 1000
 
+        # Parallel frame analysis with temporal context
+        tasks = []
         for index, frame in enumerate(frames):
-            analysis = await self.analyze_frame(frame, match_session=None)
-            analysis["frame_index"] = index
-            analysis["timestamp_ms"] = timestamps_ms[index] if index < len(timestamps_ms) else index * 1000
-            analyses.append(analysis)
+            ts = timestamps_ms[index] if index < len(timestamps_ms) else index * 1000
+            temporal_context = {
+                "frame_index": index,
+                "total_frames": len(frames),
+                "timestamp_ms": ts,
+                "duration_ms": clip_duration_ms,
+            }
+            tasks.append(self.analyze_frame(frame, match_session=None, temporal_context=temporal_context))
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        analyses: List[Dict[str, Any]] = []
+        for index, result in enumerate(results):
+            if isinstance(result, Exception):
+                self.logger.error("frame_analysis_error", frame_index=index, error=str(result))
+                continue
+            result["frame_index"] = index
+            result["timestamp_ms"] = timestamps_ms[index] if index < len(timestamps_ms) else index * 1000
+            analyses.append(result)
+
+        if not analyses:
+            return {
+                "tactical_label": "Analysis Failed",
+                "key_observation": "All frames failed to analyze.",
+                "confidence": 0.0,
+                "actionable_insight": "Retry with a different video clip.",
+                "timestamp_ms": None,
+                "video_moments": [],
+                "sequence_summary": "",
+                "clip_start_timestamp_ms": timestamps_ms[0] if timestamps_ms else None,
+                "clip_end_timestamp_ms": timestamps_ms[-1] if timestamps_ms else None,
+                "native_video": False,
+                "native_video_strategy": "sampled_frames",
+            }
 
         sequence_summary = self._build_sequence_summary(analyses)
         temporal_summary = await self._summarize_sequence(sequence_summary)
@@ -278,25 +313,36 @@ class VisionAgent(BaseVisionAgent):
         video_format: str,
         match_session: str | None = None,
     ) -> Dict[str, Any]:
-        """Analyze a longer clip as overlapping native-video windows and merge the results."""
-        windows = self._build_native_video_windows(video_data, video_format)
+        """Analyze a longer clip as overlapping native-video windows in parallel and merge the results."""
+        windows = await asyncio.to_thread(self._build_native_video_windows, video_data, video_format)
         if len(windows) <= 1:
             return await self.analyze_video_clip(video_data, video_format=video_format, match_session=match_session)
 
-        analyses: List[Dict[str, Any]] = []
-
-        for window in windows:
-            analysis = await self.analyze_video_clip(
+        # Parallel per-window analysis
+        tasks = [
+            self.analyze_video_clip(
                 window["video_bytes"],
                 video_format=window["video_format"],
                 match_session=None,
             )
-            relative_timestamp = analysis.get("timestamp_ms") or 0
-            analysis["timestamp_ms"] = window["clip_start_timestamp_ms"] + int(relative_timestamp)
-            analysis["clip_start_timestamp_ms"] = window["clip_start_timestamp_ms"]
-            analysis["clip_end_timestamp_ms"] = window["clip_end_timestamp_ms"]
-            analysis["window_index"] = window["window_index"]
-            analyses.append(analysis)
+            for window in windows
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        analyses: List[Dict[str, Any]] = []
+        for window, result in zip(windows, results):
+            if isinstance(result, Exception):
+                self.logger.error("window_analysis_error", window_index=window["window_index"], error=str(result))
+                continue
+            relative_timestamp = result.get("timestamp_ms") or 0
+            result["timestamp_ms"] = window["clip_start_timestamp_ms"] + int(relative_timestamp)
+            result["clip_start_timestamp_ms"] = window["clip_start_timestamp_ms"]
+            result["clip_end_timestamp_ms"] = window["clip_end_timestamp_ms"]
+            result["window_index"] = window["window_index"]
+            analyses.append(result)
+
+        if not analyses:
+            raise ValueError("All video windows failed analysis")
 
         sequence_summary = self._build_sequence_summary(analyses)
         temporal_summary = await self._summarize_sequence(sequence_summary)
@@ -486,7 +532,7 @@ class VisionAgent(BaseVisionAgent):
         response_text = await self.call_bedrock(
             prompt,
             temperature=0.4,
-            max_tokens=250,
+            max_tokens=512,
             response_format="json",
         )
         try:
