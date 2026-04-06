@@ -29,6 +29,7 @@ export default function App() {
     const [buildingNotes, setBuildingNotes] = useState(false)
     const [commentaryData, setCommentaryData] = useState(null)
     const [buildStatus, setBuildStatus] = useState(null) // null | 'loading' | 'ready' | 'error'
+    const [buildProgress, setBuildProgress] = useState('') // current phase message
     const [preparationTime, setPreparationTime] = useState(0)
     const [detection, setDetection] = useState(null)
     const [liveCommentary, setLiveCommentary] = useState([])
@@ -146,6 +147,7 @@ export default function App() {
     const buildCommentaryNotes = async () => {
         setBuildingNotes(true)
         setBuildStatus('loading')
+        setBuildProgress('Starting...')
         setCommentaryData(null)
         setPreparationTime(0)
 
@@ -164,19 +166,44 @@ export default function App() {
                 throw new Error(`HTTP ${res.status}: ${res.statusText}`)
             }
 
-            const data = await res.json()
+            const reader = res.body.getReader()
+            const decoder = new TextDecoder()
+            let buffer = ''
 
-            if (data.status === 'success') {
-                setCommentaryData(data)
-                setPreparationTime(data.preparation_time_ms)
-                setMatchReady(true)
-                setBuildStatus('ready')
-            } else {
-                throw new Error(data.error || 'Failed to generate notes')
+            while (true) {
+                const { done, value } = await reader.read()
+                if (done) break
+
+                buffer += decoder.decode(value, { stream: true })
+                const lines = buffer.split('\n')
+                buffer = lines.pop() // keep incomplete line in buffer
+
+                for (const line of lines) {
+                    if (!line.startsWith('data: ')) continue
+                    try {
+                        const event = JSON.parse(line.slice(6))
+                        if (event.phase === 'complete' && event.result) {
+                            const data = event.result
+                            setCommentaryData(data)
+                            setPreparationTime(data.preparation_time_ms)
+                            setMatchReady(true)
+                            setBuildStatus('ready')
+                            setBuildProgress('')
+                        } else if (event.phase === 'error') {
+                            throw new Error(event.message)
+                        } else {
+                            setBuildProgress(event.message || event.phase)
+                        }
+                    } catch (parseErr) {
+                        if (parseErr.message && !parseErr.message.startsWith('Unexpected'))
+                            throw parseErr
+                    }
+                }
             }
         } catch (err) {
             console.error('Commentary notes failed', err)
             setBuildStatus('error')
+            setBuildProgress(err.message || 'Generation failed')
         } finally {
             setBuildingNotes(false)
         }
@@ -243,9 +270,9 @@ export default function App() {
 
                 {buildStatus && (
                     <span className={`status-pill ${buildStatus}`}>
-                        {buildStatus === 'loading' && '⏳ Researching all agents...'}
-                        {buildStatus === 'ready' && `✅ Complete (${preparationTime.toFixed(0)}ms)`}
-                        {buildStatus === 'error' && '⚠️ Generation failed'}
+                        {buildStatus === 'loading' && `⏳ ${buildProgress || 'Starting...'}`}
+                        {buildStatus === 'ready' && `✅ Complete (${(preparationTime / 1000).toFixed(1)}s)`}
+                        {buildStatus === 'error' && `⚠️ ${buildProgress || 'Generation failed'}`}
                     </span>
                 )}
             </div>

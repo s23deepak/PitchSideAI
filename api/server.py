@@ -817,23 +817,10 @@ async def live_audio_ws(websocket: WebSocket):
 # ── Commentary Notes Endpoint ──────────────────────────────────────────────────
 
 @app.post("/api/v1/commentary/prepare-notes", dependencies=[Depends(rate_limit_check)])
-async def prepare_commentary_notes(req: CommentaryNotesRequest) -> dict:
+async def prepare_commentary_notes(req: CommentaryNotesRequest) -> StreamingResponse:
     """
     Prepare professional Peter Drury-style commentary notes.
-
-    Orchestrates multi-agent system to research:
-    - 25 players per team
-    - Team form and tactical patterns
-    - Historical context and storylines
-    - Weather conditions and impact
-    - Key player matchups
-    - Current team news and injuries
-
-    Returns:
-        - markdown_notes: Professional commentary notes in Markdown format
-        - json_structure: Complete structured data for programmatic access
-        - preparation_time_ms: Time taken to generate notes
-        - quality_metrics: Data completeness and source tracking
+    Streams SSE progress events, then the final result as the last event.
     """
     logger.log_event("commentary_notes_requested", {
         "home_team": req.home_team,
@@ -842,62 +829,91 @@ async def prepare_commentary_notes(req: CommentaryNotesRequest) -> dict:
         "venue": req.venue
     })
 
-    try:
-        from workflows import CommentaryNotesState, create_workflow
+    async def generate():
+        import json as _json
+        try:
+            from workflows import CommentaryNotesState, create_workflow
 
-        # Initialize workflow state
-        workflow_state = CommentaryNotesState(
-            match_id=f"{req.home_team}_{req.away_team}_{req.match_datetime}",
-            home_team=req.home_team,
-            away_team=req.away_team,
-            sport=req.sport,
-            match_datetime=req.match_datetime,
-            venue=req.venue,
-            venue_lat=req.venue_lat,
-            venue_lon=req.venue_lon,
-        )
+            workflow_state = CommentaryNotesState(
+                match_id=f"{req.home_team}_{req.away_team}_{req.match_datetime}",
+                home_team=req.home_team,
+                away_team=req.away_team,
+                sport=req.sport,
+                match_datetime=req.match_datetime,
+                venue=req.venue,
+                venue_lat=req.venue_lat,
+                venue_lon=req.venue_lon,
+            )
 
-        # Run workflow directly
-        workflow = create_workflow()
-        completed_state = await workflow.run_workflow(workflow_state)
+            async def on_progress(phase: str, message: str, extra: dict):
+                event = {"phase": phase, "message": message, "done": extra.get("done", False)}
+                yield f"data: {_json.dumps(event)}\n\n"
 
+            workflow = create_workflow()
 
-        # Calculate preparation time
-        duration_ms = (completed_state.end_time - completed_state.start_time).total_seconds() * 1000 if completed_state.end_time else 0
+            # We need a workaround: run_workflow calls on_progress which yields,
+            # but we can't yield from inside the callback. Use a queue instead.
+            progress_queue: asyncio.Queue = asyncio.Queue()
 
-        response = {
-            "status": "success",
-            "workflow_id": completed_state.workflow_id,
-            "match": f"{req.home_team} vs {req.away_team}",
-            "sport": req.sport,
-            "markdown_notes": completed_state.markdown_notes or "",
-            "preparation_time_ms": duration_ms,
-            "agents_completed": len(completed_state.completed_agents),
-            "errors": completed_state.errors,
-            "warnings": completed_state.warnings,
-        }
+            async def _queue_progress(phase: str, message: str, extra: dict):
+                await progress_queue.put({"phase": phase, "message": message, "done": extra.get("done", False)})
 
-        if req.include_embedded_json:
-            response["json_structure"] = completed_state.json_structure or {}
+            async def _run():
+                try:
+                    result = await workflow.run_workflow(workflow_state, on_progress=_queue_progress)
+                    await progress_queue.put(("__done__", result))
+                except Exception as exc:
+                    await progress_queue.put(("__error__", exc))
 
-        logger.log_event("commentary_notes_generated", {
-            "workflow_id": completed_state.workflow_id,
-            "preparation_time_ms": duration_ms,
-            "agents": len(completed_state.completed_agents),
-            "notes_length": len(completed_state.markdown_notes or "")
-        })
+            task = asyncio.create_task(_run())
 
-        return response
+            while True:
+                item = await progress_queue.get()
+                if isinstance(item, tuple):
+                    tag, payload = item
+                    if tag == "__done__":
+                        completed_state = payload
+                        break
+                    elif tag == "__error__":
+                        yield f"data: {_json.dumps({'phase': 'error', 'message': str(payload), 'done': True})}\n\n"
+                        return
+                else:
+                    yield f"data: {_json.dumps(item)}\n\n"
 
-    except TimeoutError as exc:
-        error_msg = f"Commentary preparation timeout: {str(exc)}"
-        logger.error("commentary_notes_timeout", error=error_msg)
-        raise HTTPException(status_code=504, detail=error_msg)
+            await task  # ensure cleanup
 
-    except Exception as exc:
-        error_msg = f"Commentary preparation failed: {str(exc)}"
-        logger.error("commentary_notes_failed", error=error_msg, exc_info=True)
-        raise HTTPException(status_code=500, detail=error_msg)
+            duration_ms = (completed_state.end_time - completed_state.start_time).total_seconds() * 1000 if completed_state.end_time else 0
+
+            response = {
+                "status": "success",
+                "workflow_id": completed_state.workflow_id,
+                "match": f"{req.home_team} vs {req.away_team}",
+                "sport": req.sport,
+                "markdown_notes": completed_state.markdown_notes or "",
+                "preparation_time_ms": duration_ms,
+                "agents_completed": len(completed_state.completed_agents),
+                "errors": completed_state.errors,
+                "warnings": completed_state.warnings,
+            }
+
+            if req.include_embedded_json:
+                response["json_structure"] = completed_state.json_structure or {}
+
+            logger.log_event("commentary_notes_generated", {
+                "workflow_id": completed_state.workflow_id,
+                "preparation_time_ms": duration_ms,
+                "agents": len(completed_state.completed_agents),
+                "notes_length": len(completed_state.markdown_notes or "")
+            })
+
+            yield f"data: {_json.dumps({'phase': 'complete', 'message': 'Done', 'done': True, 'result': response})}\n\n"
+
+        except Exception as exc:
+            error_msg = f"Commentary preparation failed: {str(exc)}"
+            logger.error("commentary_notes_failed", error=error_msg, exc_info=True)
+            yield f"data: {_json.dumps({'phase': 'error', 'message': error_msg, 'done': True})}\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 # ── Error Handlers ─────────────────────────────────────────────────────────────

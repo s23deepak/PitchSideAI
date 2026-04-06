@@ -12,6 +12,7 @@ import logging
 from agents.base import BaseAgent
 from data_sources import DataCache
 from data_sources.factory import get_fbref_retriever
+from data_sources.player_profile_db import get_player_db
 
 logger = logging.getLogger(__name__)
 
@@ -121,24 +122,36 @@ class MatchupAnalysisAgent(BaseAgent):
         player2: Dict[str, str],
     ) -> Optional[Dict[str, Any]]:
         """Analyze individual player matchup with real stats."""
-        # Fetch real stats from FBref if available
-        player1_stats = {}
-        player2_stats = {}
+        db = get_player_db()
+        p1_name = player1.get('name', '')
+        p2_name = player2.get('name', '')
 
-        if self.fbref and self.fbref.is_available:
-            try:
-                # Fetch stats for both players in parallel
-                p1_stats, p2_stats = await asyncio.gather(
-                    self.fbref.get_player_season_stats(player1.get('name', ''), stat_type="standard"),
-                    self.fbref.get_player_season_stats(player2.get('name', ''), stat_type="standard"),
-                    return_exceptions=True,
-                )
-                if isinstance(p1_stats, dict):
-                    player1_stats = p1_stats
-                if isinstance(p2_stats, dict):
-                    player2_stats = p2_stats
-            except Exception as exc:
-                logger.warning("FBref stats fetch failed: %s", exc)
+        # Check local DB first
+        player1_stats = db.get_season_stats(p1_name, self.sport, "25-26", "fbref") or {}
+        player2_stats = db.get_season_stats(p2_name, self.sport, "25-26", "fbref") or {}
+
+        # Only hit FBref for players not in the DB
+        if not player1_stats or not player2_stats:
+            if self.fbref and self.fbref.is_available:
+                try:
+                    tasks = []
+                    tasks.append(
+                        self.fbref.get_player_season_stats(p1_name, stat_type="standard")
+                        if not player1_stats else asyncio.sleep(0, result=player1_stats)
+                    )
+                    tasks.append(
+                        self.fbref.get_player_season_stats(p2_name, stat_type="standard")
+                        if not player2_stats else asyncio.sleep(0, result=player2_stats)
+                    )
+                    p1_result, p2_result = await asyncio.gather(*tasks, return_exceptions=True)
+                    if isinstance(p1_result, dict) and p1_result:
+                        player1_stats = p1_result
+                        db.upsert_season_stats(p1_name, self.sport, "25-26", "fbref", p1_result)
+                    if isinstance(p2_result, dict) and p2_result:
+                        player2_stats = p2_result
+                        db.upsert_season_stats(p2_name, self.sport, "25-26", "fbref", p2_result)
+                except Exception as exc:
+                    logger.warning("FBref stats fetch failed: %s", exc)
 
         # Build prompt with stats if available
         stats_context = ""

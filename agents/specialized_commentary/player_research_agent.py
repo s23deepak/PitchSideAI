@@ -16,6 +16,7 @@ from data_sources.factory import (
     get_fbref_retriever,
     get_search_service,
 )
+from data_sources.player_profile_db import get_player_db
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +150,7 @@ class PlayerResearchAgent(BaseAgent):
     ) -> Dict[str, Any]:
         """
         Deep research on individual player using multiple data sources.
+        Checks the local SQLite DB first to avoid redundant external calls.
 
         Args:
             player_data: Basic player data from ESPN
@@ -158,9 +160,22 @@ class PlayerResearchAgent(BaseAgent):
             Enriched player profile
         """
         player_name = player_data.get("name", "Unknown")
+        db = get_player_db()
 
         try:
-            # Fetch multiple data sources in parallel
+            # ── Check local DB for cached static profile ──
+            cached_profile = db.get_profile(player_name, self.sport)
+            if cached_profile:
+                logger.info("DB hit for %s — skipping ESPN bio fields", player_name)
+                # Merge DB fields into player_data (ESPN may have fresher injury_status)
+                for field in ("nationality", "nationality_abbr", "position", "headshot", "wikipedia_url"):
+                    if cached_profile.get(field) and not player_data.get(field):
+                        player_data[field] = cached_profile[field]
+
+            # ── Save ESPN bio fields to DB (static data we already have) ──
+            db.upsert_profile(player_name, self.sport, player_data)
+
+            # ── Fetch external data (Tavily bio + FBref stats) in parallel ──
             wiki_bio, player_stats = await asyncio.gather(
                 self.wiki_retriever.get_player_biography(player_name, self.sport),
                 self._fetch_player_stats(player_name, team_name),
@@ -173,6 +188,19 @@ class PlayerResearchAgent(BaseAgent):
             if isinstance(player_stats, Exception):
                 player_stats = {}
             player_stats = player_stats or player_data.get("stats", {})
+
+            # ── Save FBref stats to DB for this season ──
+            if player_stats and any(player_stats.get(k) for k in ("goals", "assists", "appearances")):
+                db.upsert_season_stats(
+                    player_name, self.sport, "25-26", "fbref", player_stats
+                )
+
+            # ── Save notable achievements from Wikipedia if present ──
+            if wiki_bio.get("notable_achievements") or wiki_bio.get("wikipedia_url"):
+                db.upsert_profile(player_name, self.sport, {
+                    "wikipedia_url": wiki_bio.get("wikipedia_url"),
+                    "notable_achievements": wiki_bio.get("notable_achievements"),
+                })
 
             # Build stats context
             stats_summary = ""
@@ -231,12 +259,23 @@ Keep it concise (2-3 sentences) for commentary notes."""
     async def _fetch_player_stats(
         self, player_name: str, team_name: str
     ) -> Dict[str, Any]:
-        """Fetch player stats from FBref if available."""
+        """Fetch player stats from local DB first, then FBref as fallback."""
+        db = get_player_db()
+
+        # Check DB for current season stats (saved from a previous successful FBref fetch)
+        cached_stats = db.get_season_stats(player_name, self.sport, "25-26", "fbref")
+        if cached_stats:
+            logger.info("DB stats hit for %s — skipping FBref", player_name)
+            return cached_stats
+
         if not self.fbref or not self.fbref.is_available:
             return {}
 
         try:
-            return await self.fbref.get_player_season_stats(player_name, team_name)
+            stats = await self.fbref.get_player_season_stats(player_name, team_name)
+            if stats:
+                db.upsert_season_stats(player_name, self.sport, "25-26", "fbref", stats)
+            return stats
         except Exception as exc:
             logger.warning("FBref player stats failed for %s: %s", player_name, exc)
             return {}

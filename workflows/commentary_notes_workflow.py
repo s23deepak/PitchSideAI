@@ -6,13 +6,16 @@ parallel execution, and error handling.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Callable, Awaitable
 from datetime import datetime
 import asyncio
 import logging
 from enum import Enum
 
 logger = logging.getLogger(__name__)
+
+# Type alias for the optional progress callback
+ProgressCallback = Optional[Callable[[str, str, Dict[str, Any]], Awaitable[None]]]
 
 
 # ===== Workflow State Definition =====
@@ -308,24 +311,40 @@ class CommentaryNotesWorkflow:
             "duration_ms": self.get_duration_ms(state),
         }
 
-    async def run_workflow(self, state: CommentaryNotesState) -> CommentaryNotesState:
-        """Execute full workflow sequentially."""
+    async def run_workflow(self, state: CommentaryNotesState, on_progress: ProgressCallback = None) -> CommentaryNotesState:
+        """Execute full workflow sequentially, emitting progress via callback."""
         logger.info("Starting commentary notes workflow...")
 
+        async def _emit(phase: str, message: str, **extra):
+            if on_progress:
+                await on_progress(phase, message, extra)
+
         # Phase 1: Initialize
+        await _emit("initialize", "Fetching match schedule and venue...")
         state = await self.initialize_workflow(state)
+        await _emit("initialize", "Match context ready", done=True)
 
         # Phase 2: Gather initial context
+        await _emit("initial_context", "Researching news, weather, and history...", agents=["news", "weather", "historical"])
         state = await self.gather_initial_context(state)
+        await _emit("initial_context", f"Initial context gathered ({len(state.completed_agents)} agents)", done=True)
 
         # Phase 3: Research squads
+        await _emit("squad_research", "Researching player squads and profiles...")
         state = await self.research_squads(state)
+        home_count = len(state.player_research.get("home_team", {}).get("players", []))
+        away_count = len(state.player_research.get("away_team", {}).get("players", []))
+        await _emit("squad_research", f"Squads researched ({home_count} + {away_count} players)", done=True)
 
         # Phase 4: Analyze form
+        await _emit("form_analysis", "Analyzing team form and key matchups...", agents=["team_form", "matchup_analysis"])
         state = await self.analyze_form(state)
+        await _emit("form_analysis", f"Form and matchups analyzed ({len(state.completed_agents)} agents)", done=True)
 
         # Phase 5: Synthesize
+        await _emit("synthesis", "Synthesizing commentary notes...")
         state = await self.synthesize_notes(state)
+        await _emit("synthesis", "Commentary notes ready", done=True)
 
         logger.info(f"Workflow complete: {self.get_status(state)}")
 
