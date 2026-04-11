@@ -215,12 +215,13 @@ Only touch `config/sports.py` — add to `SportType` enum and `SPORTS_CONFIG` di
 3. If part of commentary pipeline: add to `CommentaryNotesWorkflow` execution phases
 4. Register handler in `api/server.py`
 
-### New data source
-1. Create retriever in `data_sources/` following the `ESPNDataRetriever` pattern
-2. Satisfy the `BaseRetriever` Protocol (7 methods)
-3. Add `@cache.cached()` to all data-fetching methods
-4. Register in `data_sources/factory.py`
-5. Include a mock/fallback for when the API is unavailable
+### New data source (stats retriever)
+1. Create retriever in `data_sources/` implementing the 5-method interface: `get_player_season_stats`, `get_team_season_stats`, `get_tactical_profile`, `get_team_match_log`, `get_head_to_head_matches`
+2. Add `is_available` property that checks the required env vars/dependencies
+3. Add `DataCache` with appropriate TTL (4 h for historical, 1 h for live)
+4. Tag all returned dicts with `"data_source": "<source-name>"`
+5. Insert the retriever into the `FallbackStatsRetriever._chain()` order in `data_sources/factory.py`
+6. Register in `data_sources/__init__.py` imports + `__all__`
 
 ### New API endpoint
 1. Add Pydantic request model in `api/server.py`
@@ -229,7 +230,53 @@ Only touch `config/sports.py` — add to `SportType` enum and `SPORTS_CONFIG` di
 
 ---
 
-## WebSocket Session Pattern
+## Live Match State (`models/game_state.py`)
+
+### One GameState per WebSocket session
+```python
+from models.game_state import GameState
+
+game_state = GameState(home_team=home_team, away_team=away_team)
+```
+
+### Always inject context into commentary seeds
+```python
+context_prefix = game_state.to_context_string()
+# → "MATCH STATE: City 2-1 Liverpool | 67' (2nd Half)\nRecent: 34' GOAL..."
+```
+
+### Always include gameState in every broadcast
+```python
+await manager.broadcast(session_id, {
+    "type": "commentary",
+    "text": commentary,
+    "gameState": game_state.to_dict(),
+})
+```
+
+### update_from_detection never modifies the score
+- `update_from_event(description)` — parses goals, cards, subs, explicit scores
+- `update_from_detection(analysis)` — updates minute from `timestamp_ms` only
+
+---
+
+## Data Retrieval Chain
+
+### Stats retrievers are source-tagged
+All stats dicts include `"data_source": "statsbomb" | "firecrawl" | "fbref"`.
+Propagate this field when writing to the player profile database:
+```python
+source = stats.get("data_source", "fbref")
+```
+
+### StatsBomb is for historical data only
+StatsBomb returns empty for seasons not in its free catalog (exact-match). This is intentional — do not add a "most recent available" fallback. If the season is absent, the chain falls to Firecrawl.
+
+### Required env vars per layer
+| Layer | Env vars |
+|---|---|
+| Firecrawl | `FIRECRAWL_API_KEY` |
+| FBref direct | none (may 403 in some environments) |
 
 ### Use `ConnectionManager` to broadcast to all clients in a session
 ```python

@@ -274,7 +274,7 @@ Keep it concise (2-3 sentences) for commentary notes."""
         try:
             stats = await self.fbref.get_player_season_stats(player_name, team_name)
             if stats:
-                db.upsert_season_stats(player_name, self.sport, "25-26", "fbref", stats)
+                db.upsert_season_stats(player_name, self.sport, "25-26", stats.get("data_source", "fbref"), stats)
             return stats
         except Exception as exc:
             logger.warning("FBref player stats failed for %s: %s", player_name, exc)

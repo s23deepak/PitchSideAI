@@ -9,7 +9,7 @@ import asyncio
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Any
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,6 +29,7 @@ from agents.live_agent import LiveAgent
 from agents.vision_agent import VisionAgent
 from agents.research_agent import ResearchAgent
 from tools.dynamodb_tool import build_match_session_key, get_recent_events, write_event
+from models.game_state import GameState
 
 # Setup production logging
 setup_logging(level=LOG_LEVEL, json_logs=True)
@@ -237,6 +238,7 @@ async def _periodic_commentary(
     agent,
     match_session: str,
     interval: int = 60,
+    game_state: Optional[GameState] = None,
 ) -> None:
     """Background task: generate contextual commentary every `interval` seconds."""
     await asyncio.sleep(interval)
@@ -247,13 +249,20 @@ async def _periodic_commentary(
                 e.get("description", "") for e in recent if e.get("description")
             )
             seed = f"Match update — recent context: {events_text}" if events_text else "Ongoing match update"
+            if game_state:
+                ctx = game_state.to_context_string()
+                if ctx:
+                    seed = f"{ctx}\n{seed}"
             text = await agent.generate_live_commentary(seed)
-            await manager.broadcast(session_id, {
+            broadcast_msg = {
                 "type": "commentary",
                 "text": text,
                 "source": "timer",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
+            }
+            if game_state:
+                broadcast_msg["gameState"] = game_state.to_dict()
+            await manager.broadcast(session_id, broadcast_msg)
         except asyncio.CancelledError:
             return
         except Exception as exc:
@@ -636,6 +645,7 @@ async def live_audio_ws(websocket: WebSocket):
         away_team = init.get("away_team", "Away Team")
         sport = init.get("sport", "soccer")
         match_session = build_match_session_key(home_team, away_team, sport)
+        game_state = GameState(home_team=home_team, away_team=away_team)
 
         context = WorkflowContext(
             match_id=match_session,
@@ -665,7 +675,7 @@ async def live_audio_ws(websocket: WebSocket):
 
         # Start periodic commentary background task
         periodic_task = asyncio.create_task(
-            _periodic_commentary(workflow_id, agent, match_session)
+            _periodic_commentary(workflow_id, agent, match_session, game_state=game_state)
         )
 
         # Step 2: Message loop — handles text (events/queries) and binary (audio)
@@ -695,20 +705,28 @@ async def live_audio_ws(websocket: WebSocket):
                     description = data.get("description", "").strip()
                     if not description:
                         continue
-                    text = await agent.generate_live_commentary(description)
-                    await manager.broadcast(workflow_id, {
+                    game_state.update_from_event(description)
+                    seed = description
+                    ctx = game_state.to_context_string()
+                    if ctx:
+                        seed = f"{ctx}\n{description}"
+                    text = await agent.generate_live_commentary(seed)
+                    broadcast_msg = {
                         "type": "commentary",
                         "text": text,
                         "source": "event",
                         "trigger": description,
                         "timestamp": datetime.now(timezone.utc).isoformat(),
-                    })
+                        "gameState": game_state.to_dict(),
+                    }
+                    await manager.broadcast(workflow_id, broadcast_msg)
 
                 elif msg_type == "tactical_detection":
                     analysis = data.get("analysis") or {}
                     if not isinstance(analysis, dict):
                         continue
 
+                    game_state.update_from_detection(analysis)
                     note_text = _format_tactical_commentary_note(analysis)
                     timestamp = datetime.now(timezone.utc).isoformat()
 
@@ -765,9 +783,12 @@ async def live_audio_ws(websocket: WebSocket):
                             formatted = f"{hours:02d}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes:02d}:{seconds:02d}"
                             timestamp_prefix = f"Video timestamp {formatted}: "
 
-                        text = await agent.generate_live_commentary(
-                            f"{timestamp_prefix}{commentary_seed}"
-                        )
+                        full_seed = f"{timestamp_prefix}{commentary_seed}"
+                        ctx = game_state.to_context_string()
+                        if ctx:
+                            full_seed = f"{ctx}\n{full_seed}"
+
+                        text = await agent.generate_live_commentary(full_seed)
                         await manager.broadcast(workflow_id, {
                             "type": "commentary",
                             "text": text,
@@ -782,6 +803,7 @@ async def live_audio_ws(websocket: WebSocket):
                             ),
                             "trigger": analysis.get("actionable_insight") or analysis.get("key_observation"),
                             "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "gameState": game_state.to_dict(),
                         })
 
                 elif msg_type == "query":
@@ -812,6 +834,207 @@ async def live_audio_ws(websocket: WebSocket):
         if workflow_id:
             manager.disconnect(workflow_id, websocket)
             await orchestrator.finalize_workflow(workflow_id)
+
+
+# ── WebSocket — Chunked Video Streaming ─────────────────────────────────────────
+
+class ChunkedVideoConfig(BaseModel):
+    """Configuration for chunked video streaming."""
+    chunk_interval_seconds: int = Field(default=10, ge=5, le=30)
+    max_chunk_frames: int = Field(default=12, ge=4, le=24)
+    quality: str = Field(default="medium", pattern="^(low|medium|high)$")
+
+
+@app.websocket("/ws/video/stream")
+async def video_stream_ws(websocket: WebSocket):
+    """
+    WebSocket for chunked live video streaming and analysis.
+
+    Client sends:
+      -> {"type": "init", "match_session": "...", "config": {...}}  (optional config)
+      -> {"type": "chunk", "frames_b64": [...], "timestamps_ms": [...]}
+      -> {"type": "frame", "frame_b64": "...", "timestamp_ms": 12345}  (single frame buffering)
+
+    Server broadcasts:
+      <- {"type": "chunk_analyzed", "result": {...}}  (after each chunk is analyzed)
+      <- {"type": "commentary", "text": "...", "source": "video_chunk"}
+    """
+    await websocket.accept()
+    logger.info("Video streaming session connected")
+
+    vision_agent = VisionAgent(sport="soccer")
+    live_agent = LiveAgent()
+    match_session: Optional[str] = None
+    chunk_buffer: List[Dict[str, Any]] = []
+    chunk_config = ChunkedVideoConfig()
+    game_state: Optional[GameState] = None
+
+    try:
+        # Wait for init message
+        init_msg = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+        init_data = json.loads(init_msg)
+
+        if init_data.get("type") != "init":
+            await manager.send(websocket, {"type": "error", "message": "Expected 'init' message first"})
+            return
+
+        match_session = init_data.get("match_session", f"video_{datetime.now(timezone.utc).isoformat()}")
+        config_data = init_data.get("config", {})
+
+        # Parse optional config
+        try:
+            chunk_config = ChunkedVideoConfig(**config_data)
+        except Exception as exc:
+            logger.warning("video_stream_invalid_config", error=str(exc))
+
+        await manager.send(websocket, {
+            "type": "ready",
+            "message": f"Ready for video chunks (interval: {chunk_config.chunk_interval_seconds}s, max frames: {chunk_config.max_chunk_frames})",
+            "match_session": match_session,
+        })
+
+        # Streaming loop
+        while True:
+            try:
+                msg = await asyncio.wait_for(websocket.receive(), timeout=300.0)
+            except asyncio.TimeoutError:
+                # Send heartbeat
+                await manager.send(websocket, {"type": "ping", "message": "Still connected?"})
+                continue
+
+            if msg["type"] == "websocket.disconnect":
+                break
+
+            if msg.get("text"):
+                try:
+                    data = json.loads(msg["text"])
+                except json.JSONDecodeError:
+                    continue
+
+                msg_type = data.get("type")
+
+                if msg_type == "frame":
+                    # Buffer individual frames until chunk is complete
+                    frame_b64 = data.get("frame_b64")
+                    timestamp_ms = data.get("timestamp_ms", len(chunk_buffer) * 1000)
+
+                    if frame_b64:
+                        chunk_buffer.append({"frame_b64": frame_b64, "timestamp_ms": timestamp_ms})
+
+                        # Check if chunk is complete
+                        if len(chunk_buffer) >= chunk_config.max_chunk_frames:
+                            await _process_video_chunk(
+                                websocket, vision_agent, live_agent,
+                                chunk_buffer, match_session, game_state
+                            )
+                            chunk_buffer = []
+
+                elif msg_type == "chunk":
+                    # Client sends a complete chunk
+                    frames_b64 = data.get("frames_b64", [])
+                    timestamps_ms = data.get("timestamps_ms", [])
+
+                    if frames_b64:
+                        await _process_video_chunk(
+                            websocket, vision_agent, live_agent,
+                            [{"frame_b64": f, "timestamp_ms": ts} for f, ts in zip(frames_b64, timestamps_ms or range(len(frames_b64)) * 1000)],
+                            match_session, game_state,
+                        )
+
+                elif msg_type == "game_state_update":
+                    # Client sends game state update
+                    if game_state is None:
+                        home = data.get("home_team", "Home")
+                        away = data.get("away_team", "Away")
+                        game_state = GameState(home_team=home, away_team=away)
+                    else:
+                        # Update existing game state
+                        score_home = data.get("home_score")
+                        score_away = data.get("away_score")
+                        minute = data.get("minute")
+                        if score_home is not None:
+                            game_state.home_score = score_home
+                        if score_away is not None:
+                            game_state.away_score = score_away
+                        if minute is not None:
+                            game_state.match_minute = minute
+
+            elif msg.get("bytes"):
+                # Binary frame (JPEG) - buffer it
+                frame_b64 = base64.b64encode(msg["bytes"]).decode("utf-8")
+                timestamp_ms = len(chunk_buffer) * 1000
+                chunk_buffer.append({"frame_b64": frame_b64, "timestamp_ms": timestamp_ms})
+
+                if len(chunk_buffer) >= chunk_config.max_chunk_frames:
+                    await _process_video_chunk(
+                        websocket, vision_agent, live_agent,
+                        chunk_buffer, match_session, game_state
+                    )
+                    chunk_buffer = []
+
+    except WebSocketDisconnect:
+        logger.info("Video streaming session disconnected")
+    except Exception as exc:
+        logger.error("video_stream_error", error=str(exc), exc_info=True)
+        await manager.send(websocket, {"type": "error", "message": str(exc)})
+
+
+async def _process_video_chunk(
+    websocket: WebSocket,
+    vision_agent: VisionAgent,
+    live_agent: LiveAgent,
+    chunk_data: List[Dict[str, Any]],
+    match_session: str,
+    game_state: Optional[GameState],
+):
+    """Process a chunk of video frames and broadcast commentary."""
+    try:
+        frames_b64 = [item["frame_b64"] for item in chunk_data]
+        timestamps_ms = [item["timestamp_ms"] for item in chunk_data]
+
+        # Analyze chunk
+        result = await vision_agent.analyze_chunked_frames_b64(
+            frames_b64,
+            timestamps_ms=timestamps_ms,
+            match_session=match_session,
+            chunk_description=f"Live chunk: {len(frames_b64)} frames",
+        )
+
+        # Broadcast analysis result
+        await manager.send(websocket, {
+            "type": "chunk_analyzed",
+            "result": result,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+
+        # Generate and broadcast commentary if confidence is high enough
+        confidence = result.get("confidence", 0.0)
+        if confidence > 0.5:
+            seed = result.get("sequence_summary") or result.get("key_observation") or result.get("tactical_label")
+            if seed:
+                if game_state:
+                    ctx = game_state.to_context_string()
+                    if ctx:
+                        seed = f"{ctx}\n{seed}"
+
+                commentary_text = await live_agent.generate_live_commentary(seed)
+
+                await manager.send(websocket, {
+                    "type": "commentary",
+                    "text": commentary_text,
+                    "source": "video_chunk",
+                    "tactical_label": result.get("tactical_label"),
+                    "confidence": confidence,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "gameState": game_state.to_dict() if game_state else None,
+                })
+
+    except Exception as exc:
+        logger.error("video_chunk_processing_error", error=str(exc))
+        await manager.send(websocket, {
+            "type": "error",
+            "message": f"Chunk processing failed: {str(exc)}",
+        })
 
 
 # ── Commentary Notes Endpoint ──────────────────────────────────────────────────

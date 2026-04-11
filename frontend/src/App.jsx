@@ -1,15 +1,18 @@
 import { useState, useRef, useEffect } from 'react'
 import './index.css'
+import HomeScreen from './components/HomeScreen'
+import MatchDashboard from './components/MatchDashboard'
 import PushToTalk from './components/PushToTalk'
 import TacticalOverlay from './components/TacticalOverlay'
 import MatchNotes from './components/MatchNotes'
 import EventFeed from './components/EventFeed'
 import CommentaryNotesViewer from './components/CommentaryNotesViewer'
 import CommentaryFeed from './components/CommentaryFeed'
+import LiveVideoPlayer from './components/LiveVideoPlayer'
 
 const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
 
-function buildMatchSessionKey(homeTeam, awayTeam, sport) {
+function buildMatchSessionKey(homeTeam, awayTeam, sport = 'soccer') {
     const slugify = (value) =>
         (value || '')
             .trim()
@@ -21,41 +24,110 @@ function buildMatchSessionKey(homeTeam, awayTeam, sport) {
 }
 
 export default function App() {
-    const [homeTeam, setHomeTeam] = useState('Manchester United')
-    const [awayTeam, setAwayTeam] = useState('Liverpool')
-    const [sport, setSport] = useState('soccer')
+    // Screen state
+    const [currentScreen, setCurrentScreen] = useState('home') // 'home' | 'dashboard'
 
+    // Match state
+    const [homeTeam, setHomeTeam] = useState('')
+    const [awayTeam, setAwayTeam] = useState('')
+    const [sport] = useState('soccer')
+    const [matchSession, setMatchSession] = useState(null)
+
+    // Dashboard state
     const [matchReady, setMatchReady] = useState(false)
     const [buildingNotes, setBuildingNotes] = useState(false)
     const [commentaryData, setCommentaryData] = useState(null)
-    const [buildStatus, setBuildStatus] = useState(null) // null | 'loading' | 'ready' | 'error'
-    const [buildProgress, setBuildProgress] = useState('') // current phase message
+    const [buildStatus, setBuildStatus] = useState(null)
+    const [buildProgress, setBuildProgress] = useState('')
     const [preparationTime, setPreparationTime] = useState(0)
     const [detection, setDetection] = useState(null)
     const [liveCommentary, setLiveCommentary] = useState([])
     const [liveSessionReady, setLiveSessionReady] = useState(false)
+
     const wsRef = useRef(null)
     const sessionPromiseRef = useRef(null)
     const activeSessionKeyRef = useRef(null)
-    const matchSession = buildMatchSessionKey(homeTeam, awayTeam, sport)
 
-    useEffect(() => {
-        if (wsRef.current) {
-            wsRef.current.close()
-            wsRef.current = null
+    // Handle starting a new match
+    const handleStartMatch = async (home, away) => {
+        setHomeTeam(home)
+        setAwayTeam(away)
+        setMatchSession(buildMatchSessionKey(home, away))
+        setCurrentScreen('dashboard')
+
+        // Build commentary notes
+        await buildCommentaryNotes(home, away)
+    }
+
+    // Build commentary notes
+    const buildCommentaryNotes = async (home, away) => {
+        setBuildingNotes(true)
+        setBuildStatus('loading')
+        setBuildProgress('Starting...')
+        setCommentaryData(null)
+        setPreparationTime(0)
+
+        try {
+            const res = await fetch(`${BACKEND}/api/v1/commentary/prepare-notes`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    home_team: home,
+                    away_team: away,
+                    sport: 'soccer'
+                }),
+            })
+
+            if (!res.ok) {
+                throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+            }
+
+            const reader = res.body.getReader()
+            const decoder = new TextDecoder()
+            let buffer = ''
+
+            while (true) {
+                const { done, value } = await reader.read()
+                if (done) break
+
+                buffer += decoder.decode(value, { stream: true })
+                const lines = buffer.split('\n')
+                buffer = lines.pop()
+
+                for (const line of lines) {
+                    if (!line.startsWith('data: ')) continue
+                    try {
+                        const event = JSON.parse(line.slice(6))
+                        if (event.phase === 'complete' && event.result) {
+                            const data = event.result
+                            setCommentaryData(data)
+                            setPreparationTime(data.preparation_time_ms)
+                            setMatchReady(true)
+                            setBuildStatus('ready')
+                            setBuildProgress('')
+                        } else if (event.phase === 'error') {
+                            throw new Error(event.message)
+                        } else {
+                            setBuildProgress(event.message || event.phase)
+                        }
+                    } catch (parseErr) {
+                        if (parseErr.message && !parseErr.message.startsWith('Unexpected'))
+                            throw parseErr
+                    }
+                }
+            }
+        } catch (err) {
+            console.error('Commentary notes failed', err)
+            setBuildStatus('error')
+            setBuildProgress(err.message || 'Generation failed')
+        } finally {
+            setBuildingNotes(false)
         }
-        sessionPromiseRef.current = null
-        activeSessionKeyRef.current = null
-        setLiveSessionReady(false)
-        setLiveCommentary([])
-    }, [matchSession])
+    }
 
-    useEffect(() => () => wsRef.current?.close(), [])
-
+    // Ensure live WebSocket session
     const ensureLiveSession = async () => {
-        if (!homeTeam || !awayTeam) {
-            return false
-        }
+        if (!homeTeam || !awayTeam) return false
 
         if (
             wsRef.current?.readyState === WebSocket.OPEN &&
@@ -99,7 +171,7 @@ export default function App() {
                         reject(new Error(msg.message || 'Live session failed'))
                     }
                 } catch {
-                    /* ignore malformed frames */
+                    // ignore malformed frames
                 }
             }
 
@@ -124,12 +196,19 @@ export default function App() {
         return sessionPromiseRef.current
     }
 
+    // Initialize live session when match is ready
     useEffect(() => {
-        if (matchReady) {
+        if (matchReady && matchSession) {
             ensureLiveSession().catch((err) => console.warn('Live session init failed', err))
         }
-    }, [matchReady]) // eslint-disable-line react-hooks/exhaustive-deps
+    }, [matchReady, matchSession])
 
+    // Cleanup on unmount
+    useEffect(() => {
+        return () => wsRef.current?.close()
+    }, [])
+
+    // Send match event
     const sendMatchEvent = async (description) => {
         const ready = await ensureLiveSession()
         if (ready && wsRef.current?.readyState === WebSocket.OPEN) {
@@ -137,6 +216,7 @@ export default function App() {
         }
     }
 
+    // Send tactical detection
     const sendTacticalDetection = async (analysis) => {
         const ready = await ensureLiveSession()
         if (ready && wsRef.current?.readyState === WebSocket.OPEN && analysis) {
@@ -144,212 +224,40 @@ export default function App() {
         }
     }
 
-    const buildCommentaryNotes = async () => {
-        setBuildingNotes(true)
-        setBuildStatus('loading')
-        setBuildProgress('Starting...')
-        setCommentaryData(null)
-        setPreparationTime(0)
+    // Handle chunk analyzed from live video
+    const handleChunkAnalyzed = (result) => {
+        setDetection(result)
+        // Auto-send as tactical detection
+        sendTacticalDetection(result)
+    }
 
-        try {
-            const res = await fetch(`${BACKEND}/api/v1/commentary/prepare-notes`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    home_team: homeTeam,
-                    away_team: awayTeam,
-                    sport
-                }),
-            })
-
-            if (!res.ok) {
-                throw new Error(`HTTP ${res.status}: ${res.statusText}`)
-            }
-
-            const reader = res.body.getReader()
-            const decoder = new TextDecoder()
-            let buffer = ''
-
-            while (true) {
-                const { done, value } = await reader.read()
-                if (done) break
-
-                buffer += decoder.decode(value, { stream: true })
-                const lines = buffer.split('\n')
-                buffer = lines.pop() // keep incomplete line in buffer
-
-                for (const line of lines) {
-                    if (!line.startsWith('data: ')) continue
-                    try {
-                        const event = JSON.parse(line.slice(6))
-                        if (event.phase === 'complete' && event.result) {
-                            const data = event.result
-                            setCommentaryData(data)
-                            setPreparationTime(data.preparation_time_ms)
-                            setMatchReady(true)
-                            setBuildStatus('ready')
-                            setBuildProgress('')
-                        } else if (event.phase === 'error') {
-                            throw new Error(event.message)
-                        } else {
-                            setBuildProgress(event.message || event.phase)
-                        }
-                    } catch (parseErr) {
-                        if (parseErr.message && !parseErr.message.startsWith('Unexpected'))
-                            throw parseErr
-                    }
-                }
-            }
-        } catch (err) {
-            console.error('Commentary notes failed', err)
-            setBuildStatus('error')
-            setBuildProgress(err.message || 'Generation failed')
-        } finally {
-            setBuildingNotes(false)
+    // Handle commentary from live video
+    const handleVideoCommentary = (msg) => {
+        if (msg.type === 'commentary') {
+            setLiveCommentary((prev) => [msg, ...prev].slice(0, 100))
         }
     }
 
+    // Render current screen
+    if (currentScreen === 'home') {
+        return <HomeScreen onStartMatch={handleStartMatch} />
+    }
+
+    // Dashboard screen
     return (
-        <div className="app-wrapper">
-            {/* Header */}
-            <header className="header">
-                <div className="header-brand">
-                    <div className="header-logo">🏟️ PitchSide AI</div>
-                    <div className="header-badge">Live Agents 🗣️</div>
-                </div>
-                <div className="header-match">
-                    {(matchReady || liveSessionReady)
-                        ? <><strong>{homeTeam}</strong> vs <strong>{awayTeam}</strong> — {sport}</>
-                        : 'Configure a match to begin'}
-                </div>
-                <div className="header-live">
-                    <div className="live-dot" />
-                    Live
-                </div>
-            </header>
-
-            {/* Match Setup Banner */}
-            <div className="setup-banner">
-                <input
-                    type="text"
-                    placeholder="Home Team"
-                    value={homeTeam}
-                    onChange={e => setHomeTeam(e.target.value)}
-                    style={{ width: 140 }}
-                    id="home-team-input"
-                />
-                <span style={{ color: 'var(--text-muted)', fontWeight: 700 }}>vs</span>
-                <input
-                    type="text"
-                    placeholder="Away Team"
-                    value={awayTeam}
-                    onChange={e => setAwayTeam(e.target.value)}
-                    style={{ width: 140 }}
-                    id="away-team-input"
-                />
-                <select value={sport} onChange={e => setSport(e.target.value)} id="sport-select">
-                    <option value="soccer">⚽ Soccer</option>
-                    <option value="cricket">🏏 Cricket</option>
-                    <option value="basketball">🏀 Basketball</option>
-                    <option value="rugby">🏉 Rugby</option>
-                    <option value="tennis">🎾 Tennis</option>
-                    <option value="hockey">🏒 Hockey</option>
-                </select>
-
-                <button
-                    className="btn btn-primary"
-                    onClick={buildCommentaryNotes}
-                    disabled={buildingNotes || !homeTeam || !awayTeam}
-                    id="build-commentary-btn"
-                >
-                    {buildingNotes
-                        ? <><span className="spinner" /> Generating Notes...</>
-                        : '📝 Generate Commentary Notes'
-                    }
-                </button>
-
-                {buildStatus && (
-                    <span className={`status-pill ${buildStatus}`}>
-                        {buildStatus === 'loading' && `⏳ ${buildProgress || 'Starting...'}`}
-                        {buildStatus === 'ready' && `✅ Complete (${(preparationTime / 1000).toFixed(1)}s)`}
-                        {buildStatus === 'error' && `⚠️ ${buildProgress || 'Generation failed'}`}
-                    </span>
-                )}
-            </div>
-
-            {/* Main Dashboard */}
-            <div className="dashboard">
-
-                {/* Left — main area */}
-                <div className="dashboard-main">
-                    {/* Push-to-Talk always visible */}
-                    <PushToTalk
-                        matchReady={matchReady}
-                        homeTeam={homeTeam}
-                        awayTeam={awayTeam}
-                        sport={sport}
-                    />
-
-                    {/* TacticalOverlay always visible — upload frame / video at any time */}
-                    <TacticalOverlay
-                        sport={sport}
-                        matchSession={matchSession}
-                        detection={detection}
-                        setDetection={setDetection}
-                        sendMatchEvent={sendMatchEvent}
-                        sendTacticalDetection={sendTacticalDetection}
-                    />
-
-                    {/* Commentary notes appear below the pitch once generated */}
-                    {commentaryData && <CommentaryNotesViewer data={commentaryData} liveDetection={detection} />}
-                </div>
-
-                {/* Right — sidebar */}
-                <div className="dashboard-sidebar">
-                    {/* Live Commentary Feed — once match is ready */}
-                    {(matchReady || liveSessionReady || liveCommentary.length > 0) && (
-                        <CommentaryFeed messages={liveCommentary} sendMatchEvent={sendMatchEvent} />
-                    )}
-
-                    {/* Tactical detection card */}
-                    {detection && (
-                        <div className="tactical-info" style={{ width: '100%', minWidth: 300 }}>
-                            <div className="detection-card">
-                                <div className="detection-label">Tactical Label</div>
-                                <div className="detection-value">{detection.tactical_label}</div>
-                                {detection.key_observation && (
-                                    <div className="detection-sub">{detection.key_observation}</div>
-                                )}
-                                {detection.confidence != null && (
-                                    <>
-                                        <div className="confidence-bar">
-                                            <div className="confidence-fill" style={{ width: `${detection.confidence * 100}%` }} />
-                                        </div>
-                                        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-                                            {Math.round(detection.confidence * 100)}% confidence
-                                        </div>
-                                    </>
-                                )}
-                            </div>
-                            <div className="detection-card">
-                                <div className="detection-label">Formation (Home)</div>
-                                <div className="detection-value">{detection.formation_home || '4-3-3'}</div>
-                            </div>
-                            <div className="detection-card">
-                                <div className="detection-label">Formation (Away)</div>
-                                <div className="detection-value">{detection.formation_away || '4-2-3-1'}</div>
-                            </div>
-                        </div>
-                    )}
-
-                    {!detection && !matchReady && (
-                        <MatchNotes notes={[]} loading={buildingNotes} />
-                    )}
-
-                    {/* Event Feed always visible */}
-                    <EventFeed matchSession={matchSession} />
-                </div>
-            </div>
+        <div className="match-dashboard">
+            <MatchDashboard
+                homeTeam={homeTeam}
+                awayTeam={awayTeam}
+                sport={sport}
+                matchSession={matchSession}
+                commentaryData={commentaryData}
+                detection={detection}
+                setDetection={setDetection}
+                liveCommentary={liveCommentary}
+                onSendMatchEvent={sendMatchEvent}
+                onSendTacticalDetection={sendTacticalDetection}
+            />
         </div>
     )
 }

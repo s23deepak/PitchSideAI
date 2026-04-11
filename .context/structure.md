@@ -15,7 +15,8 @@ PitchAI/
 ├── config.py                      # Runtime config entry-point (loads .env over defaults)
 ├── config_prod.py                 # Production variant of runtime config
 ├── core/                          # Shared infrastructure: logging, concurrency, exceptions
-├── data_sources/                  # Data retrievers, factory, and TTL cache
+├── data_sources/                  # Data retrievers (4-layer fallback chain), factory, TTL cache
+├── models/                        # Live match state (GameState, GameEvent, MatchPhase)
 ├── frontend/                      # React + Vite + Tailwind UI
 │   └── src/components/            # 6 components: CommentaryFeed, CommentaryNotesViewer,
 │                                  #   EventFeed, MatchNotes, PushToTalk, TacticalOverlay
@@ -83,12 +84,15 @@ config/
 
 ```
 data_sources/
-├── factory.py                    # Singleton factory: get_retriever(sport) → BaseRetriever
+├── factory.py                    # Singleton factory — get_fbref_retriever() returns FallbackStatsRetriever
+│                                 #   3-layer chain: StatsBomb → Firecrawl → FBref direct
 ├── base.py                       # BaseRetriever Protocol (7-method interface)
 ├── cache.py                      # TTL cache + @cache.cached("ns", ttl=N) decorator
 ├── data_cache.py                 # Lightweight duplicate (legacy) — prefer cache.py
 ├── espn_retriever.py             # ESPN unofficial API: squads, form, news, H2H
-├── fbref_retriever.py            # FBref via soccerdata: player/team stats, xG, xAG
+├── fbref_retriever.py            # FBref via soccerdata: player/team stats, xG, xAG (last resort)
+├── statsbomb_retriever.py        # StatsBomb free event data — historical exact-match only
+├── firecrawl_retriever.py        # Firecrawl API: current-season scraping w/ anti-bot + proxy
 ├── football_data_retriever.py    # football-data.org API v4: standings, H2H, squads
 ├── tavily_search_service.py      # Tavily AI search: news, storylines, managers, lineups
 ├── weather_retriever.py          # Match-day weather + forecast via Tavily search
@@ -99,10 +103,27 @@ data_sources/
 ```
 
 **Factory routing**: `get_retriever("cricket")` → `CricbuzzRetriever`, all others → `ESPNDataRetriever`.
+**Stats fallback chain**: StatsBomb (historical exact-match) → Firecrawl (current, anti-bot) → FBref direct (soccerdata, last resort).
 
 ---
 
-## Workflows Layer (`workflows/`)
+## Models (`models/`)
+
+```
+models/
+├── __init__.py       # Exports GameState, GameEvent, MatchPhase
+└── game_state.py     # Live match state machine
+                      # MatchPhase enum, GameEvent dataclass
+                      # GameState: score, minute, phase, event history
+                      # update_from_event() — regex parse goals/cards/subs/phases
+                      # update_from_detection() — updates minute only (never score)
+                      # to_context_string() → LLM-ready prompt prefix
+                      # to_dict() → JSON for WebSocket broadcast
+```
+
+**Usage**: One `GameState` instance per WebSocket session. All three commentary triggers (match_event, tactical_detection, periodic timer) inject `game_state.to_context_string()` into the commentary seed and broadcast `"gameState": game_state.to_dict()`.
+
+---
 
 ```
 workflows/
@@ -225,5 +246,8 @@ src/
 | Vector search | `rag/__init__.py` + `tools/vector_store.py` |
 | Error types | `core/exceptions.py` |
 | WebSocket session management | `api/server.py` → `ConnectionManager` |
+| Live match state (score/minute/phase) | `models/game_state.py` → `GameState` — one per WS session |
+| Commentary context injection | `game_state.to_context_string()` prepended to every commentary seed |
+| Stats retrieval fallback | `data_sources/factory.py` → `FallbackStatsRetriever._chain()` — StatsBomb → Firecrawl → FBref |
 | Running commentary broadcast | `api/server.py` → `_periodic_commentary()` + `ConnectionManager.broadcast()` |
 | Real-time event push (frontend) | `api/server.py` `/api/v1/events/stream` → `EventFeed.jsx` `EventSource` |

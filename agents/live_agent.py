@@ -3,6 +3,7 @@ Live Agent — Amazon Nova Sonic
 Real-time Q&A and live query handling during matches.
 Supports dynamic sport types with contextual responses.
 """
+import json
 from typing import List, Optional
 
 from agents.base import LiveAgent as BaseLiveAgent
@@ -170,6 +171,104 @@ class LiveAgent(BaseLiveAgent):
         except Exception as exc:
             self.logger.error("audio_processing_failed", error=str(exc))
             raise
+
+    async def handle_voice_query(self, audio_bytes: bytes) -> str:
+        """
+        Process voice query: speech-to-text → answer → text response.
+
+        Args:
+            audio_bytes: Audio bytes containing the user's question
+
+        Returns:
+            Text answer (no TTS - text only for lower latency)
+        """
+        self.log_event("voice_query_received", {
+            "audio_size": len(audio_bytes)
+        })
+
+        try:
+            # Transcribe audio to text using Bedrock
+            transcribed_text = await self._transcribe_audio(audio_bytes)
+
+            if not transcribed_text or not transcribed_text.strip():
+                return "I couldn't hear your question clearly. Could you please try again?"
+
+            # Process as text query
+            answer = await self.handle_text_query(transcribed_text.strip())
+
+            # Log voice Q&A
+            await write_event(
+                "fan_qa_voice",
+                f"Voice Q: {transcribed_text}",
+                {
+                    "question": transcribed_text,
+                    "answer": answer,
+                    "sport": self.sport,
+                    "home_team": self.home_team,
+                    "away_team": self.away_team
+                },
+                match_session=self.match_session,
+            )
+
+            return answer
+
+        except Exception as exc:
+            self.logger.error("voice_query_failed", error=str(exc), exc_info=True)
+            return "I'm having trouble processing your voice question. Please try again or type your question."
+
+    async def _transcribe_audio(self, audio_bytes: bytes) -> str:
+        """
+        Transcribe audio to text using Amazon Bedrock.
+
+        Args:
+            audio_bytes: Raw audio bytes (WAV/PCM format expected)
+
+        Returns:
+            Transcribed text
+        """
+        import base64
+
+        try:
+            # Use Bedrock's InvokeModel with a speech-to-text capable model
+            # For now, use a simple approach with Bedrock Runtime
+            from config import AWS_REGION
+            import boto3
+
+            bedrock_runtime = boto3.client("bedrock-runtime", region_name=AWS_REGION)
+
+            # Encode audio as base64
+            audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+
+            # Use Nova Sonic or another STT-capable model
+            # Note: This is a simplified implementation
+            # In production, you'd use the actual Bedrock STT API
+            prompt = "Transcribe the following audio. Return ONLY the transcribed text, nothing else:"
+
+            response = bedrock_runtime.invoke_model(
+                modelId="amazon.nova-sonic-v1:0",  # Or appropriate STT model
+                body=json.dumps({
+                    "prompt": prompt,
+                    "audio_data": audio_b64,
+                    "max_tokens": 256,
+                })
+            )
+
+            result = json.loads(response["body"].read())
+            transcribed = result.get("transcription", "").strip()
+
+            self.log_event("audio_transcribed", {
+                "transcription_length": len(transcribed)
+            })
+
+            return transcribed
+
+        except ImportError:
+            self.logger.warning("boto3_not_available_for_stt")
+            return ""
+        except Exception as exc:
+            self.logger.error("stt_transcription_failed", error=str(exc))
+            # Fallback: return empty string (caller will handle)
+            return ""
 
     async def generate_live_commentary(self, event_description: str) -> str:
         """

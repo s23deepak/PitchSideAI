@@ -1,6 +1,7 @@
 """
 Sports Configuration System
 Centralized sport definitions, rules, and requirements.
+Football (Soccer) only configuration for FIFA World Cup 2026.
 """
 from enum import Enum
 from typing import Dict, List
@@ -8,15 +9,8 @@ from dataclasses import dataclass, field
 
 
 class SportType(str, Enum):
-    """Supported sports."""
+    """Supported sports - Football only for World Cup 2026."""
     SOCCER = "soccer"
-    CRICKET = "cricket"
-    BASKETBALL = "basketball"
-    TENNIS = "tennis"
-    RUGBY = "rugby"
-    AMERICAN_FOOTBALL = "american_football"
-    HOCKEY = "hockey"
-    BASEBALL = "baseball"
 
 
 @dataclass
@@ -24,319 +18,140 @@ class SportConfig:
     """Configuration for a sport."""
     sport_type: SportType
     display_name: str
-    formation_regex: List[str]  # e.g., ["4-3-3", "3-5-2"] for soccer
-    key_metrics: List[str]  # Sport-specific metrics
-    tactical_labels: List[str]  # Sport-specific tactical classifications
-    team_positions: List[str]  # Key player positions
-    research_topics: List[str]  # Topics to research pre-match
-    tactical_definitions: Dict[str, str] = field(default_factory=dict)  # Visual definitions for LLM grounding
-
-    def __hash__(self):
-        return hash(self.sport_type.value)
+    formation_regex: List[str]
+    key_metrics: List[str]
+    tactical_labels: List[str]
+    team_positions: List[str]
+    research_topics: List[str]
+    tactical_definitions: Dict[str, str] = field(default_factory=dict)
 
 
-# ── Sport-Specific Configurations ────────────────────────────────────────────
+# ── Football (Soccer) Configuration ─────────────────────────────────────────
+
+SOCCER_CONFIG = SportConfig(
+    sport_type=SportType.SOCCER,
+    display_name="Football",
+    formation_regex=["\\d-\\d-\\d", "3-5-2", "4-3-3", "4-4-2", "4-2-3-1", "5-3-2", "3-4-3"],
+    key_metrics=[
+        "possession %",
+        "shots on target",
+        "passes completed",
+        "pass accuracy %",
+        "tackles",
+        "interceptions",
+        "corners",
+        "fouls",
+        "yellow cards",
+        "red cards",
+        "offsides",
+        "saves",
+        "xG (Expected Goals)"
+    ],
+    tactical_labels=[
+        "High Press",
+        "Low Block",
+        "Gegenpressing",
+        "Counter Attack",
+        "Build-Up Play",
+        "Possession Play",
+        "Direct Play",
+        "Transition",
+        "Set Piece Attack",
+        "Set Piece Defense",
+        "Wing Play",
+        "Central Play",
+        "False 9",
+        "Tiki-Taka",
+        "Park the Bus",
+        "Normal Play"
+    ],
+    tactical_definitions={
+        "High Press": "Attackers aggressively closing down defenders in their own third, often with multiple players swarming the ball carrier.",
+        "Low Block": "Defending team packed densely in their own penalty area, making it hard for opponents to penetrate.",
+        "Gegenpressing": "Immediate pressing after losing possession, trying to win the ball back within seconds.",
+        "Counter Attack": "Rapid transition from defense to attack, exploiting space left by the opposing team.",
+        "Build-Up Play": "Patient possession from the back, with defenders and midfielders passing to progress up the field.",
+        "Possession Play": "Dominating ball possession with short, controlled passes to control the tempo.",
+        "Direct Play": "Long balls forward, bypassing midfield, aiming for quick attacks.",
+        "Set Piece Attack": "Structured attack from corners, free kicks, or throw-ins with players positioned in the box.",
+        "Set Piece Defense": "Defending players packed densely inside their own penalty area during opponent set pieces.",
+        "Wing Play": "Attacks focused on the flanks, with wingers or fullbacks delivering crosses.",
+        "Central Play": "Attacks through the middle of the pitch, often involving intricate passing.",
+        "False 9": "A striker who drops deep into midfield, creating space for wingers or midfielders to exploit.",
+        "Tiki-Taka": "Short, quick passing triangles to maintain possession and probe for openings.",
+        "Park the Bus": "Ultra-defensive setup with all players behind the ball, prioritizing defense over attack.",
+        "Transition": "The moment of switching from defense to attack or vice versa."
+    },
+    team_positions=[
+        "GK",  # Goalkeeper
+        "CB",  # Center Back
+        "LB",  # Left Back
+        "RB",  # Right Back
+        "LWB",  # Left Wing Back
+        "RWB",  # Right Wing Back
+        "CDM",  # Defensive Midfielder
+        "CM",  # Central Midfielder
+        "CAM",  # Attacking Midfielder
+        "LM",  # Left Midfielder
+        "RM",  # Right Midfielder
+        "LW",  # Left Winger
+        "RW",  # Right Winger
+        "ST",  # Striker
+        "CF",  # Center Forward
+    ],
+    research_topics=[
+        "recent form (last 5 matches)",
+        "head-to-head history",
+        "key injuries and suspensions",
+        "home/away record",
+        "formation preferences",
+        "set-piece efficiency",
+        "high press tolerance",
+        "defensive organization",
+        "key player performances",
+        "manager tactical approach",
+        "goals scored/conceded trends",
+        "clean sheet record"
+    ]
+)
+
+
+# ── Configuration Access ─────────────────────────────────────────────────────
 
 SPORTS_CONFIG: Dict[SportType, SportConfig] = {
-    SportType.SOCCER: SportConfig(
-        sport_type=SportType.SOCCER,
-        display_name="Soccer/Football",
-        formation_regex=["\\d-\\d-\\d", "3-5-2", "4-3-3", "5-3-2"],
-        key_metrics=[
-            "possession %",
-            "shots on target",
-            "passes completed",
-            "tackles",
-            "interceptions",
-            "corners",
-            "fouls",
-            "yellow cards",
-            "offside positions"
-        ],
-        tactical_labels=[
-            "High Press",
-            "Low Block",
-            "Gegenpressing",
-            "Counter Attack",
-            "Build-Up Play",
-            "Transition",
-            "Set Piece Attack",
-            "Set Piece Defense",
-            "Wing Play",
-            "Central Play",
-            "Normal Play"
-        ],
-        tactical_definitions={
-            "Set Piece Attack": "Look for a structured 'wall' of defending players, players clustered inside the penalty box, or a player standing over a stationary ball preparing for a free kick.",
-            "Set Piece Defense": "Defending players packed densely inside their own penalty area.",
-            "Build-Up Play": "Look for defenders passing tightly grouped near their own goal or midfield.",
-            "High Press": "Look for attackers heavily swarming the opponent's defensive third.",
-            "Counter Attack": "Look for a rapid, chaotic sprint forward with few defenders back."
-        },
-        team_positions=[
-            "GK",
-            "CB",
-            "LB",
-            "RB",
-            "LWB",
-            "RWB",
-            "CM",
-            "CDM",
-            "CAM",
-            "ST",
-            "CF",
-            "LW",
-            "RW",
-            "LM",
-            "RM"
-        ],
-        research_topics=[
-            "recent form (last 5 matches)",
-            "head-to-head history",
-            "key injuries and suspensions",
-            "home/away record",
-            "formation preferences",
-            "set-piece efficiency",
-            "high press tolerance",
-            "defensive organization",
-            "key player performances",
-            "manager tactical approach"
-        ]
-    ),
-
-    SportType.CRICKET: SportConfig(
-        sport_type=SportType.CRICKET,
-        display_name="Cricket",
-        formation_regex=[],  # Not applicable
-        key_metrics=[
-            "runs scored",
-            "wickets lost",
-            "run rate",
-            "dot ball %",
-            "four boundaries",
-            "six boundaries",
-            "maiden overs",
-            "economy rate",
-            "strike rate",
-            "average"
-        ],
-        tactical_labels=[
-            "Aggressive Batting",
-            "Defensive Batting",
-            "Pace Attack",
-            "Spin Attack",
-            "Death Bowling",
-            "Powerplay",
-            "Middle Overs",
-            "Death Overs",
-            "Field Spread",
-            "In-Field",
-            "Normal"
-        ],
-        team_positions=[
-            "Batsman",
-            "Bowler",
-            "All-rounder",
-            "Wicket-keeper",
-            "Opening Batsman",
-            "Middle Order",
-            "Lower Order",
-            "Fast Bowler",
-            "Spinner"
-        ],
-        research_topics=[
-            "recent form (last 10 matches)",
-            "head-to-head records",
-            "key player stats (runs, wickets)",
-            "home/away performance",
-            "pitch conditions (historically)",
-            "weather forecasts",
-            "team combinations",
-            "batting order preferences",
-            "bowling strategies",
-            "powerplay performance"
-        ]
-    ),
-
-    SportType.BASKETBALL: SportConfig(
-        sport_type=SportType.BASKETBALL,
-        display_name="Basketball",
-        formation_regex=[],
-        key_metrics=[
-            "points per game",
-            "field goal %",
-            "3-point %",
-            "free throw %",
-            "rebounds",
-            "assists",
-            "steals",
-            "blocks",
-            "turnovers",
-            "+/-"
-        ],
-        tactical_labels=[
-            "Zone Defense",
-            "Man-to-Man",
-            "Full Court Press",
-            "Pick and Roll",
-            "Fast Break",
-            "Isolation",
-            "Spacing",
-            "Transition",
-            "Half Court Set"
-        ],
-        team_positions=[
-            "Point Guard",
-            "Shooting Guard",
-            "Small Forward",
-            "Power Forward",
-            "Center"
-        ],
-        research_topics=[
-            "recent form",
-            "head-to-head matchups",
-            "key player performances",
-            "defensive schemes",
-            "bench depth",
-            "injury reports",
-            "pace of play",
-            "three-point shooting trends",
-            "rebounding strength",
-            "turnover rates"
-        ]
-    ),
-
-    SportType.RUGBY: SportConfig(
-        sport_type=SportType.RUGBY,
-        display_name="Rugby",
-        formation_regex=[],
-        key_metrics=[
-            "tries scored",
-            "points",
-            "tackles made",
-            "tackles missed" ,
-            "turnovers won",
-            "lineout win %",
-            "scrum dominance",
-            "penalties conceded",
-            "yellow cards",
-            "red cards"
-        ],
-        tactical_labels=[
-            "Scrum Attack",
-            "Lineout Drive",
-            "Backs Attack",
-            "Defensive Formation",
-            "Kickoff Play",
-            "Breakdown",
-            "Ruck Control",
-            "Maul Attack",
-            "Set Phase",
-            "Open Play"
-        ],
-        team_positions=[
-            "Hooker",
-            "Prop",
-            "Lock",
-            "Flanker",
-            "Number 8",
-            "Scrum-half",
-            "Fly-half",
-            "Wing",
-            "Centre",
-            "Full-back"
-        ],
-        research_topics=[
-            "recent results",
-            "head-to-head records",
-            "player injuries",
-            "scrum strength",
-            "lineout accuracy",
-            "backline pace",
-            "defensive patterns",
-            "set-piece dominance",
-            "bench impact",
-            "altitude/weather factors"
-        ]
-    ),
-
-    SportType.TENNIS: SportConfig(
-        sport_type=SportType.TENNIS,
-        display_name="Tennis",
-        formation_regex=[],
-        key_metrics=[
-            "serve speed",
-            "1st serve %",
-            "ace count",
-            "break point conversion",
-            "rally win %",
-            "net approach %",
-            "winners",
-            "unforced errors",
-            "double faults"
-        ],
-        tactical_labels=[
-            "Serve and Volley",
-            "Baseline Rally",
-            "Aggressive Serve",
-            "Defensive Return",
-            "Net Play",
-            "Slice Attack",
-            "Topspin Forehand",
-            "Break Point Save",
-            "Tire Opponent",
-            "Aggressive Serve"
-        ],
-        team_positions=[],  # Singles/Doubles
-        research_topics=[
-            "recent tournament results",
-            "head-to-head record",
-            "surface preference",
-            "recent form (last 10 matches)",
-            "serve consistency",
-            "mental toughness history",
-            "injury history",
-            "surface-specific strengths",
-            "key shots (forehand, backhand)",
-            "fitness level"
-        ]
-    ),
+    SportType.SOCCER: SOCCER_CONFIG
 }
 
 
-def get_sport_config(sport: str) -> SportConfig:
-    """Get configuration for a sport."""
-    try:
-        sport_type = SportType(sport.lower())
-        return SPORTS_CONFIG[sport_type]
-    except (KeyError, ValueError):
-        raise ValueError(
-            f"Unsupported sport: {sport}. "
-            f"Supported: {', '.join([s.value for s in SportType])}"
-        )
+def get_sport_config(sport: str = "soccer") -> SportConfig:
+    """Get configuration for football/soccer."""
+    return SOCCER_CONFIG
 
 
-def get_tactical_labels(sport: str) -> List[str]:
-    """Get tactical labels for a sport."""
-    config = get_sport_config(sport)
-    return config.tactical_labels
+def get_tactical_labels(sport: str = "soccer") -> List[str]:
+    """Get tactical labels for football."""
+    return SOCCER_CONFIG.tactical_labels
 
 
-def get_research_topics(sport: str) -> List[str]:
-    """Get research topics for a sport."""
-    config = get_sport_config(sport)
-    return config.research_topics
+def get_research_topics(sport: str = "soccer") -> List[str]:
+    """Get research topics for football."""
+    return SOCCER_CONFIG.research_topics
 
 
-def get_team_positions(sport: str) -> List[str]:
-    """Get team positions for a sport."""
-    config = get_sport_config(sport)
-    return config.team_positions
+def get_team_positions(sport: str = "soccer") -> List[str]:
+    """Get team positions for football."""
+    return SOCCER_CONFIG.team_positions
+
+
+def get_formation_regex(sport: str = "soccer") -> List[str]:
+    """Get formation regex patterns for football."""
+    return SOCCER_CONFIG.formation_regex
 
 
 if __name__ == "__main__":
     # Example usage
-    soccer = get_sport_config("soccer")
+    soccer = get_sport_config()
     print(f"Sport: {soccer.display_name}")
-    print(f"Tactical Labels: {soccer.tactical_labels[:3]}")
-    print(f"Key Metrics: {soccer.key_metrics[:3]}")
+    print(f"Tactical Labels: {soccer.tactical_labels[:5]}")
+    print(f"Key Metrics: {soccer.key_metrics[:5]}")
+    print(f"Formations: {soccer.formation_regex}")

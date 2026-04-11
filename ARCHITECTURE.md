@@ -114,15 +114,21 @@ FastAPI backend integrated with orchestration and advanced features.
 | Client → Server | `{"type":"tactical_detection","analysis":{"tactical_label":"High Press",...}}` |
 | Client → Server | `{"type":"query","text":"Who scored?"}` |
 | Client → Server | Binary audio bytes (future Nova Sonic integration) |
-| Server → Client | `{"type":"commentary","text":"...","source":"event\|timer\|detection\|analysis","timestamp":"..."}` |
+| Server → Client | `{"type":"commentary","text":"...","source":"event\|timer\|detection\|analysis","gameState":{...},"timestamp":"..."}` |
 | Server → Client | `{"type":"answer","text":"...","timestamp":"..."}` |
 | Server → Client | `{"type":"ready","message":"..."}` |
+
+`gameState` is included in every server commentary broadcast: `{"home_score":2,"away_score":1,"match_minute":67,"phase":"SECOND_HALF","home_team":"...","away_team":"...",...}`
 
 **ConnectionManager:** Tracks active WebSocket connections per `workflow_id` (session). `broadcast(session_id, msg)` fans out to all connected tabs.
 
 **Event Scoping:** DynamoDB writes and reads are partitioned by a deterministic `match_session` key derived from sport + home team + away team, so the SSE event feed no longer mixes unrelated matches.
 
-**Periodic Commentary:** After session init, a background `asyncio.Task` (`_periodic_commentary`) fires `LiveAgent.generate_live_commentary()` every 60 s, seeded from recent DynamoDB events, and broadcasts the result to all session clients.
+**Periodic Commentary:** After session init, a background `asyncio.Task` (`_periodic_commentary`) fires `LiveAgent.generate_live_commentary()` every 60 s, seeded from recent DynamoDB events **and `game_state.to_context_string()`**, and broadcasts the result (including `gameState`) to all session clients.
+
+**Game State Tracking:** One `GameState` instance is created per WebSocket session after `init`. `update_from_event(description)` parses regex patterns for goals/cards/subs/phase changes. `update_from_detection(analysis)` updates only match minute from vision timestamps — never score. All broadcasts include `"gameState": game_state.to_dict()`.
+
+**Data Retrieval Chain:** `get_fbref_retriever()` returns a `FallbackStatsRetriever` implementing a 3-layer chain: **StatsBomb (historical exact-match only) → Firecrawl (current season, anti-bot) → FBref direct**. StatsBomb returns empty for seasons not in its catalog to prevent stale historical data.
 
 **Middleware:**
 - CORS middleware (production-configured)
@@ -398,6 +404,9 @@ RESEARCH_MODEL=amazon.nova-pro-v2:0
 VISION_MODEL=amazon.nova-lite-v2:0
 LIVE_AUDIO_MODEL=amazon.nova-sonic-v2:0
 EMBEDDING_MODEL=amazon.titan-embed-text-v2:0
+
+# Data Sources — Stats Retrieval Chain
+FIRECRAWL_API_KEY=...          # Layer 2: Firecrawl current-season scraping
 ```
 
 ### Validation

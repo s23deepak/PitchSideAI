@@ -8,6 +8,8 @@ Provides specialized data retrievers for:
 - Wikipedia (player biographies via Tavily)
 - Tavily web search (bios, news, weather, H2H, storylines)
 - FBref structured stats (player/team season/match stats)
+- StatsBomb free event data (historical seasons)
+- Firecrawl web scraping (current-season stats via anti-bot API)
 - football-data.org REST API (standings, H2H, scorers)
 """
 
@@ -18,6 +20,8 @@ from data_sources.sports_specific_retriever import SportsSpecificRetriever
 from data_sources.wikipedia_retriever import WikipediaRetriever
 from data_sources.tavily_search_service import TavilySearchService
 from data_sources.fbref_retriever import FBrefRetriever
+from data_sources.statsbomb_retriever import StatsBombRetriever
+from data_sources.firecrawl_retriever import FirecrawlRetriever
 from data_sources.football_data_retriever import FootballDataRetriever
 
 __all__ = [
@@ -28,5 +32,7 @@ __all__ = [
     "WikipediaRetriever",
     "TavilySearchService",
     "FBrefRetriever",
+    "StatsBombRetriever",
+    "FirecrawlRetriever",
     "FootballDataRetriever",
 ]

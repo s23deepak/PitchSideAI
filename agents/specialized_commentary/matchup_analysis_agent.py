@@ -146,10 +146,10 @@ class MatchupAnalysisAgent(BaseAgent):
                     p1_result, p2_result = await asyncio.gather(*tasks, return_exceptions=True)
                     if isinstance(p1_result, dict) and p1_result:
                         player1_stats = p1_result
-                        db.upsert_season_stats(p1_name, self.sport, "25-26", "fbref", p1_result)
+                        db.upsert_season_stats(p1_name, self.sport, "25-26", p1_result.get("data_source", "fbref"), p1_result)
                     if isinstance(p2_result, dict) and p2_result:
                         player2_stats = p2_result
-                        db.upsert_season_stats(p2_name, self.sport, "25-26", "fbref", p2_result)
+                        db.upsert_season_stats(p2_name, self.sport, "25-26", p2_result.get("data_source", "fbref"), p2_result)
                 except Exception as exc:
                     logger.warning("FBref stats fetch failed: %s", exc)
 

@@ -67,10 +67,17 @@ Runtime configuration entry-point. Imports defaults from `config/defaults.py` th
 
 ---
 
+## models/
+
+**`models/game_state.py`**
+Live match state machine for WebSocket sessions. `MatchPhase` enum (`PRE_MATCH`, `FIRST_HALF`, `HALF_TIME`, `SECOND_HALF`, `FULL_TIME`), `GameEvent` dataclass (minute, event_type, description, team, player, timestamp), and `GameState` class that tracks score, minute, phase, and last-50 events. `update_from_event(description)` parses regex patterns for goals, cards, subs, explicit scores (e.g. "2-1"), and phase changes. `update_from_detection(analysis)` updates only the match minute from vision timestamps — never modifies score. `to_context_string()` produces a compact prompt-ready string; `to_dict()` returns a JSON-serialisable broadcast payload. Both are injected into every commentary seed so the LLM is always state-aware.
+
+---
+
 ## data_sources/
 
 **`data_sources/factory.py`**
-Singleton factory for all data source clients. `get_retriever(sport)` routes to `CricbuzzRetriever` for cricket and `ESPNDataRetriever` for all other sports. Also provides `get_fbref_retriever()`, `get_football_data_retriever()`, and `get_search_service()` singletons to avoid re-creating expensive clients.
+Singleton factory for all data source clients. `get_retriever(sport)` routes to `CricbuzzRetriever` for cricket and `ESPNDataRetriever` for all other sports. `get_fbref_retriever()` now returns a `FallbackStatsRetriever` singleton implementing a 3-layer chain: **StatsBomb → Firecrawl → FBref direct**. A shared `_chain()` helper iterates retrievers in order and returns the first non-empty result. Also provides `get_statsbomb_retriever()`, `get_football_data_retriever()`, and `get_search_service()` singletons.
 
 **`data_sources/base.py`**
 Structural Protocol (duck-typed interface) defining the 7-method contract for all sport-specific retrievers: `get_match_context`, `get_team_squad`, `get_recent_form`, `get_player_stats`, `get_head_to_head`, `get_team_news`, `get_injuries`. New retrievers must satisfy this interface.
@@ -82,7 +89,13 @@ TTL-based in-memory cache with namespace+identifier keying and an `@cache.cached
 Fetches live data from ESPN's unofficial public API (no key required) for rosters, form, news, injuries, and H2H across soccer, basketball, NFL, MLB, and NHL. Maintains a hard-coded `TEAM_ID_CACHE` for common clubs; falls back to live search for unknown teams. Primary retriever for all non-cricket sports.
 
 **`data_sources/fbref_retriever.py`**
-Wraps the `soccerdata` library to scrape FBref for structured player and team statistics (goals, assists, xG, xAG, pass%, dribbles, tackles). Supports the five major European leagues via `LEAGUE_ALIASES` and normalises pandas MultiIndex columns to stable snake_case strings.
+Wraps the `soccerdata` library to scrape FBref for structured player and team statistics (goals, assists, xG, xAG, pass%, dribbles, tackles). Supports the five major European leagues via `LEAGUE_ALIASES` and normalises pandas MultiIndex columns to stable snake_case strings. Used as the last-resort fallback in `FallbackStatsRetriever`; may still return 403 errors in some environments.
+
+**`data_sources/statsbomb_retriever.py`**
+Retriever backed by the `statsbombpy` free event dataset. Mirrors the FBrefRetriever interface. Uses **exact-match season resolution only** — returns empty (falls to next layer) if the requested season is not in StatsBomb's free catalog, preventing stale historical data being returned for current-season queries. Aggregates per-player stats (goals, assists, xG, shots, tackles) from raw event rows. Cache TTL: 4 hours. Available leagues: La Liga 2004–2021, Champions League, World Cup, Bundesliga 2023/24.
+
+**`data_sources/firecrawl_retriever.py`**
+Retriever backed by the Firecrawl web scraping API (`FIRECRAWL_API_KEY`). Handles JavaScript rendering, anti-bot countermeasures, and proxy rotation automatically. Searches FBref/Sofascore for current-season player stats and BBC Sport/FBref for match logs. Parses clean markdown tables returned by the API with `_parse_markdown_table()` and maps columns to canonical stat keys via `_PLAYER_STAT_MAP`. Primary source for current-season data.
 
 **`data_sources/football_data_retriever.py`**
 Queries football-data.org REST API v4 for league standings with home/away splits, H2H records, squad details, and top scorers. Includes a built-in rate limiter (1s sleep, 10 req/min free tier) and a hard-coded team-name-to-ID lookup for major European clubs.
@@ -153,7 +166,7 @@ Full RAG implementation using Amazon OpenSearch Serverless with AWS SigV4 auth. 
 ## api/
 
 **`api/server.py`**
-Production FastAPI application with CORS, GZip, rate limiting, and lifespan-managed connections. Houses `ConnectionManager` (tracks WebSocket connections per `session_id`, broadcasts to all clients in a session) and `_periodic_commentary()` (background asyncio task generating commentary every 60 s). The video endpoint now follows a three-step path: full native clip, overlapping native-video windows on vLLM context overflow, then sampled-frame fallback, and returns `analysis_path` plus native-video status fields. Exposes 6 HTTP endpoints, an SSE stream (`GET /api/v1/events/stream`) that accepts a `match_session` query parameter, and a bidirectional WebSocket (`/ws/live`) that accepts `match_event`, `tactical_detection`, and `query` text frames in addition to binary audio.
+Production FastAPI application with CORS, GZip, rate limiting, and lifespan-managed connections. Houses `ConnectionManager` (tracks WebSocket connections per `session_id`, broadcasts to all clients in a session) and `_periodic_commentary()` (background asyncio task generating commentary every 60 s). After `init`, creates a `GameState(home_team, away_team)` per session. Every `match_event` and `tactical_detection` updates the game state and injects `game_state.to_context_string()` into the commentary seed; all broadcasts include `"gameState": game_state.to_dict()` so clients can render the live scoreline. The video endpoint follows a three-step path: full native clip, overlapping native-video windows on vLLM context overflow, then sampled-frame fallback, and returns `analysis_path` plus native-video status fields. Exposes 6 HTTP endpoints, an SSE stream (`GET /api/v1/events/stream`) and a bidirectional WebSocket (`/ws/live`) that accepts `match_event`, `tactical_detection`, and `query` text frames in addition to binary audio.
 
 ---
 

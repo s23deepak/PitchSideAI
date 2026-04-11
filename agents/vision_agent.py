@@ -293,6 +293,69 @@ class VisionAgent(BaseVisionAgent):
             self.logger.error("video_sequence_decode_error", error=str(exc))
             raise
 
+    async def analyze_chunked_frames(
+        self,
+        frames: List[bytes],
+        timestamps_ms: List[int] | None = None,
+        match_session: str | None = None,
+        chunk_description: str | None = None,
+    ) -> Dict[str, Any]:
+        """
+        Analyze a chunk of frames (e.g., 5-10 seconds of video) for live commentary.
+        Similar to analyze_video_sequence but optimized for streaming chunks.
+
+        Args:
+            frames: List of frame bytes in the chunk
+            timestamps_ms: Timestamps for each frame in milliseconds
+            match_session: Optional match session key for DynamoDB
+            chunk_description: Optional description of what this chunk represents
+
+        Returns:
+            Tactical analysis with chunk metadata
+        """
+        self.log_event("chunked_analysis_started", {
+            "frame_count": len(frames),
+            "chunk_description": chunk_description,
+        })
+
+        # Use existing video sequence analysis
+        result = await self.analyze_video_sequence(
+            frames,
+            timestamps_ms=timestamps_ms,
+            match_session=match_session,
+        )
+
+        # Add chunk-specific metadata
+        result["chunk_description"] = chunk_description or f"Chunk of {len(frames)} frames"
+        result["is_live_chunk"] = True
+
+        self.log_event("chunked_analysis_completed", {
+            "tactical_label": result.get("tactical_label"),
+            "confidence": result.get("confidence", 0.0),
+        })
+
+        return result
+
+    async def analyze_chunked_frames_b64(
+        self,
+        frames_b64: List[str],
+        timestamps_ms: List[int] | None = None,
+        match_session: str | None = None,
+        chunk_description: str | None = None,
+    ) -> Dict[str, Any]:
+        """Decode and analyze a chunk of base64-encoded frames."""
+        try:
+            frames = [base64.b64decode(frame_b64) for frame_b64 in frames_b64]
+            return await self.analyze_chunked_frames(
+                frames,
+                timestamps_ms=timestamps_ms,
+                match_session=match_session,
+                chunk_description=chunk_description,
+            )
+        except Exception as exc:
+            self.logger.error("chunked_frames_decode_error", error=str(exc))
+            raise
+
     async def analyze_video_clip_b64(
         self,
         video_b64: str,
