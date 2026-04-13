@@ -27,14 +27,14 @@ LOG_FILE = "logs/pitchside.log"
 
 # ── LLM Backend ───────────────────────────────────────────────────────────────
 # Options: "bedrock", "ollama", "openai", "vllm"
-LLM_BACKEND = "bedrock"
-VISION_LLM_BACKEND = ""
-COMMENTARY_NOTES_LLM_BACKEND = ""
+LLM_BACKEND = "ollama"
+VISION_LLM_BACKEND = "ollama"
+COMMENTARY_NOTES_LLM_BACKEND = "ollama"
 
 # ── Ollama (Local) ────────────────────────────────────────────────────────────
 OLLAMA_BASE_URL = "http://localhost:11434"
 OLLAMA_MODEL = "gemma2:9b"
-OLLAMA_VISION_MODEL = "llama3.2-vision"
+OLLAMA_VISION_MODEL = "llama3.2-vision:latest"
 OLLAMA_EMBED_MODEL = "nomic-embed-text"
 
 # ── OpenAI ────────────────────────────────────────────────────────────────────

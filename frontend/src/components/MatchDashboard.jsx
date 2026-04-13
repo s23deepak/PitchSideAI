@@ -1,9 +1,9 @@
-import { useState, useRef } from 'react'
+import { useState } from 'react'
 import PushToTalk from './PushToTalk'
-import TacticalOverlay from './TacticalOverlay'
 import CommentaryFeed from './CommentaryFeed'
 import EventFeed from './EventFeed'
 import CommentaryNotesViewer from './CommentaryNotesViewer'
+import LiveVideoPlayer from './LiveVideoPlayer'
 
 /* ── MatchDashboard — Live Match View ───────────────────────────────────────── */
 export default function MatchDashboard({
@@ -17,6 +17,11 @@ export default function MatchDashboard({
     liveCommentary,
     onSendMatchEvent,
     onSendTacticalDetection,
+    onGoBack,
+    onPrepareNotes,
+    buildingNotes,
+    buildStatus,
+    buildProgress,
 }) {
     const [showNotes, setShowNotes] = useState(true)
 
@@ -33,55 +38,77 @@ export default function MatchDashboard({
             {/* Dashboard Header */}
             <header className="dashboard-header">
                 <div className="dashboard-match-info">
+                    <button className="btn btn-secondary btn-sm" onClick={onGoBack}>
+                        ← Back
+                    </button>
                     <span className="team-name home">{homeTeam}</span>
                     <span className="vs-text">vs</span>
                     <span className="team-name away">{awayTeam}</span>
                 </div>
                 <div className="dashboard-actions">
                     <button
+                        className={`btn btn-primary btn-sm${buildingNotes ? ' loading' : ''}`}
+                        onClick={onPrepareNotes}
+                        disabled={buildingNotes}
+                        title={buildProgress || ''}
+                    >
+                        {buildingNotes ? `📋 ${buildProgress || 'Preparing...'}` : commentaryData ? '📋 Refresh Notes' : '📋 Prepare Notes'}
+                    </button>
+                    <button
                         className="btn btn-secondary btn-sm"
                         onClick={() => setShowNotes(!showNotes)}
+                        disabled={!commentaryData}
                     >
                         {showNotes ? '📝 Hide Notes' : '📝 Show Notes'}
                     </button>
                 </div>
             </header>
 
-            {/* Main Dashboard Grid */}
-            <div className="dashboard-grid">
-                {/* Left Column - Video & Pitch */}
-                <div className="dashboard-column main">
-                    {/* Push-to-Talk */}
-                    <PushToTalk
-                        matchReady={true}
-                        homeTeam={homeTeam}
-                        awayTeam={awayTeam}
-                        sport={sport}
-                    />
-
-                    {/* Tactical Overlay / Video Player */}
-                    <TacticalOverlay
-                        sport={sport}
-                        matchSession={matchSession}
-                        detection={detection}
-                        setDetection={setDetection}
-                        sendMatchEvent={handleSendMatchEvent}
-                        sendTacticalDetection={handleSendTacticalDetection}
-                    />
-
-                    {/* Commentary Notes (collapsible) */}
-                    {showNotes && commentaryData && (
-                        <CommentaryNotesViewer
-                            data={commentaryData}
-                            liveDetection={detection}
+            {/* Main Dashboard - Full Width Content */}
+            <div className="dashboard-full-width">
+                {/* Top Row - Push to Talk + Video Player */}
+                <div className="dashboard-row">
+                    <div className="compact-ptt">
+                        <PushToTalk
+                            matchReady={true}
+                            homeTeam={homeTeam}
+                            awayTeam={awayTeam}
+                            sport={sport}
                         />
+                    </div>
+
+                    {/* Live Video Player - Primary, Full Width */}
+                    <LiveVideoPlayer
+                        matchSession={matchSession}
+                        onChunkAnalyzed={setDetection}
+                        onCommentary={(msg) => {
+                            if (msg.type === 'commentary') {
+                                setLiveCommentary((prev) => [msg, ...prev].slice(0, 100))
+                            }
+                        }}
+                    />
+
+                    {/* Tactical Detection Card (when available) */}
+                    {detection && (
+                        <div className="tactical-detection-card full-width">
+                            <div className="detection-header">
+                                <span className="detection-label">Latest Analysis</span>
+                                <span className="detection-confidence">
+                                    {Math.round(detection.confidence * 100)}% confidence
+                                </span>
+                            </div>
+                            <div className="detection-value">{detection.tactical_label}</div>
+                            {detection.key_observation && (
+                                <div className="detection-observation">{detection.key_observation}</div>
+                            )}
+                        </div>
                     )}
                 </div>
 
-                {/* Right Column - Sidebar */}
-                <div className="dashboard-column sidebar">
+                {/* Bottom Row - Commentary + Events (side by side) */}
+                <div className="dashboard-bottom-row">
                     {/* Live Commentary Feed */}
-                    <div className="sidebar-section">
+                    <div className="bottom-panel">
                         <CommentaryFeed
                             messages={liveCommentary}
                             sendMatchEvent={handleSendMatchEvent}
@@ -89,10 +116,20 @@ export default function MatchDashboard({
                     </div>
 
                     {/* Event Feed */}
-                    <div className="sidebar-section">
+                    <div className="bottom-panel">
                         <EventFeed matchSession={matchSession} />
                     </div>
                 </div>
+
+                {/* Commentary Notes (collapsible, full width) */}
+                {showNotes && commentaryData && (
+                    <div className="notes-container full-width">
+                        <CommentaryNotesViewer
+                            data={commentaryData}
+                            liveDetection={detection}
+                        />
+                    </div>
+                )}
             </div>
         </div>
     )

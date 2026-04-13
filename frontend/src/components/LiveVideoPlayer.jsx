@@ -10,6 +10,8 @@ export default function LiveVideoPlayer({ matchSession, onChunkAnalyzed, onComme
     const [currentTime, setCurrentTime] = useState(0)
     const [duration, setDuration] = useState(0)
     const [framesSent, setFramesSent] = useState(0)
+    const [videoReady, setVideoReady] = useState(false)
+    const [wsReady, setWsReady] = useState(false)
     const [chunkInterval] = useState(10) // seconds
     const wsRef = useRef(null)
     const videoRef = useRef(null)
@@ -24,6 +26,7 @@ export default function LiveVideoPlayer({ matchSession, onChunkAnalyzed, onComme
         wsRef.current = ws
 
         ws.onopen = () => {
+            console.log('WebSocket connected')
             // Send init message
             ws.send(JSON.stringify({
                 type: 'init',
@@ -38,15 +41,21 @@ export default function LiveVideoPlayer({ matchSession, onChunkAnalyzed, onComme
 
         ws.onmessage = (e) => {
             if (typeof e.data === 'string') {
-                const msg = JSON.parse(e.data)
-                if (msg.type === 'ready') {
-                    console.log('Video streaming ready')
-                } else if (msg.type === 'chunk_analyzed') {
-                    onChunkAnalyzed?.(msg.result)
-                } else if (msg.type === 'commentary') {
-                    onCommentary?.(msg)
-                } else if (msg.type === 'error') {
-                    console.error('Streaming error:', msg.message)
+                try {
+                    const msg = JSON.parse(e.data)
+                    console.log('WS message:', msg.type)
+                    if (msg.type === 'ready') {
+                        setWsReady(true)
+                        console.log('Video streaming ready')
+                    } else if (msg.type === 'chunk_analyzed') {
+                        onChunkAnalyzed?.(msg.result)
+                    } else if (msg.type === 'commentary') {
+                        onCommentary?.(msg)
+                    } else if (msg.type === 'error') {
+                        console.error('Streaming error:', msg.message)
+                    }
+                } catch (err) {
+                    console.warn('Failed to parse WS message:', err)
                 }
             }
         }
@@ -54,11 +63,13 @@ export default function LiveVideoPlayer({ matchSession, onChunkAnalyzed, onComme
         ws.onerror = (err) => {
             console.error('WebSocket error:', err)
             setIsStreaming(false)
+            setWsReady(false)
         }
 
         ws.onclose = () => {
             console.log('WebSocket closed')
             wsRef.current = null
+            setWsReady(false)
         }
     }, [matchSession, chunkInterval, onChunkAnalyzed, onCommentary])
 
@@ -67,7 +78,10 @@ export default function LiveVideoPlayer({ matchSession, onChunkAnalyzed, onComme
         const file = e.target.files?.[0]
         if (!file) return
 
+        console.log('Video selected:', file.name)
         setVideoFile(file)
+        setVideoReady(false)
+
         const url = URL.createObjectURL(file)
         if (videoRef.current) {
             videoRef.current.src = url
@@ -77,21 +91,34 @@ export default function LiveVideoPlayer({ matchSession, onChunkAnalyzed, onComme
 
     // Start streaming
     const startStreaming = () => {
-        if (!videoRef.current || !videoFile) return
+        if (!videoRef.current || !videoFile) {
+            console.error('No video ready')
+            return
+        }
 
+        console.log('Starting streaming...')
         connectWebSocket()
         setIsStreaming(true)
         setIsPaused(false)
-        videoRef.current.play()
 
-        // Start frame capture
-        frameCaptureInterval.current = setInterval(captureFrame, 1000 / 3) // 30 FPS capture
+        // Wait for video to be ready and playing
+        videoRef.current.play().then(() => {
+            console.log('Video started playing')
+        }).catch(err => {
+            console.error('Video play error:', err)
+        })
+
+        // Start frame capture at 1 FPS (1 frame per second for 10-second chunks)
+        frameCaptureInterval.current = setInterval(captureFrame, 1000)
     }
 
     // Stop streaming
     const stopStreaming = () => {
+        console.log('Stopping streaming...')
         setIsStreaming(false)
         setIsPaused(false)
+        setWsReady(false)
+        setVideoReady(false)
 
         if (frameCaptureInterval.current) {
             clearInterval(frameCaptureInterval.current)
@@ -104,45 +131,64 @@ export default function LiveVideoPlayer({ matchSession, onChunkAnalyzed, onComme
 
         wsRef.current?.close()
         wsRef.current = null
+        chunkBuffer.current = []
     }
 
     // Capture frame from video
     const captureFrame = () => {
-        if (!videoRef.current || !canvasRef.current || isPaused) return
+        if (!videoRef.current || !canvasRef.current || isPaused || !videoReady) {
+            return
+        }
 
         const video = videoRef.current
         const canvas = canvasRef.current
         const ctx = canvas.getContext('2d')
 
-        // Set canvas size to match video
-        canvas.width = video.videoWidth || 640
-        canvas.height = video.videoHeight || 360
-
-        // Draw current frame
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-
-        // Convert to base64
-        const frame_b64 = canvas.toDataURL('image/jpeg', 0.7).split(',')[1]
-        const timestamp_ms = Math.floor(video.currentTime * 1000)
-
-        // Add to chunk buffer
-        chunkBuffer.current.push({ frame_b64, timestamp_ms })
-        setFramesSent(prev => prev + 1)
-
-        // Send chunk when buffer is full (every ~10 seconds at 3fps = 30 frames)
-        // But we'll send smaller chunks more frequently
-        if (chunkBuffer.current.length >= 12) {
-            sendChunk()
+        // Check if video has valid dimensions
+        if (!video.videoWidth || !video.videoHeight) {
+            console.warn('Video dimensions not ready')
+            return
         }
 
-        // Update current time
-        setCurrentTime(video.currentTime)
+        // Set canvas size to match video (scaled down for performance)
+        const scale = 0.5 // Scale down to 50%
+        canvas.width = Math.floor(video.videoWidth * scale)
+        canvas.height = Math.floor(video.videoHeight * scale)
+
+        try {
+            // Draw current frame
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+
+            // Convert to base64
+            const frame_b64 = canvas.toDataURL('image/jpeg', 0.7).split(',')[1]
+            const timestamp_ms = Math.floor(video.currentTime * 1000)
+
+            // Add to chunk buffer
+            chunkBuffer.current.push({ frame_b64, timestamp_ms })
+            setFramesSent(prev => prev + 1)
+
+            // Send chunk when buffer is full (12 frames = ~12 seconds at 1fps)
+            if (chunkBuffer.current.length >= 12) {
+                sendChunk()
+            }
+
+            // Update current time
+            setCurrentTime(video.currentTime)
+        } catch (err) {
+            console.error('Frame capture error:', err)
+        }
     }
 
     // Send chunk to server
     const sendChunk = () => {
-        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
+        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+            console.warn('WebSocket not ready, clearing buffer')
+            chunkBuffer.current = []
+            return
+        }
         if (chunkBuffer.current.length === 0) return
+
+        console.log('Sending chunk:', chunkBuffer.current.length, 'frames')
 
         const frames = chunkBuffer.current.map(item => item.frame_b64)
         const timestamps = chunkBuffer.current.map(item => item.timestamp_ms)
@@ -164,9 +210,15 @@ export default function LiveVideoPlayer({ matchSession, onChunkAnalyzed, onComme
         }
     }
 
+    // Handle video loaded
+    const handleVideoLoaded = () => {
+        console.log('Video loaded:', videoRef.current?.videoWidth, 'x', videoRef.current?.videoHeight)
+        setVideoReady(true)
+    }
+
     // Handle video end
     const handleVideoEnded = () => {
-        // Send final chunk
+        console.log('Video ended, sending final chunk')
         sendChunk()
         stopStreaming()
     }
@@ -217,6 +269,7 @@ export default function LiveVideoPlayer({ matchSession, onChunkAnalyzed, onComme
                 ref={videoRef}
                 onTimeUpdate={handleTimeUpdate}
                 onEnded={handleVideoEnded}
+                onLoadedData={handleVideoLoaded}
                 style={{ display: 'none' }}
             />
 
@@ -245,9 +298,10 @@ export default function LiveVideoPlayer({ matchSession, onChunkAnalyzed, onComme
                         <button
                             className="btn btn-primary start-streaming-btn"
                             onClick={startStreaming}
+                            disabled={!videoReady}
                         >
                             <span>🔴</span>
-                            Start Live Commentary
+                            {videoReady ? 'Start Live Commentary' : 'Loading video...'}
                         </button>
                     )}
                 </div>
@@ -292,14 +346,14 @@ export default function LiveVideoPlayer({ matchSession, onChunkAnalyzed, onComme
 
                     {/* Streaming Status */}
                     <div className="streaming-status">
-                        <div className={`status-indicator ${isStreaming ? 'streaming' : ''}`}>
+                        <div className={`status-indicator ${isStreaming && wsReady ? 'streaming' : ''}`}>
                             <div className="pulse-dot" />
                         </div>
                         <span className="status-text">
-                            {isPaused ? 'Paused' : 'Live'} • {framesSent} frames sent
+                            {isPaused ? 'Paused' : wsReady ? 'Live' : 'Connecting...'} • {framesSent} frames sent
                         </span>
                         <span className="chunk-info">
-                            Chunk size: {chunkBuffer.current.length}/12 frames
+                            Buffer: {chunkBuffer.current.length}/12 frames
                         </span>
                     </div>
                 </>

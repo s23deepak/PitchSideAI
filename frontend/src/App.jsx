@@ -3,8 +3,6 @@ import './index.css'
 import HomeScreen from './components/HomeScreen'
 import MatchDashboard from './components/MatchDashboard'
 import PushToTalk from './components/PushToTalk'
-import TacticalOverlay from './components/TacticalOverlay'
-import MatchNotes from './components/MatchNotes'
 import EventFeed from './components/EventFeed'
 import CommentaryNotesViewer from './components/CommentaryNotesViewer'
 import CommentaryFeed from './components/CommentaryFeed'
@@ -47,16 +45,14 @@ export default function App() {
     const wsRef = useRef(null)
     const sessionPromiseRef = useRef(null)
     const activeSessionKeyRef = useRef(null)
+    const abortControllerRef = useRef(null)
 
-    // Handle starting a new match
-    const handleStartMatch = async (home, away) => {
+    // Handle starting a new match — only transitions to dashboard, does NOT auto-trigger notes
+    const handleStartMatch = (home, away) => {
         setHomeTeam(home)
         setAwayTeam(away)
         setMatchSession(buildMatchSessionKey(home, away))
         setCurrentScreen('dashboard')
-
-        // Build commentary notes
-        await buildCommentaryNotes(home, away)
     }
 
     // Build commentary notes
@@ -67,6 +63,14 @@ export default function App() {
         setCommentaryData(null)
         setPreparationTime(0)
 
+        // Cancel any previous request
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort()
+        }
+
+        // Create new abort controller for this request
+        abortControllerRef.current = new AbortController()
+
         try {
             const res = await fetch(`${BACKEND}/api/v1/commentary/prepare-notes`, {
                 method: 'POST',
@@ -76,6 +80,7 @@ export default function App() {
                     away_team: away,
                     sport: 'soccer'
                 }),
+                signal: abortControllerRef.current.signal
             })
 
             if (!res.ok) {
@@ -117,9 +122,15 @@ export default function App() {
                 }
             }
         } catch (err) {
-            console.error('Commentary notes failed', err)
-            setBuildStatus('error')
-            setBuildProgress(err.message || 'Generation failed')
+            // Don't show error if request was aborted (user cancelled)
+            if (err.name === 'AbortError') {
+                console.log('Commentary preparation cancelled')
+                setBuildProgress('Cancelled')
+            } else {
+                console.error('Commentary notes failed', err)
+                setBuildStatus('error')
+                setBuildProgress(err.message || 'Generation failed')
+            }
         } finally {
             setBuildingNotes(false)
         }
@@ -205,7 +216,13 @@ export default function App() {
 
     // Cleanup on unmount
     useEffect(() => {
-        return () => wsRef.current?.close()
+        return () => {
+            // Cancel ongoing research request on unmount/refresh
+            if (abortControllerRef.current) {
+                abortControllerRef.current.abort()
+            }
+            wsRef.current?.close()
+        }
     }, [])
 
     // Send match event
@@ -243,6 +260,27 @@ export default function App() {
         return <HomeScreen onStartMatch={handleStartMatch} />
     }
 
+    // Handle go back to home
+    const handleGoBack = () => {
+        // Cancel ongoing research request
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort()
+        }
+        // Cleanup WebSocket
+        wsRef.current?.close()
+        wsRef.current = null
+        // Reset state
+        setCurrentScreen('home')
+        setMatchReady(false)
+        setLiveSessionReady(false)
+        setLiveCommentary([])
+        setDetection(null)
+        setCommentaryData(null)
+        setHomeTeam('')
+        setAwayTeam('')
+        setMatchSession(null)
+    }
+
     // Dashboard screen
     return (
         <div className="match-dashboard">
@@ -257,6 +295,11 @@ export default function App() {
                 liveCommentary={liveCommentary}
                 onSendMatchEvent={sendMatchEvent}
                 onSendTacticalDetection={sendTacticalDetection}
+                onGoBack={handleGoBack}
+                onPrepareNotes={() => buildCommentaryNotes(homeTeam, awayTeam)}
+                buildingNotes={buildingNotes}
+                buildStatus={buildStatus}
+                buildProgress={buildProgress}
             />
         </div>
     )

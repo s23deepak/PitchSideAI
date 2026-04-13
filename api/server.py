@@ -9,7 +9,7 @@ import asyncio
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Optional, Any
+from typing import Optional, Any, List, Dict
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -289,10 +289,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Shared agent instances
+# Shared agent instances (football/soccer only)
 vision_agents: dict[str, VisionAgent] = {
     SportType.SOCCER.value: VisionAgent(sport=SportType.SOCCER.value),
-    SportType.CRICKET.value: VisionAgent(sport=SportType.CRICKET.value),
 }
 research_agent = ResearchAgent()
 orchestrator = get_orchestrator()
@@ -935,9 +934,12 @@ async def video_stream_ws(websocket: WebSocket):
                     timestamps_ms = data.get("timestamps_ms", [])
 
                     if frames_b64:
+                        # Generate timestamps if not provided
+                        if not timestamps_ms or len(timestamps_ms) != len(frames_b64):
+                            timestamps_ms = [i * 1000 for i in range(len(frames_b64))]
                         await _process_video_chunk(
                             websocket, vision_agent, live_agent,
-                            [{"frame_b64": f, "timestamp_ms": ts} for f, ts in zip(frames_b64, timestamps_ms or range(len(frames_b64)) * 1000)],
+                            [{"frame_b64": f, "timestamp_ms": ts} for f, ts in zip(frames_b64, timestamps_ms)],
                             match_session, game_state,
                         )
 
@@ -1040,7 +1042,7 @@ async def _process_video_chunk(
 # ── Commentary Notes Endpoint ──────────────────────────────────────────────────
 
 @app.post("/api/v1/commentary/prepare-notes", dependencies=[Depends(rate_limit_check)])
-async def prepare_commentary_notes(req: CommentaryNotesRequest) -> StreamingResponse:
+async def prepare_commentary_notes(req: CommentaryNotesRequest, request: Request) -> StreamingResponse:
     """
     Prepare professional Peter Drury-style commentary notes.
     Streams SSE progress events, then the final result as the last event.
@@ -1090,20 +1092,36 @@ async def prepare_commentary_notes(req: CommentaryNotesRequest) -> StreamingResp
 
             task = asyncio.create_task(_run())
 
-            while True:
-                item = await progress_queue.get()
-                if isinstance(item, tuple):
-                    tag, payload = item
-                    if tag == "__done__":
-                        completed_state = payload
-                        break
-                    elif tag == "__error__":
-                        yield f"data: {_json.dumps({'phase': 'error', 'message': str(payload), 'done': True})}\n\n"
+            try:
+                while True:
+                    if await request.is_disconnected():
+                        logger.info("commentary_notes_client_disconnected")
                         return
-                else:
-                    yield f"data: {_json.dumps(item)}\n\n"
 
-            await task  # ensure cleanup
+                    try:
+                        item = await asyncio.wait_for(progress_queue.get(), timeout=1.0)
+                    except asyncio.TimeoutError:
+                        continue  # re-check disconnect
+
+                    if isinstance(item, tuple):
+                        tag, payload = item
+                        if tag == "__done__":
+                            completed_state = payload
+                            break
+                        elif tag == "__error__":
+                            yield f"data: {_json.dumps({'phase': 'error', 'message': str(payload), 'done': True})}\n\n"
+                            return
+                    else:
+                        yield f"data: {_json.dumps(item)}\n\n"
+            finally:
+                if not task.done():
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        logger.info("commentary_notes_workflow_cancelled")
+
+            await task  # ensure cleanup (already done if cancelled)
 
             duration_ms = (completed_state.end_time - completed_state.start_time).total_seconds() * 1000 if completed_state.end_time else 0
 
