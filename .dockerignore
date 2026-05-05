@@ -1,0 +1,82 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info
+.eggs
+*.egg
+.mypy_cache
+.pytest_cache
+.ruff_cache
+.coverage
+htmlcov
+.tox
+.nox
+
+# Virtual environments
+.venv
+venv
+ENV
+env
+
+# IDE & Editors
+.vscode
+.idea
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment files (secrets)
+.env
+.env.local
+.env.*.local
+credentials.json
+secrets.json
+*.pem
+*.key
+
+# Node modules (frontend has its own)
+node_modules
+frontend/node_modules
+
+# Build artifacts
+frontend/dist
+frontend/build
+*.log
+
+# BMAD artifacts (not needed in production)
+_bmad/
+_bmad-output/
+.claude/
+.context/
+
+# Documentation
+*.md
+!README.md
+docs/
+
+# Test files
+tests/
+*_test.py
+test_*.py
+
+# Docker files (don't include Dockerfiles in build)
+Dockerfile*
+.dockerignore
+
+# Logs and data
+logs/
+data/
+temp/
+*.db
+*.sqlite3
+
+# AWS
+.aws/

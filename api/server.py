@@ -14,8 +14,11 @@ from typing import Optional, Any, List, Dict
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, HTMLResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
 from pydantic import BaseModel, Field
+import os
 import structlog
 
 from config import AWS_REGION, PORT, LOG_LEVEL
@@ -398,13 +401,112 @@ app = FastAPI(
 
 # Add middleware
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+# Fix #1 & #2: CORS with safe JSON parsing and origin validation
+def _parse_allowed_origins() -> list:
+    """Parse ALLOWED_ORIGINS env var with validation and graceful fallback."""
+    origins_env = os.getenv("ALLOWED_ORIGINS") or '["http://localhost:5173", "http://localhost:3000"]'
+    try:
+        allowed = json.loads(origins_env)
+        # Validate: must be non-empty list of strings starting with http:// or https://
+        if not isinstance(allowed, list) or not allowed:
+            logger.warning("ALLOWED_ORIGINS invalid type or empty, using defaults")
+            return ["http://localhost:5173", "http://localhost:3000"]
+        if not all(isinstance(o, str) and o.startswith(("http://", "https://")) for o in allowed):
+            logger.warning("ALLOWED_ORIGINS contains invalid origins, using defaults")
+            return ["http://localhost:5173", "http://localhost:3000"]
+        return allowed
+    except json.JSONDecodeError as exc:
+        logger.warning("ALLOWED_ORIGINS JSON parse failed", error=str(exc), using_defaults=True)
+        return ["http://localhost:5173", "http://localhost:3000"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],  # Production: use env var
+    allow_origins=_parse_allowed_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Serve static frontend files (for Docker/production deployment)
+frontend_dist = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend", "dist")
+frontend_assets = os.path.join(frontend_dist, "assets")
+index_path = os.path.join(frontend_dist, "index.html")
+
+# Fix #3: Validate directories exist BEFORE any path operations
+frontend_dist_exists = os.path.isdir(frontend_dist)
+frontend_assets_exists = os.path.isdir(frontend_assets)
+
+if frontend_dist_exists and frontend_assets_exists:
+    # Fix #4: Path validation BEFORE mount (not after) with OSError handling
+    dist_path_resolved = None
+    assets_path_resolved = None
+    path_validation_failed = False
+
+    try:
+        dist_path_resolved = Path(frontend_dist).resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        logger.error("frontend_dist_path_resolve_failed", path=frontend_dist, error=str(exc))
+        path_validation_failed = True
+
+    if not path_validation_failed:
+        try:
+            assets_path_resolved = Path(frontend_assets).resolve(strict=True)
+            # Validate assets is within dist (defense in depth)
+            assets_path_resolved.relative_to(dist_path_resolved)
+        except (OSError, RuntimeError, ValueError) as exc:
+            logger.error("assets_path_validation_failed", path=frontend_assets, error=str(exc))
+            path_validation_failed = True
+
+    # Only mount if path validation passed
+    if not path_validation_failed and assets_path_resolved:
+        app.mount("/assets", StaticFiles(directory=str(assets_path_resolved)), name="assets")
+        logger.info("static_files_mounted", path=str(assets_path_resolved))
+
+    @app.get("/")
+    async def serve_index():
+        """Serve React app index.html for SPA routing."""
+        # Fix #5: Race condition guard with proper exception handling
+        try:
+            index_resolved = Path(index_path).resolve(strict=True)
+            # Path traversal prevention - guard against None (Patch #1)
+            if dist_path_resolved:
+                index_resolved.relative_to(dist_path_resolved)
+            # Existence check (re-verify after resolve to catch TOCTOU)
+            if index_resolved.exists():
+                return FileResponse(str(index_resolved))
+        except (OSError, RuntimeError) as exc:
+            logger.error("index_path_error", error=str(exc))
+        except ValueError as exc:
+            logger.warning("index_path_traversal_blocked", path=str(index_resolved) if 'index_resolved' in dir() else index_path)
+        except Exception as exc:
+            logger.error("index_serve_error", error=str(exc))
+
+        # Graceful degradation: return error page instead of raw JSON error
+        return HTMLResponse(
+            content="""<!DOCTYPE html><html><head><title>PitchAI - Building</title></head>
+            <body style="background:#020617;color:#f1f5f9;font-family:system-ui;padding:2rem;">
+            <h1>PitchAI is building...</h1>
+            <p>The frontend is being compiled. Please refresh in a few seconds.</p>
+            <p style="color:#94a3b8;margin-top:2rem;">If this persists, check server logs or run: <code>npm run build</code> in frontend/</p>
+            </body></html>""",
+            status_code=503,
+        )
+else:
+    logger.info("static_files_not_mounted", reason="frontend_dist_missing", frontend_dist=frontend_dist)
+
+    @app.get("/")
+    async def serve_index():
+        """Return API-only mode notice."""
+        return HTMLResponse(
+            content="""<!DOCTYPE html><html><head><title>PitchAI - API Mode</title></head>
+            <body style="background:#020617;color:#f1f5f9;font-family:system-ui;padding:2rem;">
+            <h1>PitchAI API Server</h1>
+            <p>Frontend not built. Run <code>npm run build</code> in frontend/ directory.</p>
+            <p style="color:#94a3b8;margin-top:2rem;">API endpoints available at /docs</p>
+            </body></html>""",
+            status_code=503,
+        )
 
 # Shared agent instances (football/soccer only)
 vision_agents: dict[str, VisionAgent] = {

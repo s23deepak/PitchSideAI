@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
+import { BrowserRouter, Routes, Route, useNavigate } from 'react-router-dom'
 import './index.css'
 import HomeScreen from './components/HomeScreen'
 import MatchDashboard from './components/MatchDashboard'
@@ -7,6 +8,8 @@ import EventFeed from './components/EventFeed'
 import CommentaryNotesViewer from './components/CommentaryNotesViewer'
 import CommentaryFeed from './components/CommentaryFeed'
 import LiveVideoPlayer from './components/LiveVideoPlayer'
+import LandingPage from './pages/LandingPage'
+import VideoPage from './pages/VideoPage'
 
 const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
 
@@ -21,7 +24,9 @@ function buildMatchSessionKey(homeTeam, awayTeam, sport = 'soccer') {
     return `${slugify(sport)}#${slugify(homeTeam)}#vs#${slugify(awayTeam)}`
 }
 
-export default function App() {
+// Inner app component that has access to router hooks
+function AppContent() {
+    const navigate = useNavigate()
     // Screen state
     const [currentScreen, setCurrentScreen] = useState('home') // 'home' | 'dashboard'
 
@@ -53,6 +58,7 @@ export default function App() {
         setAwayTeam(away)
         setMatchSession(buildMatchSessionKey(home, away))
         setCurrentScreen('dashboard')
+        navigate('/dashboard')
     }
 
     // Build commentary notes
@@ -387,5 +393,18 @@ export default function App() {
                 buildProgress={buildProgress}
             />
         </div>
+    )
+}
+
+// Main App component with routing
+export default function App() {
+    return (
+        <BrowserRouter>
+            <Routes>
+                <Route path="/" element={<LandingPage />} />
+                <Route path="/watch" element={<VideoPage />} />
+                <Route path="/dashboard" element={<AppContent />} />
+            </Routes>
+        </BrowserRouter>
     )
 }

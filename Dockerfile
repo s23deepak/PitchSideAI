@@ -1,23 +1,22 @@
-# Build stage
-FROM python:3.11-slim as builder
+# Multi-stage Docker build for Hugging Face Spaces
+# Stage 1: Frontend build
+FROM node:20-alpine AS frontend
 
-WORKDIR /build
+WORKDIR /app/frontend
 
-# Install build dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
+# Copy package files first for better caching
+COPY frontend/package*.json ./
 
-# Copy requirements
-COPY requirements.txt .
+# Install dependencies
+RUN npm ci
 
-# Create wheels
-RUN pip install --no-cache-dir --user \
-    --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir --user -r requirements.txt
+# Copy frontend source
+COPY frontend/ ./
 
+# Build production bundle
+RUN npm run build
 
-# Production stage
+# Stage 2: Backend production
 FROM python:3.11-slim
 
 WORKDIR /app
@@ -33,27 +32,37 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy Python dependencies from builder
-COPY --from=builder /root/.local /root/.local
+# Copy requirements and install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Set PATH
-ENV PATH=/root/.local/bin:$PATH
+# Copy built frontend from Stage 1
+COPY --from=frontend /app/frontend/dist ./frontend/dist
+
+# Copy backend directories
+COPY agents/ ./agents/
+COPY api/ ./api/
+COPY config/ ./config/
+COPY core/ ./core/
+COPY data_sources/ ./data_sources/
+COPY models/ ./models/
+COPY orchestration/ ./orchestration/
+COPY rag/ ./rag/
+COPY streaming/ ./streaming/
+COPY tools/ ./tools/
+COPY workflows/ ./workflows/
+COPY config.py .
+
+# Set environment variables
 ENV PYTHONUNBUFFERED=1
 ENV PORT=8080
-
-# Copy application
-COPY . .
-
-# Create non-root user
-RUN useradd -m -u 1000 app && chown -R app:app /app
-USER app
 
 # Expose port
 EXPOSE 8080
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+# Health check (60s start-period for model warm-up)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
-# Run backend
+# Run FastAPI server
 CMD ["python", "-m", "uvicorn", "api.server:app", "--host", "0.0.0.0", "--port", "8080"]

@@ -1,4 +1,4 @@
-# generated: 2026-05-04
+# generated: 2026-05-05
 # last_updated: 2026-05-05
 # project: PitchAI
 # project_key: NOKEY
@@ -34,8 +34,8 @@
 # - Developer typically creates next story after previous one is 'done' to incorporate learnings
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
-generated: 2026-05-04
-last_updated: 2026-05-05
+generated: 2026-05-05
+last_updated: 2026-05-05  # Re-review patches applied
 project: PitchAI
 project_key: NOKEY
 tracking_system: file-system
@@ -53,7 +53,7 @@ development_status:
   epic-1-retrospective: optional
 
   # Epic 2: Fan Q&A — Ask & Understand
-  epic-2: in-progress
+  epic-2: done
   2-1-voice-input-micbutton-stt: done
   2-2-qa-backend-answer-generation: done
   2-3-split-screen-temporal-navigation: done
@@ -61,17 +61,31 @@ development_status:
   epic-2-retrospective: optional
 
   # Epic 3: Commentator Dashboard & Personalization
-  epic-3: backlog
-  3-1-teleprompter-static-notes-display: backlog
-  3-2-vision-synced-teleprompter-highlighting: backlog
-  3-3-commentary-settings: backlog
-  3-4-language-toggle-translation: backlog
+  epic-3: done
+  3-1-teleprompter-static-notes-display: done
+  3-2-vision-synced-teleprompter-highlighting: done
+  3-3-commentary-settings: done
+  3-4-language-toggle-translation: done
   epic-3-retrospective: optional
 
   # Epic 4: Deployment, Polish & Community Readiness
-  epic-4: backlog
-  4-1-docker-build-hf-space-deployment: backlog
-  4-2-self-guided-demo-mode-landing-page: backlog
-  4-3-design-tokens-accessibility-visual-polish: backlog
-  4-4-latency-fallback-cross-browser-validation: backlog
+  epic-4: in-progress
+  4-1-docker-build-hf-space-deployment: done
+  4-2-self-guided-demo-mode-landing-page: done
+  4-3-design-tokens-accessibility-visual-polish: done
+  4-4-latency-fallback-cross-browser-validation: review
   epic-4-retrospective: optional
+
+# Story 4.2 created: 2026-05-05 via bmad-create-story
+
+# PARALLELIZATION STRATEGY FOR EPIC 4:
+# ====================================
+# Wave 1 (Parallel - Can start now):
+#   - 4-1: Docker build + deployment script (infrastructure, no dependencies)
+#   - 4-3: Design tokens, accessibility, visual polish (frontend CSS, no dependencies)
+#
+# Wave 2 (After Wave 1):
+#   - 4-2: Self-guided demo mode (requires 4.1 deployed to test visitor experience)
+#
+# Wave 3 (Final - Must run last):
+#   - 4-4: Latency/fallback validation (requires all stories deployed to measure)
