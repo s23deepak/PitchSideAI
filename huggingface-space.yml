@@ -1,0 +1,16 @@
+# HuggingFace Space Configuration for AMD Developer Hackathon
+# Deploy with: huggingface-cli upload --repo-type space lablab-ai-amd-developer-hackathon/pitchai-streaming
+
+title: PitchAI — Real-Time Football Commentary with StreamingVLM
+emoji: 🏃
+colorFrom: blue
+colorTo: green
+sdk: docker
+app_port: 8080
+pinned: true
+license: mit
+
+# Environment variables set in HF Space settings (secrets):
+# - AMD_DEV_CLOUD: true
+# - HF_TOKEN: your-hf-token
+# - API_SPORTS_KEY: your-api-sports-key

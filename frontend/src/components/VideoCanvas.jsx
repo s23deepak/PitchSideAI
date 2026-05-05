@@ -1,0 +1,684 @@
+import { useState, useRef, useEffect, useCallback } from 'react'
+
+const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
+
+/**
+ * VideoCanvas — Fan Lens video player with tactical overlays.
+ *
+ * Renders video from camera or file with SVG overlays for:
+ * - Player position dots (home=blue, away=red)
+ * - Ball position marker
+ * - Tactical label badge
+ * - Connection state indicator
+ * - Trivia card animations
+ *
+ * Connects to existing /ws/live WebSocket (not separate connection).
+ */
+export default function VideoCanvas({
+    matchSession,
+    homeTeam = 'Home',
+    awayTeam = 'Away',
+    sport = 'soccer',
+    onTacticalDetection,
+    onCommentary,
+}) {
+    // Streaming state
+    const [isStreaming, setIsStreaming] = useState(false)
+    const [isPaused, setIsPaused] = useState(false)
+    const [videoFile, setVideoFile] = useState(null)
+    const [currentTime, setCurrentTime] = useState(0)
+    const [duration, setDuration] = useState(0)
+    const [framesSent, setFramesSent] = useState(0)
+    const [videoReady, setVideoReady] = useState(false)
+    const [wsReady, setWsReady] = useState(false)
+    const [connectionState, setConnectionState] = useState('disconnected') // 'connected' | 'reconnecting' | 'disconnected'
+
+    // Detection/overlay state
+    const [currentDetection, setCurrentDetection] = useState(null)
+    const [overlayVisible, setOverlayVisible] = useState(true)
+    const [triviaCard, setTriviaCard] = useState(null)
+
+    // Backend config
+    const [backend, setBackend] = useState('vllm')
+    const [chunkInterval, setChunkInterval] = useState(5) // seconds
+    const [targetFps, setTargetFps] = useState(8)
+
+    const wsRef = useRef(null)
+    const videoRef = useRef(null)
+    const canvasRef = useRef(null)
+    const captureInterval = useRef(null)
+    const overlayTimeout = useRef(null)
+
+    // Connect to WebSocket
+    const connectWebSocket = useCallback(() => {
+        const wsUrl = BACKEND.replace(/^http/, 'ws') + '/ws/live'
+        const ws = new WebSocket(wsUrl)
+        wsRef.current = ws
+
+        setConnectionState('reconnecting')
+
+        ws.onopen = () => {
+            ws.send(JSON.stringify({
+                type: 'init',
+                home_team: homeTeam,
+                away_team: awayTeam,
+                match_session: matchSession,
+                sport: sport,
+            }))
+            setConnectionState('connected')
+            setWsReady(true)
+        }
+
+        ws.onmessage = (e) => {
+            if (typeof e.data !== 'string') return
+            try {
+                const msg = JSON.parse(e.data)
+
+                switch (msg.type) {
+                    case 'ready':
+                        setWsReady(true)
+                        setConnectionState('connected')
+                        break
+
+                    case 'tactical_detection':
+                        setCurrentDetection(msg.analysis || msg)
+                        setOverlayVisible(true)
+                        // Auto-hide overlay after 3s
+                        if (overlayTimeout.current) clearTimeout(overlayTimeout.current)
+                        overlayTimeout.current = setTimeout(() => {
+                            setOverlayVisible(false)
+                        }, 3000)
+                        // Forward to parent if callback provided
+                        if (onTacticalDetection && msg.analysis?.confidence > 0.6) {
+                            onTacticalDetection(msg.analysis)
+                        }
+                        break
+
+                    case 'commentary':
+                        onCommentary?.(msg)
+                        break
+
+                    case 'trivia_card':
+                        // Show trivia card with confidence-based timing
+                        const displayDuration = msg.confidence >= 0.8 ? 5000 : 3000
+                        setTriviaCard({
+                            text: msg.text,
+                            source: msg.source,
+                            confidence: msg.confidence,
+                            fadeInMs: msg.fade_in_ms || 400,
+                            fadeOutMs: msg.fade_out_ms || 400,
+                        })
+                        // Auto-hide after display duration
+                        setTimeout(() => {
+                            setTriviaCard(null)
+                        }, displayDuration)
+                        break
+
+                    case 'error':
+                        console.error('VideoCanvas error:', msg.message)
+                        setConnectionState('disconnected')
+                        break
+
+                    case 'ping':
+                        // Heartbeat
+                        break
+                }
+            } catch (err) {
+                console.warn('WS parse error:', err)
+            }
+        }
+
+        ws.onerror = (err) => {
+            console.error('WebSocket error:', err)
+            setConnectionState('disconnected')
+            setIsStreaming(false)
+            setWsReady(false)
+        }
+
+        ws.onclose = () => {
+            wsRef.current = null
+            setWsReady(false)
+            setConnectionState('disconnected')
+        }
+    }, [homeTeam, awayTeam, matchSession, sport, onTacticalDetection, onCommentary])
+
+    // Frame capture at target FPS
+    const captureLoop = useCallback(() => {
+        if (!videoRef.current || !canvasRef.current || isPaused || !videoReady) return
+
+        const video = videoRef.current
+        const canvas = canvasRef.current
+        const ctx = canvas.getContext('2d')
+
+        if (!video.videoWidth || !video.videoHeight) return
+
+        // Scale down for performance
+        const scale = 0.5
+        canvas.width = Math.floor(video.videoWidth * scale)
+        canvas.height = Math.floor(video.videoHeight * scale)
+
+        try {
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+            const frame_b64 = canvas.toDataURL('image/jpeg', 0.7).split(',')[1]
+            const timestamp_ms = Math.floor(video.currentTime * 1000)
+
+            if (wsRef.current?.readyState === WebSocket.OPEN) {
+                wsRef.current.send(JSON.stringify({
+                    type: 'frame',
+                    frame_b64,
+                    timestamp_ms,
+                    keyframe: framesSent % Math.round(targetFps) === 0,
+                }))
+                setFramesSent(f => f + 1)
+            }
+        } catch (err) {
+            console.error('Frame capture error:', err)
+        }
+    }, [isPaused, videoReady, targetFps, framesSent])
+
+    const handleVideoSelect = (e) => {
+        const file = e.target.files?.[0]
+        if (!file) return
+        setVideoFile(file)
+        setVideoReady(false)
+
+        const url = URL.createObjectURL(file)
+        if (videoRef.current) {
+            videoRef.current.src = url
+            videoRef.current.load()
+        }
+    }
+
+    const startStreaming = () => {
+        if (!videoRef.current || !videoFile) return
+
+        connectWebSocket()
+        setIsStreaming(true)
+        setIsPaused(false)
+
+        videoRef.current.play().catch(err => console.error('Play error:', err))
+
+        const intervalMs = Math.round(1000 / targetFps)
+        captureInterval.current = setInterval(captureLoop, intervalMs)
+    }
+
+    const stopStreaming = () => {
+        setIsStreaming(false)
+        setIsPaused(false)
+        setWsReady(false)
+        setVideoReady(false)
+        setConnectionState('disconnected')
+
+        if (captureInterval.current) {
+            clearInterval(captureInterval.current)
+            captureInterval.current = null
+        }
+        if (overlayTimeout.current) clearTimeout(overlayTimeout.current)
+        if (videoRef.current) videoRef.current.pause()
+        wsRef.current?.close()
+        wsRef.current = null
+    }
+
+    const togglePause = () => {
+        if (!videoRef.current) return
+        if (isPaused) {
+            videoRef.current.play()
+            setIsPaused(false)
+        } else {
+            videoRef.current.pause()
+            setIsPaused(true)
+        }
+    }
+
+    useEffect(() => {
+        return () => {
+            if (captureInterval.current) clearInterval(captureInterval.current)
+            if (overlayTimeout.current) clearTimeout(overlayTimeout.current)
+            if (videoRef.current?.src) URL.revokeObjectURL(videoRef.current.src)
+            wsRef.current?.close()
+        }
+    }, [])
+
+    const formatTime = (seconds) => {
+        const mins = Math.floor(seconds / 60)
+        const secs = Math.floor(seconds % 60)
+        return `${mins}:${secs.toString().padStart(2, '0')}`
+    }
+
+    // Render SVG overlays
+    const renderOverlays = () => {
+        if (!currentDetection || !overlayVisible) return null
+
+        const { tactical_label, confidence, players = [], ball = null } = currentDetection
+        const opacity = overlayVisible ? 1 : 0
+
+        // Icon mapping for tactical labels
+        const ICON_MAP = {
+            'Goal': '⚽',
+            'High Press': '⬆️',
+            'Low Block': '🛡️',
+            'Counter Attack': '⚡',
+            'Build-Up Play': '🔄',
+            'Set Piece': '🎯',
+            'Transition': '↔️',
+            'Normal Play': '⚽',
+        }
+
+        return (
+            <svg
+                className="overlay-svg"
+                viewBox="0 0 100 100"
+                style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    height: '100%',
+                    pointerEvents: 'none',
+                    opacity,
+                    transition: 'opacity 200ms ease-in-out',
+                }}
+            >
+                {/* Tactical label badge */}
+                <g transform="translate(5, 5)">
+                    <rect
+                        x="0"
+                        y="0"
+                        width="25"
+                        height="8"
+                        rx="2"
+                        fill="rgba(15, 23, 42, 0.85)"
+                        stroke="rgba(255, 255, 255, 0.3)"
+                        strokeWidth="0.5"
+                    />
+                    <text
+                        x="2"
+                        y="5.5"
+                        fontSize="4"
+                        fill="white"
+                        fontFamily="Inter, sans-serif"
+                        fontWeight="600"
+                    >
+                        {ICON_MAP[tactical_label] || '⚽'} {tactical_label}
+                    </text>
+                </g>
+
+                {/* Player dots - home team (blue) */}
+                {players.filter(p => p.team === 'home').map((player, i) => (
+                    <circle
+                        key={`home-${i}`}
+                        cx={player.x * 100}
+                        cy={player.y * 100}
+                        r="2"
+                        fill="rgba(79, 156, 249, 0.85)"
+                        stroke="white"
+                        strokeWidth="0.5"
+                    />
+                ))}
+
+                {/* Player dots - away team (red) */}
+                {players.filter(p => p.team === 'away').map((player, i) => (
+                    <circle
+                        key={`away-${i}`}
+                        cx={player.x * 100}
+                        cy={player.y * 100}
+                        r="2"
+                        fill="rgba(248, 113, 113, 0.85)"
+                        stroke="white"
+                        strokeWidth="0.5"
+                    />
+                ))}
+
+                {/* Ball position */}
+                {ball && (
+                    <circle
+                        cx={ball.x * 100}
+                        cy={ball.y * 100}
+                        r="1.5"
+                        fill="white"
+                        opacity="0.9"
+                    />
+                )}
+            </svg>
+        )
+    }
+
+    // Connection state indicator
+    const renderConnectionIndicator = () => {
+        const stateConfig = {
+            connected: { color: '#22c55e', label: 'Live', pulse: true },
+            reconnecting: { color: '#eab308', label: 'Reconnecting...', pulse: true },
+            disconnected: { color: '#ef4444', label: 'Disconnected', pulse: false },
+        }
+
+        const config = stateConfig[connectionState] || stateConfig.disconnected
+
+        return (
+            <div
+                className="connection-indicator"
+                style={{
+                    position: 'absolute',
+                    top: 12,
+                    right: 12,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '6px 10px',
+                    background: 'rgba(15, 23, 42, 0.85)',
+                    borderRadius: 20,
+                    fontSize: 11,
+                    color: 'white',
+                    zIndex: 20,
+                    cursor: 'default',
+                }}
+                title={`${config.label} • ${backend.toUpperCase()}`}
+            >
+                <div
+                    style={{
+                        width: 8,
+                        height: 8,
+                        borderRadius: '50%',
+                        background: config.color,
+                        animation: config.pulse ? 'pulse 1.5s infinite' : 'none',
+                    }}
+                />
+                <span style={{ fontWeight: 500 }}>{config.label}</span>
+            </div>
+        )
+    }
+
+    return (
+        <div className="video-canvas" style={{
+            position: 'relative',
+            background: 'var(--surface, #1e293b)',
+            borderRadius: 12,
+            overflow: 'hidden',
+            border: '1px solid var(--border-color, #334155)',
+        }}>
+            {/* Header */}
+            <div style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                padding: '10px 16px',
+                background: 'linear-gradient(180deg, rgba(15,23,42,0.9) 0%, transparent 100%)',
+                zIndex: 10,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+            }}>
+                <div>
+                    <h3 style={{ margin: 0, fontSize: 14, color: 'white' }}>
+                        {homeTeam} vs {awayTeam}
+                    </h3>
+                    <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.7)' }}>
+                        Fan Lens • {sport}
+                    </span>
+                </div>
+                {framesSent > 0 && (
+                    <span style={{
+                        background: 'rgba(59, 130, 246, 0.2)',
+                        color: '#60a5fa',
+                        padding: '2px 8px',
+                        borderRadius: 12,
+                        fontSize: 10,
+                    }}>
+                        {framesSent} frames
+                    </span>
+                )}
+            </div>
+
+            {/* Connection indicator */}
+            {renderConnectionIndicator()}
+
+            {/* Video + Canvas layer */}
+            <div style={{ position: 'relative', width: '100%', aspectRatio: '16/9', background: '#000' }}>
+                <video
+                    ref={videoRef}
+                    onTimeUpdate={() => videoRef.current && setCurrentTime(videoRef.current.currentTime)}
+                    onEnded={stopStreaming}
+                    onLoadedData={() => {
+                        setVideoReady(true)
+                        if (videoRef.current) setDuration(videoRef.current.duration || 0)
+                    }}
+                    style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        width: '100%',
+                        height: '100%',
+                        objectFit: 'contain',
+                    }}
+                />
+                <canvas
+                    ref={canvasRef}
+                    style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        width: '100%',
+                        height: '100%',
+                        opacity: isStreaming ? 1 : 0,
+                        transition: 'opacity 300ms',
+                    }}
+                />
+                {/* SVG Overlays */}
+                {renderOverlays()}
+            </div>
+
+            {/* Trivia Card */}
+            {triviaCard && (
+                <div
+                    className="trivia-card"
+                    style={{
+                        position: 'absolute',
+                        bottom: 80,
+                        left: '50%',
+                        transform: 'translateX(-50%)',
+                        width: 'min(90%, 400px)',
+                        background: 'linear-gradient(135deg, rgba(15,23,42,0.95) 0%, rgba(30,41,59,0.9) 100%)',
+                        borderRadius: 12,
+                        padding: 16,
+                        border: '1px solid rgba(148,163,184,0.2)',
+                        boxShadow: '0 10px 40px rgba(0,0,0,0.4)',
+                        zIndex: 30,
+                        animation: `slideUp ${triviaCard.fadeInMs}ms ease-out`,
+                    }}
+                >
+                    <div style={{ fontSize: 13, color: '#e2e8f0', lineHeight: 1.5 }}>
+                        {triviaCard.text}
+                    </div>
+                    {triviaCard.source && (
+                        <div style={{
+                            marginTop: 8,
+                            fontSize: 10,
+                            color: 'rgba(255,255,255,0.6)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 4,
+                        }}>
+                            <span style={{
+                                background: 'rgba(59, 130, 246, 0.2)',
+                                padding: '1px 6px',
+                                borderRadius: 4,
+                                color: '#60a5fa',
+                            }}>
+                                {triviaCard.source}
+                            </span>
+                            {triviaCard.confidence >= 0.8 && (
+                                <span>• High confidence</span>
+                            )}
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* Controls */}
+            {!isStreaming ? (
+                <div style={{ padding: 16 }}>
+                    <label style={{
+                        display: 'block',
+                        border: '2px dashed var(--border-color, #334155)',
+                        borderRadius: 10,
+                        padding: 24,
+                        textAlign: 'center',
+                        cursor: 'pointer',
+                        transition: 'border-color 200ms',
+                    }}
+                    onMouseOver={(e) => e.currentTarget.style.borderColor = 'var(--accent, #3b82f6)'}
+                    onMouseOut={(e) => e.currentTarget.style.borderColor = 'var(--border-color, #334155)'}
+                    >
+                        <input
+                            type="file"
+                            accept="video/*"
+                            onChange={handleVideoSelect}
+                            style={{ display: 'none' }}
+                        />
+                        <span style={{ fontSize: 32 }}>📹</span>
+                        <div style={{ marginTop: 8, color: 'var(--text-muted, #94a3b8)' }}>
+                            {videoFile ? videoFile.name : 'Upload match footage'}
+                        </div>
+                    </label>
+                    {videoFile && (
+                        <button
+                            className="btn btn-primary"
+                            onClick={startStreaming}
+                            disabled={!videoReady}
+                            style={{
+                                marginTop: 12,
+                                width: '100%',
+                                padding: '10px 0',
+                            }}
+                        >
+                            {videoReady ? 'Start Streaming' : 'Loading video...'}
+                        </button>
+                    )}
+                </div>
+            ) : (
+                <div style={{ padding: 12, background: 'var(--surface, #1e293b)' }}>
+                    {/* Progress bar */}
+                    <div style={{
+                        display: 'flex',
+                        gap: 8,
+                        alignItems: 'center',
+                        marginBottom: 8,
+                    }}>
+                        <button
+                            className="btn btn-secondary btn-sm"
+                            onClick={togglePause}
+                            style={{ padding: '4px 8px', fontSize: 12 }}
+                        >
+                            {isPaused ? '▶️' : '⏸️'}
+                        </button>
+                        <div style={{
+                            flex: 1,
+                            height: 4,
+                            background: 'var(--border-color, #334155)',
+                            borderRadius: 2,
+                            overflow: 'hidden',
+                        }}>
+                            <div style={{
+                                height: '100%',
+                                width: `${duration ? (currentTime / duration) * 100 : 0}%`,
+                                background: 'var(--accent, #3b82f6)',
+                                transition: 'width 0.1s linear',
+                            }}
+                            />
+                        </div>
+                        <span style={{ fontSize: 11, color: 'var(--text-muted, #94a3b8)' }}>
+                            {formatTime(currentTime)} / {formatTime(duration)}
+                        </span>
+                        <button
+                            className="btn btn-danger btn-sm"
+                            onClick={stopStreaming}
+                            style={{ padding: '4px 8px', fontSize: 12 }}
+                        >
+                            ⏹️
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            {/* Backend config (only when not streaming) */}
+            {!isStreaming && (
+                <div style={{
+                    padding: '0 16px 16px',
+                    display: 'flex',
+                    gap: 12,
+                    flexWrap: 'wrap',
+                }}>
+                    <div>
+                        <label style={{ fontSize: 10, color: 'var(--text-muted, #94a3b8)' }}>Backend</label>
+                        <select
+                            value={backend}
+                            onChange={e => setBackend(e.target.value)}
+                            style={{
+                                display: 'block',
+                                padding: '4px 8px',
+                                borderRadius: 6,
+                                border: '1px solid var(--border-color, #334155)',
+                                background: 'var(--bg, #0f172a)',
+                                color: 'var(--text-primary, #f1f5f9)',
+                                fontSize: 11,
+                            }}
+                        >
+                            <option value="vllm">vLLM</option>
+                            <option value="streaming_vlm">StreamingVLM</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label style={{ fontSize: 10, color: 'var(--text-muted, #94a3b8)' }}>Chunk (s)</label>
+                        <input
+                            type="number"
+                            value={chunkInterval}
+                            onChange={e => setChunkInterval(Number(e.target.value))}
+                            min={1}
+                            max={30}
+                            style={{
+                                width: 60,
+                                padding: '4px 8px',
+                                borderRadius: 6,
+                                border: '1px solid var(--border-color, #334155)',
+                                background: 'var(--bg, #0f172a)',
+                                color: 'var(--text-primary, #f1f5f9)',
+                                fontSize: 11,
+                            }}
+                        />
+                    </div>
+                    <div>
+                        <label style={{ fontSize: 10, color: 'var(--text-muted, #94a3b8)' }}>FPS</label>
+                        <input
+                            type="number"
+                            value={targetFps}
+                            onChange={e => setTargetFps(Number(e.target.value))}
+                            min={1}
+                            max={30}
+                            style={{
+                                width: 60,
+                                padding: '4px 8px',
+                                borderRadius: 6,
+                                border: '1px solid var(--border-color, #334155)',
+                                background: 'var(--bg, #0f172a)',
+                                color: 'var(--text-primary, #f1f5f9)',
+                                fontSize: 11,
+                            }}
+                        />
+                    </div>
+                </div>
+            )}
+
+            {/* CSS Animations */}
+            <style>{`
+                @keyframes pulse {
+                    0%, 100% { opacity: 1; transform: scale(1); }
+                    50% { opacity: 0.5; transform: scale(1.1); }
+                }
+                @keyframes slideUp {
+                    from { opacity: 0; transform: translate(-50%, 20px); }
+                    to { opacity: 1; transform: translate(-50%, 0); }
+                }
+            `}</style>
+        </div>
+    )
+}

@@ -6,6 +6,7 @@ Provides specialized agents for sports analysis:
 - VisionAgent: Real-time frame analysis and tactical recognition
 - LiveAgent: Live match interaction and commentary
 - CommentaryAgent: Match commentary and analysis
+- AgentCoordinator: Multi-agent orchestration for Track 1 hackathon
 
 All agents support dynamic sport types (Soccer, Cricket, Basketball, etc.)
 """
@@ -14,6 +15,7 @@ from agents.research_agent import ResearchAgent
 from agents.vision_agent import VisionAgent
 from agents.commentary_agent import CommentaryAgent
 from agents.live_agent import LiveAgent
+from agents.coordinator import AgentCoordinator, CoordinationContext
 
 __all__ = [
     "BaseAgent",
@@ -21,6 +23,8 @@ __all__ = [
     "VisionAgent",
     "CommentaryAgent",
     "LiveAgent",
+    "AgentCoordinator",
+    "CoordinationContext",
 ]
 
 

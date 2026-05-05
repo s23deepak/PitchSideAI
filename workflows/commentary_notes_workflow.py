@@ -17,6 +17,9 @@ logger = logging.getLogger(__name__)
 # Type alias for the optional progress callback
 ProgressCallback = Optional[Callable[[str, str, Dict[str, Any]], Awaitable[None]]]
 
+# Forward reference for NotesStore (lazy import to avoid circular deps)
+NotesStore = Any  # Will be imported when needed
+
 
 # ===== Workflow State Definition =====
 
@@ -62,6 +65,7 @@ class CommentaryNotesState:
     # === Final Outputs ===
     markdown_notes: Optional[str] = None
     json_structure: Optional[Dict[str, Any]] = None
+    notes_store: Optional[Any] = None  # NotesStore with O(1) lookup
 
     # === Error Tracking ===
     errors: List[str] = field(default_factory=list)
@@ -247,10 +251,12 @@ class CommentaryNotesWorkflow:
 
     async def synthesize_notes(self, state: CommentaryNotesState) -> CommentaryNotesState:
         """
-        Phase 4: Synthesize all agent outputs into final Markdown + JSON notes.
-        - CommentaryNoteOrganizerAgent.synthesize_to_markdown_json(all_outputs)
+        Phase 4: Synthesize all agent outputs into structured NotesStore.
+        - CommentaryNoteOrganizerAgent.synthesize_to_notes_store(all_outputs)
+        - NotesStore contains: raw_markdown, beats (List[NarrativeBeat]), lookup (O(1))
         """
         from agents.specialized_commentary.note_organizer_agent import CommentaryNoteOrganizerAgent
+        from models.notes_store import NotesStore
 
         logger.info(f"[{state.workflow_id}] Phase 4: Synthesizing notes...")
         state.phase = WorkflowPhase.SYNTHESIS
@@ -272,18 +278,18 @@ class CommentaryNotesWorkflow:
 
         try:
             agent = CommentaryNoteOrganizerAgent(sport=state.sport)
-            markdown_notes, json_structure = await agent.synthesize_to_markdown_json(all_outputs)
-            state.markdown_notes = markdown_notes
-            state.json_structure = json_structure
+            notes_store = await agent.synthesize_to_notes_store(all_outputs)
+            state.notes_store = notes_store
+            state.markdown_notes = notes_store.raw_markdown  # Backwards compat
             state.completed_agents.append("note_organizer")
-            logger.info(f"[{state.workflow_id}] Notes synthesized ({len(markdown_notes)} chars)")
+            logger.info(f"[{state.workflow_id}] Notes synthesized ({len(notes_store.raw_markdown)} chars, {len(notes_store.beats)} beats)")
         except Exception as e:
             state.errors.append(f"CommentaryNoteOrganizerAgent: {e}")
             logger.error(f"[{state.workflow_id}] Note synthesis failed: {e}")
             # Best-effort fallback markdown
             state.markdown_notes = (
                 f"# Commentary Notes: {state.home_team} vs {state.away_team}\n\n"
-                f"Synthesis failed: {e}\n\nRaw data available in json_structure."
+                f"Synthesis failed: {e}\n\nRaw data available in all_outputs."
             )
             state.json_structure = all_outputs
 

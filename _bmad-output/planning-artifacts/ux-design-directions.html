@@ -1,0 +1,988 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PitchAI — UX Design Directions</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #020617;
+  --surface: #0F172A;
+  --amber: #FBBF24;
+  --amber-bg: rgba(251, 191, 36, 0.15);
+  --cyan: #22D3EE;
+  --emerald: #10B981;
+  --red: #EF4444;
+  --text-primary: #F1F5F9;
+  --text-secondary: #94A3B8;
+  --border: #1E293B;
+  --slate-600: #475569;
+  --slate-800: #1E293B;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: var(--bg);
+  color: var(--text-primary);
+  min-height: 100vh;
+}
+
+header {
+  text-align: center;
+  padding: 48px 24px 24px;
+  border-bottom: 1px solid var(--border);
+}
+
+header h1 {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--amber);
+  letter-spacing: -0.5px;
+}
+
+header p {
+  color: var(--text-secondary);
+  font-size: 14px;
+  margin-top: 4px;
+}
+
+.tabs {
+  display: flex;
+  justify-content: center;
+  gap: 4px;
+  padding: 16px 24px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.tab-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: 'Inter', sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.tab-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--slate-600);
+}
+
+.tab-btn.active {
+  background: var(--amber-bg);
+  color: var(--amber);
+  border-color: var(--amber);
+}
+
+.mockup-container {
+  max-width: 1200px;
+  margin: 24px auto;
+  padding: 0 24px;
+}
+
+.mockup {
+  display: none;
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.mockup.active { display: block; }
+
+.state-label {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  background: rgba(15, 23, 42, 0.9);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border);
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--cyan);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  z-index: 10;
+}
+
+/* Fan Lens */
+.video-area {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: linear-gradient(135deg, #0a1628 0%, #0d1f17 30%, #1a0a0a 60%, #0a1628 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.video-area::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at 50% 40%, rgba(34, 211, 238, 0.03) 0%, transparent 70%);
+}
+
+.video-placeholder {
+  text-align: center;
+  z-index: 1;
+}
+
+.video-placeholder .icon {
+  font-size: 48px;
+  margin-bottom: 12px;
+  opacity: 0.3;
+}
+
+.video-placeholder .label {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+
+.video-placeholder .sub {
+  font-size: 12px;
+  color: var(--slate-600);
+  margin-top: 8px;
+}
+
+/* Trivia Card */
+.trivia-card {
+  position: absolute;
+  bottom: 56px;
+  left: 12px;
+  max-width: 280px;
+  background: rgba(15, 23, 42, 0.92);
+  backdrop-filter: blur(12px);
+  border-left: 3px solid var(--amber);
+  border-radius: 6px;
+  padding: 10px 14px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  animation: fadeIn 0.4s ease-out;
+  z-index: 5;
+}
+
+.trivia-card .title {
+  font-weight: 600;
+  font-size: 11px;
+  color: var(--amber);
+  margin-bottom: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Mic Button */
+.mic-button {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(8px);
+  border: 2px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s;
+  z-index: 5;
+}
+
+.mic-button:hover {
+  border-color: var(--cyan);
+  box-shadow: 0 0 0 4px rgba(34, 211, 238, 0.15);
+}
+
+.mic-button .mic-icon {
+  width: 18px;
+  height: 18px;
+  fill: var(--text-secondary);
+  transition: fill 0.2s;
+}
+
+.mic-button:hover .mic-icon { fill: var(--text-primary); }
+
+.mic-button.pulse::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 2px solid var(--amber);
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.3; transform: scale(1); }
+  50% { opacity: 0.7; transform: scale(1.08); }
+}
+
+/* Controls Tray */
+.controls-tray {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: rgba(15, 23, 42, 0.9);
+  backdrop-filter: blur(8px);
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  z-index: 5;
+}
+
+.control-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.control-label {
+  font-size: 10px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+}
+
+.lang-toggle {
+  display: flex;
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.lang-toggle button {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  padding: 4px 8px;
+  font-size: 11px;
+  font-family: 'Inter', sans-serif;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.lang-toggle button.active {
+  background: var(--amber-bg);
+  color: var(--amber);
+}
+
+.lang-toggle button:not(.active):hover {
+  color: var(--text-primary);
+}
+
+.slider {
+  width: 64px;
+  height: 4px;
+  background: var(--slate-800);
+  border-radius: 2px;
+  position: relative;
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+}
+
+.slider::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--cyan);
+  cursor: pointer;
+  border: 2px solid var(--bg);
+}
+
+/* Suggested Chips */
+.question-chips {
+  position: absolute;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 8px;
+  z-index: 5;
+}
+
+.chip {
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  padding: 8px 16px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.chip:hover {
+  border-color: var(--cyan);
+  background: rgba(34, 211, 238, 0.08);
+}
+
+.chip.selected {
+  border-color: var(--amber);
+  background: var(--amber-bg);
+  color: var(--amber);
+}
+
+/* Commentator Dashboard */
+.split-layout {
+  display: flex;
+  height: 506px;
+}
+
+.video-side {
+  flex: 0 0 60%;
+  position: relative;
+  background: linear-gradient(135deg, #0a1628 0%, #0d1f17 30%, #1a0a0a 60%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-right: 1px solid var(--border);
+}
+
+.video-side .label-sm {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.teleprompter {
+  flex: 0 0 40%;
+  background: var(--surface);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  font-family: 'Inter', sans-serif;
+}
+
+.teleprompter .prev-line {
+  font-size: 11px;
+  color: var(--slate-600);
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+
+.teleprompter .current-beat {
+  font-size: 17px;
+  font-weight: 500;
+  color: var(--text-primary);
+  background: var(--amber-bg);
+  padding: 12px;
+  border-radius: 6px;
+  border-left: 3px solid var(--amber);
+  margin-bottom: 16px;
+  line-height: 1.6;
+  position: relative;
+}
+
+.teleprompter .current-beat::before {
+  content: '▶';
+  font-size: 9px;
+  color: var(--amber);
+  position: absolute;
+  top: 12px;
+  left: -8px;
+  transform: translateX(-100%);
+}
+
+.teleprompter .next-line {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+  line-height: 1.5;
+  opacity: 0.7;
+}
+
+.teleprompter .meta {
+  margin-top: auto;
+  display: flex;
+  gap: 12px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.teleprompter .meta-badge {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: var(--bg);
+}
+
+.meta-badge.source { color: var(--text-secondary); }
+.meta-badge.confidence { color: var(--emerald); }
+
+.generate-btn {
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: 'Inter', sans-serif;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: center;
+  transition: all 0.2s;
+}
+
+.generate-btn:hover {
+  border-color: var(--cyan);
+  color: var(--text-primary);
+}
+
+/* Q&A Split Screen */
+.qa-layout {
+  display: flex;
+  height: 506px;
+}
+
+.qa-live {
+  flex: 0 0 60%;
+  position: relative;
+  background: linear-gradient(135deg, #0a1628 0%, #0d1f17 30%, #1a0a0a 60%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-right: 2px solid var(--slate-800);
+}
+
+.live-badge {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  background: var(--red);
+  color: white;
+  padding: 3px 8px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.qa-frozen {
+  flex: 0 0 40%;
+  position: relative;
+  background: #0d1a0d;
+  border: 2px solid var(--slate-800);
+  border-left: none;
+  overflow: hidden;
+}
+
+.qa-frozen .pitch-bg {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(to right, rgba(255,255,255,0.03) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255,255,255,0.03) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+.qa-frozen svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.qa-label {
+  position: absolute;
+  bottom: 16px;
+  right: 16px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: rgba(2, 6, 23, 0.8);
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Settings Panel */
+.settings-overlay {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: linear-gradient(to top, rgba(15, 23, 42, 0.97), rgba(15, 23, 42, 0.85) 80%, transparent);
+  padding: 32px 24px 24px;
+  z-index: 6;
+}
+
+.settings-grid {
+  display: flex;
+  gap: 24px;
+  align-items: flex-end;
+}
+
+.setting {
+  flex: 1;
+}
+
+.setting-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.setting-slider {
+  width: 100%;
+  height: 6px;
+  background: var(--slate-800);
+  border-radius: 3px;
+  position: relative;
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+}
+
+.setting-slider::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--cyan);
+  cursor: pointer;
+  border: 2px solid var(--bg);
+  box-shadow: 0 0 8px rgba(34, 211, 238, 0.3);
+}
+
+.setting-slider.track-amber {
+  background: linear-gradient(to right, var(--slate-800) 0%, var(--amber) 50%, var(--slate-800) 100%);
+}
+
+.preview-text {
+  margin-top: 20px;
+  padding: 12px;
+  background: rgba(2, 6, 23, 0.5);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-style: italic;
+  text-align: center;
+}
+
+/* Landing Page */
+.landing {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 500px;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+}
+
+.landing::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 600px;
+  height: 600px;
+  background: radial-gradient(circle, rgba(34, 211, 238, 0.04) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.landing-content {
+  position: relative;
+  z-index: 1;
+}
+
+.landing .logo {
+  font-size: 48px;
+  font-weight: 700;
+  color: var(--amber);
+  letter-spacing: -1px;
+  margin-bottom: 8px;
+}
+
+.landing .tagline {
+  font-size: 18px;
+  color: var(--text-secondary);
+  margin-bottom: 32px;
+}
+
+.landing .cta {
+  background: var(--amber);
+  color: var(--bg);
+  border: none;
+  padding: 14px 32px;
+  border-radius: 24px;
+  font-size: 15px;
+  font-weight: 600;
+  font-family: 'Inter', sans-serif;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-bottom: 24px;
+}
+
+.landing .cta:hover {
+  box-shadow: 0 0 24px rgba(251, 191, 36, 0.3);
+  transform: translateY(-1px);
+}
+
+.feature-pills {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.feature-pill {
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid var(--border);
+  padding: 10px 20px;
+  border-radius: 20px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  transition: all 0.2s;
+}
+
+.feature-pill:hover {
+  border-color: var(--cyan);
+  color: var(--text-primary);
+}
+
+.pitch-line {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, #166534, var(--emerald), #166534, transparent);
+  opacity: 0.5;
+}
+
+/* Legend */
+.legend {
+  margin-top: 32px;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  max-width: 1200px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.legend h3 {
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 12px;
+}
+
+.legend-grid {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.legend-swatch {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+footer {
+  text-align: center;
+  padding: 32px;
+  color: var(--slate-600);
+  font-size: 12px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0ms !important;
+    transition-duration: 0ms !important;
+  }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>PitchAI</h1>
+  <p>UX Design Direction — Hackathon Demo</p>
+</header>
+
+<nav class="tabs">
+  <button class="tab-btn active" onclick="showMockup('fan-lens')">1. Fan Lens</button>
+  <button class="tab-btn" onclick="showMockup('commentator')">2. Commentator Dashboard</button>
+  <button class="tab-btn" onclick="showMockup('qa-split')">3. Split-Screen Q&A</button>
+  <button class="tab-btn" onclick="showMockup('settings')">4. Settings Panel</button>
+  <button class="tab-btn" onclick="showMockup('landing')">5. Landing Page</button>
+</nav>
+
+<div class="mockup-container">
+
+  <!-- 1. Fan Lens -->
+  <div class="mockup active" id="mockup-fan-lens">
+    <div class="state-label">Fan Lens — Default View</div>
+    <div class="video-area">
+      <div class="video-placeholder">
+        <div class="icon">⚽</div>
+        <div class="label">Match Video</div>
+        <div class="sub">AI models attaching to stream...</div>
+      </div>
+
+      <div class="trivia-card">
+        <div class="title">Did you know?</div>
+        This is El Clásico — Barcelona vs Real Madrid. They've played each other 254 times in official competitions.
+      </div>
+
+      <div class="question-chips">
+        <span class="chip">Why a red card?</span>
+        <span class="chip">Who is number 10?</span>
+        <span class="chip">What's the free kick distance?</span>
+      </div>
+
+      <button class="mic-button pulse" title="Hold to ask a question">
+        <svg class="mic-icon" viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/><path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>
+      </button>
+
+      <div class="controls-tray">
+        <div class="control-group">
+          <div class="lang-toggle">
+            <button class="active">EN</button>
+            <button>ES</button>
+          </div>
+        </div>
+        <div class="control-group">
+          <span class="control-label">Bias</span>
+          <input type="range" class="slider" value="50">
+        </div>
+        <div class="control-group">
+          <span class="control-label">Exc</span>
+          <input type="range" class="slider" value="70">
+        </div>
+        <div class="control-group">
+          <span class="control-label">Know</span>
+          <input type="range" class="slider" value="30">
+        </div>
+        <div class="control-group">
+          <button style="background:transparent;border:1px solid var(--border);color:var(--text-secondary);padding:4px 10px;border-radius:4px;font-family:'Inter',sans-serif;font-size:11px;cursor:pointer;">🎙️ Commentator View</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2. Commentator Dashboard -->
+  <div class="mockup" id="mockup-commentator">
+    <div class="state-label">Commentator Dashboard</div>
+    <div class="split-layout">
+      <div class="video-side">
+        <span class="label-sm">Match Video — 60%</span>
+      </div>
+      <div class="teleprompter">
+        <div class="prev-line">Arsenal have dominated possession in the opening 15 minutes with Saka causing problems down the right flank...</div>
+        <div class="current-beat">Saka cuts inside from the right — his 12th goal involvement in 14 league matches this season. The 22-year-old has been directly involved in more goals than any other Premier League winger.</div>
+        <div class="next-line">Odegaard drops deep to receive, looking to switch play to Martinelli on the opposite flank...</div>
+        <div class="next-line">Chelsea's backline holding a high line despite the pressure — Silva organizing, keeping the offside trap...</div>
+        <div class="next-line">Set piece opportunity upcoming. Arsenal have scored from 4 of their last 6 corners at home...</div>
+        <div class="meta">
+          <span class="meta-badge source">StatsBomb · 2023/24</span>
+          <span class="meta-badge confidence">92% confidence</span>
+        </div>
+        <button class="generate-btn">[ Generate New Notes ]</button>
+      </div>
+    </div>
+    <div class="controls-tray" style="position:relative;bottom:auto;left:auto;transform:none;border-radius:0;border-top:1px solid var(--border);justify-content:center;">
+      <div class="control-group">
+        <div class="lang-toggle">
+          <button class="active">EN</button>
+          <button>ES</button>
+        </div>
+      </div>
+      <div class="control-group">
+        <span class="control-label">Bias</span>
+        <input type="range" class="slider" value="50">
+      </div>
+      <div class="control-group">
+        <span class="control-label">Exc</span>
+        <input type="range" class="slider" value="85">
+      </div>
+      <div class="control-group">
+        <span class="control-label">Know</span>
+        <input type="range" class="slider" value="80">
+      </div>
+      <div class="control-group">
+        <button style="background:transparent;border:1px solid var(--border);color:var(--text-secondary);padding:4px 10px;border-radius:4px;font-family:'Inter',sans-serif;font-size:11px;cursor:pointer;">👁️ Fan View</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3. Split-Screen Q&A -->
+  <div class="mockup" id="mockup-qa-split">
+    <div class="state-label">Split-Screen Q&A — "Why is that a red card?"</div>
+    <div class="qa-layout">
+      <div class="qa-live">
+        <div class="live-badge">LIVE</div>
+        <span style="font-size:14px;font-weight:600;color:var(--text-secondary);letter-spacing:1px;text-transform:uppercase;">Match Video — 60%</span>
+      </div>
+      <div class="qa-frozen">
+        <div class="pitch-bg"></div>
+        <svg viewBox="0 0 480 506" preserveAspectRatio="xMidYMid slice">
+          <!-- Player circle -->
+          <circle cx="200" cy="280" r="45" fill="none" stroke="rgba(255,255,255,0.9)" stroke-width="2.5" filter="url(#dropshadow)" stroke-dasharray="283" stroke-dashoffset="0">
+          </circle>
+          <!-- Movement arrow -->
+          <line x1="245" y1="280" x2="340" y2="280" stroke="rgba(255,255,255,0.9)" stroke-width="2" filter="url(#dropshadow)"/>
+          <polygon points="340,280 330,274 330,286" fill="rgba(255,255,255,0.9)"/>
+          <!-- Offside line -->
+          <line x1="160" y1="180" x2="160" y2="380" stroke="rgba(255,255,255,0.7)" stroke-width="2" stroke-dasharray="8,4" filter="url(#dropshadow)"/>
+          <!-- Label -->
+          <text x="200" y="345" fill="rgba(255,255,255,0.9)" font-family="Inter,sans-serif" font-size="13" font-weight="500" text-anchor="middle">Studs-up contact</text>
+          <text x="200" y="365" fill="rgba(255,255,255,0.7)" font-family="Inter,sans-serif" font-size="11" text-anchor="middle">above the ankle</text>
+          <defs>
+            <filter id="dropshadow">
+              <feDropShadow dx="0" dy="1" stdDeviation="1" flood-color="rgba(0,0,0,0.5)"/>
+            </filter>
+          </defs>
+        </svg>
+        <div class="qa-label">24:15</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4. Settings Panel -->
+  <div class="mockup" id="mockup-settings">
+    <div class="state-label">Commentary Settings</div>
+    <div class="video-area">
+      <div class="video-placeholder" style="margin-bottom:120px;">
+        <div class="icon">⚽</div>
+        <div class="label">Match Video</div>
+      </div>
+      <div class="settings-overlay">
+        <div class="settings-grid">
+          <div class="setting">
+            <div class="setting-label"><span>Team A Fan</span><span>Neutral</span><span>Team B Fan</span></div>
+            <input type="range" class="setting-slider" value="50" style="background:linear-gradient(to right, #EF4444 0%, var(--slate-800) 50%, #3B82F6 100%);">
+            <div style="text-align:center;font-size:10px;color:var(--text-secondary);margin-top:4px;">Bias</div>
+          </div>
+          <div class="setting">
+            <div class="setting-label"><span>Subdued</span><span></span><span>Maximum</span></div>
+            <input type="range" class="setting-slider" value="75" style="background:linear-gradient(to right, var(--slate-800) 0%, var(--amber) 100%);">
+            <div style="text-align:center;font-size:10px;color:var(--text-secondary);margin-top:4px;">Excitement</div>
+          </div>
+          <div class="setting">
+            <div class="setting-label"><span>Beginner</span><span></span><span>Tactical</span></div>
+            <input type="range" class="setting-slider" value="25" style="background:linear-gradient(to right, var(--slate-800) 0%, var(--cyan) 100%);">
+            <div style="text-align:center;font-size:10px;color:var(--text-secondary);margin-top:4px;">Knowledge Depth</div>
+          </div>
+        </div>
+        <div class="preview-text">
+          "A yellow card is shown — that's a warning. Two yellow cards in the same match and the player is sent off."
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5. Landing Page -->
+  <div class="mockup" id="mockup-landing">
+    <div class="state-label">Landing Page</div>
+    <div class="landing">
+      <div class="landing-content">
+        <div class="logo">PitchAI</div>
+        <div class="tagline">Your AI Broadcast Companion</div>
+        <button class="cta">▶ Start Watching</button>
+        <div class="feature-pills">
+          <span class="feature-pill">📝 Live Commentary Notes</span>
+          <span class="feature-pill">💬 Contextual Q&A</span>
+          <span class="feature-pill">🌐 Cross-Language Translation</span>
+        </div>
+      </div>
+      <div class="pitch-line"></div>
+    </div>
+  </div>
+
+</div>
+
+<div class="legend">
+  <h3>Design Tokens</h3>
+  <div class="legend-grid">
+    <div class="legend-item"><span class="legend-swatch" style="background:#020617;border:1px solid #1E293B;"></span> Background #020617</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:#0F172A;border:1px solid #1E293B;"></span> Surface #0F172A</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:#FBBF24;"></span> Accent Narrative (Amber)</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:#22D3EE;"></span> Accent Interactive (Cyan)</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:#10B981;"></span> Success (Emerald)</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:#EF4444;"></span> Danger (Red)</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:#F1F5F9;"></span> Text Primary</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:#94A3B8;"></span> Text Secondary</div>
+    <div class="legend-item" style="font-family:'JetBrains Mono',monospace;font-size:11px;">Aa Inter · JetBrains Mono</div>
+  </div>
+</div>
+
+<footer>PitchAI UX Design Direction · AMD Hackathon May 2026 · Tailwind CSS + shadcn/ui · Dark Theme, Single Viewport, Laptop</footer>
+
+<p style="text-align:center;padding-bottom:48px;font-size:13px;color:var(--text-secondary);">
+  💡 Open this file in a browser to see interactive hover states, animations, and transitions.<br>
+  All mockups share the same design tokens defined in <code style="background:var(--surface);padding:2px 6px;border-radius:3px;">ux-design-specification.md</code>
+</p>
+
+<script>
+function showMockup(id) {
+  document.querySelectorAll('.mockup').forEach(m => m.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('mockup-' + id).classList.add('active');
+  event.target.classList.add('active');
+}
+</script>
+
+</body>
+</html>

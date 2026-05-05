@@ -2,14 +2,18 @@
 Live Agent — Amazon Nova Sonic
 Real-time Q&A and live query handling during matches.
 Supports dynamic sport types with contextual responses.
+
+Enhanced with NotesStore integration for O(1) retrieval of pre-computed
+commentary beats triggered by vision detections.
 """
 import json
-from typing import List, Optional
+from typing import List, Optional, Any, Dict
 
 from agents.base import LiveAgent as BaseLiveAgent
 from agents.research_agent import ResearchAgent
 from rag import RetrievedDocument
 from tools.dynamodb_tool import write_event, get_recent_events
+from models.notes_store import NotesStore, TagResolver
 
 
 class LiveAgent(BaseLiveAgent):
@@ -26,6 +30,8 @@ class LiveAgent(BaseLiveAgent):
         self.home_team = ""
         self.away_team = ""
         self.match_session = "active_match"
+        self.notes_store: Optional[NotesStore] = None
+        self.tag_resolver = TagResolver()
 
     async def execute(self, query: str) -> str:
         """Alias for handle_text_query for orchestration compatibility."""
@@ -37,6 +43,7 @@ class LiveAgent(BaseLiveAgent):
         away_team: str,
         sport: Optional[str] = None,
         match_session: Optional[str] = None,
+        notes_store: Optional[NotesStore] = None,
     ) -> str:
         """
         Initialize live session with pre-match research.
@@ -45,6 +52,8 @@ class LiveAgent(BaseLiveAgent):
             home_team: Home team name
             away_team: Away team name
             sport: Optional - override sport type
+            match_session: Optional - match session key
+            notes_store: Optional - pre-computed NotesStore from 7-agent pipeline
 
         Returns:
             Match brief text
@@ -56,10 +65,13 @@ class LiveAgent(BaseLiveAgent):
         self.away_team = away_team
         if match_session:
             self.match_session = match_session
+        if notes_store:
+            self.notes_store = notes_store
 
         self.log_event("session_started", {
             "home_team": home_team,
-            "away_team": away_team
+            "away_team": away_team,
+            "has_notes_store": notes_store is not None
         })
 
         # Pre-load match context via research agent
@@ -270,50 +282,185 @@ class LiveAgent(BaseLiveAgent):
             # Fallback: return empty string (caller will handle)
             return ""
 
-    async def generate_live_commentary(self, event_description: str) -> str:
+    async def generate_live_commentary(
+        self,
+        event_description: str,
+        vision_tactical_label: Optional[str] = None,
+        game_state: Optional[Any] = None,
+    ) -> Dict[str, Any]:
         """
-        Generate live commentary for a match event.
+        Generate live commentary for a match event with NotesStore lookup.
+
+        Uses O(1) deterministic retrieval from pre-computed beats when vision
+        detects an event, falling back to full markdown context if no match.
 
         Args:
             event_description: Description of what happened
+            vision_tactical_label: Optional vision detection label for tag resolution
+            game_state: Optional GameState object for active player filter
 
         Returns:
-            Commentary text
+            Dict with commentary text, source ("notes_lookup" or "raw_markdown"),
+            retrieved_beats (list of NarrativeBeat dicts), and trivia_formatted
         """
         self.log_event("commentary_generation_requested", {
-            "event": event_description[:100]
+            "event": event_description[:100],
+            "vision_label": vision_tactical_label,
+            "has_notes_store": self.notes_store is not None
         })
 
-        prompt = f"""
-You are a professional {self.sport} commentator providing real-time match analysis.
+        # Retrieve relevant beats via NotesStore lookup chain
+        retrieved_beats = []
+        source = "raw_markdown"
+        resolved_tag = None
+
+        if self.notes_store and vision_tactical_label:
+            # Resolve vision label to canonical tag
+            resolved_tag = self.tag_resolver.resolve(vision_tactical_label)
+
+            if resolved_tag:
+                # O(1) lookup
+                beats = self.notes_store.get_beats_for_tag(resolved_tag)
+
+                # Apply game_state active-player filter if available
+                if game_state and hasattr(game_state, 'active_players'):
+                    active_players = getattr(game_state, 'active_players', set())
+                    if active_players:
+                        beats = [
+                            b for b in beats
+                            if not b.players or any(p in active_players for p in b.players)
+                        ]
+
+                if beats:
+                    retrieved_beats = beats
+                    source = "notes_lookup"
+
+        # Build prompt with retrieved beats
+        beat_context = ""
+        if retrieved_beats:
+            beat_lines = []
+            for beat in retrieved_beats[:5]:  # Limit to 5 most relevant beats
+                beat_lines.append(f"- {beat.text} (source: {beat.source})")
+            beat_context = "\n".join(beat_lines)
+
+        prompt = f"""You are a professional {self.sport} commentator providing real-time match analysis in the style of Peter Drury — poetic, insightful, and emotionally resonant.
 
 MATCH: {self.home_team} vs {self.away_team}
 
 EVENT: {event_description}
-
-Generate 2-3 sentences of engaging live commentary that:
-1. Explains what just happened
-2. Provides tactical insight
-3. Forecasts next likely play
-
-Keep energy high and authentic to {self.sport} commentary style.
-
-Commentary:
 """
 
-        commentary = await self.call_bedrock(prompt, temperature=0.6, max_tokens=200)
+        if beat_context:
+            prompt += f"""
+RELEVANT CONTEXT (from pre-computed notes):
+{beat_context}
+"""
+
+        prompt += f"""
+Generate 2-3 sentences of engaging live commentary that:
+1. Explains what just happened with vivid imagery
+2. Weaves in the relevant context naturally (if provided above)
+3. Provides tactical insight or emotional resonance
+4. Forecasts next likely play
+
+Keep energy high and authentic to {self.sport} commentary style.
+Use metaphors and narrative flair characteristic of Peter Drury.
+
+Commentary:"""
+
+        commentary = await self.call_bedrock(prompt, temperature=0.7, max_tokens=250)
+
+        # Format trivia card (2-line fact for Fan Lens)
+        trivia_formatted = self._format_trivia_card(
+            commentary, retrieved_beats, resolved_tag
+        )
+
+        result = {
+            "commentary": commentary,
+            "source": source,
+            "retrieved_beats": [
+                {
+                    "text": b.text,
+                    "event_tags": b.event_tags,
+                    "players": b.players,
+                    "source": b.source,
+                    "confidence": b.confidence,
+                }
+                for b in retrieved_beats
+            ],
+            "trivia_formatted": trivia_formatted,
+            "resolved_tag": resolved_tag,
+        }
 
         await write_event(
             "live_commentary",
             event_description,
             {
                 "commentary": commentary,
-                "sport": self.sport
+                "sport": self.sport,
+                "source": source,
+                "resolved_tag": resolved_tag,
             },
             match_session=self.match_session,
         )
 
-        return commentary
+        return result
+
+    def _format_trivia_card(
+        self,
+        commentary: str,
+        retrieved_beats: List[Any],
+        resolved_tag: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Format a 2-line trivia card from commentary for Fan Lens display.
+
+        Args:
+            commentary: Full commentary text
+            retrieved_beats: List of NarrativeBeat objects used in generation
+            resolved_tag: Canonical event tag that triggered this commentary
+
+        Returns:
+            Trivia card dict with text, source attribution, and display metadata,
+            or None if no high-confidence beats were retrieved.
+        """
+        if not retrieved_beats:
+            return None
+
+        # Find highest confidence beat for trivia
+        best_beat = max(retrieved_beats, key=lambda b: b.confidence, default=None)
+
+        if not best_beat or best_beat.confidence < 0.6:
+            return None
+
+        # Extract 2-line fact from beat text
+        fact_text = best_beat.text
+        # Truncate to ~150 chars for card display
+        if len(fact_text) > 150:
+            fact_text = fact_text[:147] + "..."
+
+        # Determine fade-in/out timing based on confidence
+        confidence = best_beat.confidence
+        if confidence >= 0.8:
+            display_duration_ms = 5000
+            fade_in_ms = 400
+            fade_out_ms = 400
+        elif confidence >= 0.6:
+            display_duration_ms = 3000
+            fade_in_ms = 300
+            fade_out_ms = 300
+        else:
+            return None  # Too low confidence to surface
+
+        return {
+            "text": fact_text,
+            "source": best_beat.source,
+            "event_tag": resolved_tag,
+            "confidence": confidence,
+            "display_duration_ms": display_duration_ms,
+            "fade_in_ms": fade_in_ms,
+            "fade_out_ms": fade_out_ms,
+        }
 
     def get_session_info(self) -> dict:
         """Get current session information."""

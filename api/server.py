@@ -30,6 +30,8 @@ from agents.vision_agent import VisionAgent
 from agents.research_agent import ResearchAgent
 from tools.dynamodb_tool import build_match_session_key, get_recent_events, write_event
 from models.game_state import GameState
+from streaming import StreamingVisionBridge
+from streaming.streaming_bridge import StreamingBridgeConfig
 
 # Setup production logging
 setup_logging(level=LOG_LEVEL, json_logs=True)
@@ -150,6 +152,15 @@ class ConnectionManager:
 
     def __init__(self):
         self._sessions: dict[str, list[WebSocket]] = defaultdict(list)
+        self._notes_stores: dict[str, Any] = {}  # match_session -> NotesStore
+
+    def store_notes(self, match_session: str, notes_store: Any) -> None:
+        """Store NotesStore for a match session."""
+        self._notes_stores[match_session] = notes_store
+
+    def get_notes(self, match_session: str) -> Optional[Any]:
+        """Retrieve NotesStore for a match session."""
+        return self._notes_stores.get(match_session)
 
     async def connect(self, session_id: str, ws: WebSocket) -> None:
         self._sessions[session_id].append(ws)
@@ -253,11 +264,18 @@ async def _periodic_commentary(
                 ctx = game_state.to_context_string()
                 if ctx:
                     seed = f"{ctx}\n{seed}"
-            text = await agent.generate_live_commentary(seed)
+
+            # Call LiveAgent (no vision label for timer-based commentary)
+            result = await agent.generate_live_commentary(
+                event_description=seed,
+                vision_tactical_label=None,
+                game_state=game_state,
+            )
+
             broadcast_msg = {
                 "type": "commentary",
-                "text": text,
-                "source": "timer",
+                "text": result.get("commentary", ""),
+                "source": result.get("source", "timer"),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
             if game_state:
@@ -664,12 +682,19 @@ async def live_audio_ws(websocket: WebSocket):
             "match_session": match_session,
         })
 
-        await agent.start_session(home_team, away_team, sport, match_session=match_session)
+        # Load NotesStore if available from pre-match generation
+        notes_store = manager.get_notes(match_session)
+        await agent.start_session(
+            home_team, away_team, sport,
+            match_session=match_session,
+            notes_store=notes_store,
+        )
 
         await manager.send(websocket, {
             "type": "ready",
             "message": "Session ready. Commentary will fire on events, frame detections, and every 60 s.",
             "match_session": match_session,
+            "has_notes_store": notes_store is not None,
         })
 
         # Start periodic commentary background task
@@ -705,20 +730,59 @@ async def live_audio_ws(websocket: WebSocket):
                     if not description:
                         continue
                     game_state.update_from_event(description)
-                    seed = description
                     ctx = game_state.to_context_string()
-                    if ctx:
-                        seed = f"{ctx}\n{description}"
-                    text = await agent.generate_live_commentary(seed)
+                    seed = f"{ctx}\n{description}" if ctx else description
+
+                    # Call LiveAgent with event type extracted from description for NotesStore lookup
+                    # Extract potential event type from description (simple heuristic)
+                    event_type = None
+                    desc_lower = description.lower()
+                    if "goal" in desc_lower or "score" in desc_lower:
+                        event_type = "goal"
+                    elif "yellow card" in desc_lower or "booking" in desc_lower:
+                        event_type = "yellow_card"
+                    elif "red card" in desc_lower or "sent off" in desc_lower:
+                        event_type = "red_card"
+                    elif "sub" in desc_lower or "off for" in desc_lower:
+                        event_type = "substitution"
+                    elif "foul" in desc_lower:
+                        event_type = "foul"
+                    elif "corner" in desc_lower:
+                        event_type = "corner"
+                    elif "offside" in desc_lower:
+                        event_type = "offside"
+
+                    result = await agent.generate_live_commentary(
+                        event_description=seed,
+                        vision_tactical_label=event_type,
+                        game_state=game_state,
+                    )
+
                     broadcast_msg = {
                         "type": "commentary",
-                        "text": text,
-                        "source": "event",
+                        "text": result.get("commentary", ""),
+                        "source": result.get("source", "event"),
                         "trigger": description,
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                         "gameState": game_state.to_dict(),
+                        "resolved_tag": result.get("resolved_tag"),
                     }
                     await manager.broadcast(workflow_id, broadcast_msg)
+
+                    # Broadcast trivia card if high-confidence beat retrieved
+                    trivia = result.get("trivia_formatted")
+                    if trivia:
+                        await manager.broadcast(workflow_id, {
+                            "type": "trivia_card",
+                            "text": trivia["text"],
+                            "source": trivia["source"],
+                            "event_tag": trivia.get("event_tag"),
+                            "confidence": trivia["confidence"],
+                            "display_duration_ms": trivia["display_duration_ms"],
+                            "fade_in_ms": trivia["fade_in_ms"],
+                            "fade_out_ms": trivia["fade_out_ms"],
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        })
 
                 elif msg_type == "tactical_detection":
                     analysis = data.get("analysis") or {}
@@ -741,6 +805,7 @@ async def live_audio_ws(websocket: WebSocket):
                         match_session=match_session,
                     )
 
+                    # Broadcast tactical analyst note
                     await manager.broadcast(workflow_id, {
                         "type": "commentary",
                         "text": note_text,
@@ -757,22 +822,17 @@ async def live_audio_ws(websocket: WebSocket):
                         "timestamp": timestamp,
                     })
 
+                    # Generate enhanced commentary with NotesStore lookup
+                    tactical_label = analysis.get("tactical_label", "")
                     commentary_seed = (
                         analysis.get("sequence_summary")
                         or analysis.get("actionable_insight")
                         or analysis.get("key_observation")
-                        or analysis.get("tactical_label")
+                        or tactical_label
                     )
-                    temporal_change = analysis.get("key_observation")
-                    if analysis.get("video_moments"):
-                        commentary_seed = (
-                            f"Video clip from {analysis.get('clip_start_timestamp_ms', 0)} ms to "
-                            f"{analysis.get('clip_end_timestamp_ms', 0)} ms. "
-                            f"Sequence: {analysis.get('sequence_summary', '')}. "
-                            f"Temporal read: {temporal_change}."
-                        )
 
                     if commentary_seed:
+                        # Build seed with video timestamp prefix
                         timestamp_prefix = ""
                         timestamp_ms = analysis.get("timestamp_ms")
                         if isinstance(timestamp_ms, (int, float)) and timestamp_ms >= 0:
@@ -787,14 +847,21 @@ async def live_audio_ws(websocket: WebSocket):
                         if ctx:
                             full_seed = f"{ctx}\n{full_seed}"
 
-                        text = await agent.generate_live_commentary(full_seed)
-                        await manager.broadcast(workflow_id, {
+                        # Call LiveAgent with vision label for NotesStore lookup
+                        result = await agent.generate_live_commentary(
+                            event_description=full_seed,
+                            vision_tactical_label=tactical_label,
+                            game_state=game_state,
+                        )
+
+                        # Broadcast enhanced commentary
+                        broadcast_msg = {
                             "type": "commentary",
-                            "text": text,
-                            "source": "analysis",
-                            "label": analysis.get("tactical_label"),
+                            "text": result.get("commentary", ""),
+                            "source": result.get("source", "analysis"),
+                            "label": tactical_label,
                             "confidence": analysis.get("confidence"),
-                            "videoTimestampMs": analysis.get("timestamp_ms"),
+                            "videoTimestampMs": timestamp_ms,
                             "videoRangeLabel": (
                                 f"{_format_video_timestamp_ms(analysis.get('clip_start_timestamp_ms'))}–{_format_video_timestamp_ms(analysis.get('clip_end_timestamp_ms'))}"
                                 if _format_video_timestamp_ms(analysis.get('clip_start_timestamp_ms')) and _format_video_timestamp_ms(analysis.get('clip_end_timestamp_ms'))
@@ -803,7 +870,25 @@ async def live_audio_ws(websocket: WebSocket):
                             "trigger": analysis.get("actionable_insight") or analysis.get("key_observation"),
                             "timestamp": datetime.now(timezone.utc).isoformat(),
                             "gameState": game_state.to_dict(),
-                        })
+                            "resolved_tag": result.get("resolved_tag"),
+                            "retrieved_beat_count": len(result.get("retrieved_beats", [])),
+                        }
+                        await manager.broadcast(workflow_id, broadcast_msg)
+
+                        # Broadcast trivia card if high-confidence beat retrieved
+                        trivia = result.get("trivia_formatted")
+                        if trivia:
+                            await manager.broadcast(workflow_id, {
+                                "type": "trivia_card",
+                                "text": trivia["text"],
+                                "source": trivia["source"],
+                                "event_tag": trivia.get("event_tag"),
+                                "confidence": trivia["confidence"],
+                                "display_duration_ms": trivia["display_duration_ms"],
+                                "fade_in_ms": trivia["fade_in_ms"],
+                                "fade_out_ms": trivia["fade_out_ms"],
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                            })
 
                 elif msg_type == "query":
                     query_text = data.get("text", "").strip()
@@ -1039,6 +1124,279 @@ async def _process_video_chunk(
         })
 
 
+# ── WebSocket — StreamingVisionBridge (Hackathon Track 3) ────────────────────
+
+class StreamingVideoConfig(BaseModel):
+    """Configuration for StreamingVisionBridge video streaming."""
+    backend: str = Field(default="vllm", pattern="^(vllm|streaming_vlm)$")
+    chunk_interval_seconds: int = Field(default=5, ge=1, le=30)
+    max_chunk_frames: int = Field(default=24, ge=4, le=48)
+    target_fps: float = Field(default=8.0, ge=1.0, le=30.0)
+    sport: str = Field(default="football", pattern="^(football|soccer|cricket|basketball)$")
+
+
+@app.websocket("/ws/video/streaming")
+async def streaming_video_ws(websocket: WebSocket):
+    """
+    WebSocket for StreamingVisionBridge-based real-time video commentary.
+
+    This is the primary hackathon endpoint — uses StreamingVLM's
+    compact KV-cache algorithm for truly real-time continuous video understanding.
+
+    Client sends:
+      -> {"type": "init", "home_team": "...", "away_team": "...",
+          "config": {"backend": "vllm", "chunk_interval_seconds": 5, "sport": "football"}}
+      -> {"type": "frame", "frame_b64": "...", "timestamp_ms": 12345, "keyframe": true}
+      -> {"type": "match_event", "description": "Goal! 34th minute header"}
+      -> {"type": "query", "text": "What formation are they playing?"}
+
+    Server broadcasts:
+      <- {"type": "commentary", "text": "...", "source": "streaming_vlm",
+          "tactical_label": "Counter Attack", "confidence": 0.85, "gameState": {...}}
+      <- {"type": "status", "message": "...", "stats": {...}}
+    """
+    await websocket.accept()
+    logger.info("Streaming video session connected")
+
+    match_session: Optional[str] = None
+    game_state: Optional[GameState] = None
+    live_agent: Optional[LiveAgent] = None
+    bridge: Optional[StreamingVisionBridge] = None
+    periodic_task: Optional[asyncio.Task] = None
+    workflow_id: Optional[str] = None
+
+    try:
+        # Wait for init message
+        init_msg = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+        init_data = json.loads(init_msg)
+
+        if init_data.get("type") != "init":
+            await manager.send(websocket, {"type": "error", "message": "Expected 'init' message first"})
+            return
+
+        home_team = init_data.get("home_team", "Home")
+        away_team = init_data.get("away_team", "Away")
+        sport = init_data.get("sport", "football")
+        match_session = init_data.get("match_session", build_match_session_key(home_team, away_team, sport))
+        game_state = GameState(home_team=home_team, away_team=away_team)
+        live_agent = LiveAgent(sport=sport)
+
+        # Parse streaming config
+        config_data = init_data.get("config", {})
+        streaming_config = StreamingVideoConfig(**config_data)
+
+        # Initialize StreamingVisionBridge
+        bridge_config = StreamingBridgeConfig(
+            backend=streaming_config.backend,
+            sport=streaming_config.sport,
+            target_fps=streaming_config.target_fps,
+            chunk_interval_seconds=streaming_config.chunk_interval_seconds,
+            max_chunk_frames=streaming_config.max_chunk_frames,
+        )
+        bridge = StreamingVisionBridge(bridge_config)
+        await bridge.initialize()
+
+        # Start research workflow
+        context = WorkflowContext(
+            match_id=match_session,
+            home_team=home_team,
+            away_team=away_team,
+            sport=sport,
+            session_id=str(websocket.client),
+        )
+        workflow_id = await orchestrator.start_workflow(context)
+        await manager.connect(workflow_id, websocket)
+        await live_agent.start_session(home_team, away_team, sport, match_session=match_session)
+
+        await manager.send(websocket, {
+            "type": "ready",
+            "message": f"Streaming vision active ({streaming_config.backend} backend). "
+                       f"Chunk interval: {streaming_config.chunk_interval_seconds}s, "
+                       f"Target FPS: {streaming_config.target_fps}",
+            "match_session": match_session,
+            "config": streaming_config.model_dump(),
+        })
+
+        # Start periodic stats broadcast
+        periodic_task = asyncio.create_task(
+            _periodic_streaming_stats(workflow_id, bridge)
+        )
+
+        # Frame buffering loop
+        while True:
+            try:
+                msg = await asyncio.wait_for(websocket.receive(), timeout=300.0)
+            except asyncio.TimeoutError:
+                await manager.send(websocket, {"type": "ping", "message": "Still connected?"})
+                continue
+
+            if msg["type"] == "websocket.disconnect":
+                break
+
+            if msg.get("text"):
+                try:
+                    data = json.loads(msg["text"])
+                except json.JSONDecodeError:
+                    continue
+
+                msg_type = data.get("type")
+
+                if msg_type == "frame":
+                    frame_b64 = data.get("frame_b64")
+                    if not frame_b64:
+                        continue
+                    timestamp_ms = data.get("timestamp_ms", 0)
+                    keyframe = data.get("keyframe", False)
+
+                    try:
+                        frame_bytes = base64.b64decode(frame_b64)
+                    except Exception:
+                        continue
+
+                    result = await bridge.process_frame(
+                        frame_bytes, timestamp_ms, keyframe=keyframe
+                    )
+
+                    if result is not None:
+                        # Bridge formed a chunk and returned commentary
+                        await _broadcast_streaming_result(
+                            websocket, workflow_id, result,
+                            game_state, live_agent, match_session=match_session,
+                        )
+
+                elif msg_type == "chunk":
+                    # Client sends a pre-formed chunk
+                    frames_b64 = data.get("frames_b64", [])
+                    timestamps_ms = data.get("timestamps_ms", [])
+
+                    for idx, fb64 in enumerate(frames_b64):
+                        ts = timestamps_ms[idx] if idx < len(timestamps_ms) else 0
+                        try:
+                            frame_bytes = base64.b64decode(fb64)
+                        except Exception:
+                            continue
+                        result = await bridge.process_frame(frame_bytes, ts)
+                        if result is not None:
+                            await _broadcast_streaming_result(
+                                websocket, workflow_id, result,
+                                game_state, live_agent, match_session=match_session,
+                            )
+
+                elif msg_type == "match_event":
+                    description = data.get("description", "").strip()
+                    if not description:
+                        continue
+                    game_state.update_from_event(description)
+                    seed = description
+                    ctx = game_state.to_context_string()
+                    if ctx:
+                        seed = f"{ctx}\n{description}"
+                    text = await live_agent.generate_live_commentary(seed)
+                    await manager.broadcast(workflow_id, {
+                        "type": "commentary",
+                        "text": text,
+                        "source": "event",
+                        "trigger": description,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "gameState": game_state.to_dict(),
+                    })
+
+                elif msg_type == "query":
+                    query_text = data.get("text", "").strip()
+                    if not query_text or not live_agent:
+                        continue
+                    answer = await live_agent.handle_text_query(query_text)
+                    await manager.send(websocket, {
+                        "type": "answer",
+                        "text": answer,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    })
+
+                elif msg_type == "stats":
+                    stats = bridge.get_stats() if bridge else {}
+                    await manager.send(websocket, {
+                        "type": "stats",
+                        "stats": stats,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    })
+
+            elif msg.get("bytes"):
+                # Binary frame — treat as JPEG
+                frame_b64 = base64.b64encode(msg["bytes"]).decode("utf-8")
+                timestamp_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+                try:
+                    result = await bridge.process_frame(msg["bytes"], timestamp_ms)
+                    if result is not None:
+                        await _broadcast_streaming_result(
+                            websocket, workflow_id, result,
+                            game_state, live_agent, match_session=match_session,
+                        )
+                except Exception as exc:
+                    logger.error("binary_frame_error", error=str(exc))
+
+    except WebSocketDisconnect:
+        logger.info("Streaming video session disconnected")
+    except Exception as exc:
+        logger.error("streaming_video_error", error=str(exc), exc_info=True)
+        await manager.send(websocket, {"type": "error", "message": str(exc)})
+    finally:
+        if periodic_task:
+            periodic_task.cancel()
+        if bridge:
+            await bridge.force_flush()
+        if workflow_id:
+            manager.disconnect(workflow_id, websocket)
+            await orchestrator.finalize_workflow(workflow_id)
+
+
+async def _broadcast_streaming_result(
+    websocket: WebSocket,
+    workflow_id: str,
+    result: Dict[str, Any],
+    game_state: Optional[GameState],
+    live_agent: Optional[LiveAgent],
+    match_session: Optional[str] = None,
+):
+    """Broadcast streaming commentary result to all session clients."""
+    if game_state:
+        game_state.update_from_detection({
+            "timestamp_ms": result.get("start_timestamp_ms"),
+        })
+
+    # Broadcast the raw streaming result
+    await manager.broadcast(workflow_id, {
+        "type": "commentary",
+        "text": result.get("commentary", ""),
+        "source": "streaming_vlm",
+        "tactical_label": result.get("tactical_label"),
+        "confidence": result.get("confidence"),
+        "start_timestamp_ms": result.get("start_timestamp_ms"),
+        "end_timestamp_ms": result.get("end_timestamp_ms"),
+        "latency_ms": result.get("latency_ms"),
+        "chunk_index": result.get("chunk_index"),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "gameState": game_state.to_dict() if game_state else None,
+    })
+
+
+async def _periodic_streaming_stats(workflow_id: str, bridge: StreamingVisionBridge):
+    """Periodically broadcast streaming performance stats."""
+    while True:
+        try:
+            await asyncio.sleep(15)
+            stats = bridge.get_stats()
+            if stats:
+                await manager.broadcast(workflow_id, {
+                    "type": "stats_update",
+                    "stats": stats,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                })
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            pass
+
+
 # ── Commentary Notes Endpoint ──────────────────────────────────────────────────
 
 @app.post("/api/v1/commentary/prepare-notes", dependencies=[Depends(rate_limit_check)])
@@ -1125,6 +1483,16 @@ async def prepare_commentary_notes(req: CommentaryNotesRequest, request: Request
 
             duration_ms = (completed_state.end_time - completed_state.start_time).total_seconds() * 1000 if completed_state.end_time else 0
 
+            # Store NotesStore for live session usage
+            if completed_state.notes_store:
+                match_session_key = f"{req.home_team}_{req.away_team}"
+                manager.store_notes(match_session_key, completed_state.notes_store)
+                logger.log_event("notes_store_cached", {
+                    "match_session": match_session_key,
+                    "beat_count": len(completed_state.notes_store.beats),
+                    "lookup_tags": len(completed_state.notes_store.lookup)
+                })
+
             response = {
                 "status": "success",
                 "workflow_id": completed_state.workflow_id,
@@ -1135,6 +1503,7 @@ async def prepare_commentary_notes(req: CommentaryNotesRequest, request: Request
                 "agents_completed": len(completed_state.completed_agents),
                 "errors": completed_state.errors,
                 "warnings": completed_state.warnings,
+                "beat_count": len(completed_state.notes_store.beats) if completed_state.notes_store else 0,
             }
 
             if req.include_embedded_json:
@@ -1144,7 +1513,8 @@ async def prepare_commentary_notes(req: CommentaryNotesRequest, request: Request
                 "workflow_id": completed_state.workflow_id,
                 "preparation_time_ms": duration_ms,
                 "agents": len(completed_state.completed_agents),
-                "notes_length": len(completed_state.markdown_notes or "")
+                "notes_length": len(completed_state.markdown_notes or ""),
+                "beat_count": len(completed_state.notes_store.beats) if completed_state.notes_store else 0
             })
 
             yield f"data: {_json.dumps({'phase': 'complete', 'message': 'Done', 'done': True, 'result': response})}\n\n"

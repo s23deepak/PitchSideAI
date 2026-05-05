@@ -4,6 +4,8 @@ import CommentaryFeed from './CommentaryFeed'
 import EventFeed from './EventFeed'
 import CommentaryNotesViewer from './CommentaryNotesViewer'
 import LiveVideoPlayer from './LiveVideoPlayer'
+import VideoCanvas from './VideoCanvas'
+import MatchInsight from './MatchInsight'
 
 /* ── MatchDashboard — Live Match View ───────────────────────────────────────── */
 export default function MatchDashboard({
@@ -77,10 +79,16 @@ export default function MatchDashboard({
                         />
                     </div>
 
-                    {/* Live Video Player - Primary, Full Width */}
-                    <LiveVideoPlayer
+                    {/* VideoCanvas - Fan Lens with tactical overlays */}
+                    <VideoCanvas
                         matchSession={matchSession}
-                        onChunkAnalyzed={setDetection}
+                        homeTeam={homeTeam}
+                        awayTeam={awayTeam}
+                        sport={sport}
+                        onTacticalDetection={(analysis) => {
+                            setDetection(analysis)
+                            handleSendTacticalDetection(analysis)
+                        }}
                         onCommentary={(msg) => {
                             if (msg.type === 'commentary') {
                                 setLiveCommentary((prev) => [msg, ...prev].slice(0, 100))
@@ -105,7 +113,7 @@ export default function MatchDashboard({
                     )}
                 </div>
 
-                {/* Bottom Row - Commentary + Events (side by side) */}
+                {/* Bottom Row - Commentary + Events + MatchInsight (side by side) */}
                 <div className="dashboard-bottom-row">
                     {/* Live Commentary Feed */}
                     <div className="bottom-panel">
@@ -118,6 +126,17 @@ export default function MatchDashboard({
                     {/* Event Feed */}
                     <div className="bottom-panel">
                         <EventFeed matchSession={matchSession} />
+                    </div>
+
+                    {/* MatchInsight - Trivia cards + Q&A */}
+                    <div className="bottom-panel">
+                        <MatchInsight
+                            matchSession={matchSession}
+                            homeTeam={homeTeam}
+                            awayTeam={awayTeam}
+                            sport={sport}
+                            initialTrivia={commentaryData?.notes?.beats || []}
+                        />
                     </div>
                 </div>
 

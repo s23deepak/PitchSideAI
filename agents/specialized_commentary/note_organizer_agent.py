@@ -2,7 +2,7 @@
 Commentary Note Organizer Agent - Synthesize all agent outputs into final notes.
 
 Orchestrates all previous agent outputs into professional Drury-style
-commentary notes in Markdown + JSON format.
+commentary notes in Markdown + JSON format with structured NotesStore output.
 """
 
 from typing import Dict, List, Any, Optional, Tuple
@@ -11,6 +11,7 @@ import json
 import logging
 from agents.base import BaseAgent
 from data_sources import DataCache
+from models.notes_store import NotesStore, NarrativeBeat
 
 logger = logging.getLogger(__name__)
 
@@ -32,16 +33,16 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
         )
         self.cache = cache or DataCache(ttl_seconds=3600)
 
-    async def execute(self, all_agent_outputs: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
-        """Execute final note synthesis."""
-        return await self.synthesize_to_markdown_json(all_agent_outputs)
+    async def execute(self, all_agent_outputs: Dict[str, Any]) -> NotesStore:
+        """Execute final note synthesis, returning structured NotesStore."""
+        return await self.synthesize_to_notes_store(all_agent_outputs)
 
-    async def synthesize_to_markdown_json(
+    async def synthesize_to_notes_store(
         self,
         all_agent_outputs: Dict[str, Any],
-    ) -> Tuple[str, Dict[str, Any]]:
+    ) -> NotesStore:
         """
-        Synthesize all agent outputs into final Markdown + JSON notes.
+        Synthesize all agent outputs into structured NotesStore.
 
         Args:
             all_agent_outputs: Dictionary containing outputs from all agents:
@@ -53,15 +54,18 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
                 - news: Injuries and updates
 
         Returns:
-            Tuple of (markdown_notes: str, json_structure: dict)
+            NotesStore with raw_markdown, beats, and O(1) lookup
         """
         start_time = datetime.utcnow()
 
-        # Build JSON structure
-        json_structure = await self._build_json_structure(all_agent_outputs)
-
-        # Build Markdown sections
+        # Build Markdown document
         markdown = await self._build_markdown_document(all_agent_outputs)
+
+        # Parse markdown into NarrativeBeats
+        beats = await self._extract_beats_from_markdown(markdown, all_agent_outputs)
+
+        # Build NotesStore with O(1) lookup
+        notes_store = NotesStore(raw_markdown=markdown, beats=beats)
 
         duration_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
 
@@ -69,12 +73,135 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
             event_type="notes_synthesis_complete",
             details={
                 "markdown_length": len(markdown),
-                "json_size_bytes": len(json.dumps(json_structure)),
+                "beat_count": len(beats),
+                "lookup_size": len(notes_store.lookup),
                 "duration_ms": duration_ms,
             },
         )
 
-        return markdown, json_structure
+        return notes_store
+
+    async def _extract_beats_from_markdown(
+        self,
+        markdown: str,
+        all_outputs: Dict[str, Any],
+    ) -> List[NarrativeBeat]:
+        """
+        Parse markdown document into NarrativeBeat list with event tags.
+
+        Extracts key facts, player profiles, tactical insights and tags them
+        with canonical event types for O(1) retrieval.
+        """
+        beats: List[NarrativeBeat] = []
+        home_team = all_outputs.get("home_team", "Home")
+        away_team = all_outputs.get("away_team", "Away")
+
+        # Extract player profiles from player_research
+        for team_key in ["player_research"]:
+            team_data = all_outputs.get(team_key, {})
+            for side in ["home_team", "away_team"]:
+                team_players = team_data.get(side, {}).get("players", [])
+                if isinstance(team_players, list):
+                    for player in team_players[:10]:  # Top 10 players
+                        if isinstance(player, dict):
+                            name = player.get("name", "")
+                            position = player.get("position", "")
+                            stats = player.get("stats", {})
+                            profile = player.get("profile", "")
+
+                            if name:
+                                beat_text = f"{name} ({position}): {profile[:100]}"
+                                beats.append(NarrativeBeat(
+                                    text=beat_text,
+                                    event_tags=["substitution", "goal"],  # Player-specific beats
+                                    players=[name],
+                                    section="home_team" if side == "home_team" else "away_team",
+                                    source=player.get("data_source", "research"),
+                                    confidence=0.8,
+                                ))
+
+        # Extract tactical insights from matchups
+        matchups = all_outputs.get("matchups", {})
+        critical_matchups = matchups.get("critical_matchups", [])
+        if isinstance(critical_matchups, list):
+            for matchup in critical_matchups[:5]:
+                if isinstance(matchup, dict):
+                    p1 = matchup.get("player1", "")
+                    p2 = matchup.get("player2", "")
+                    analysis = matchup.get("analysis", "")
+                    if p1 and p2:
+                        beats.append(NarrativeBeat(
+                            text=f"Key duel: {p1} vs {p2} — {analysis[:80]}",
+                            event_tags=["foul", "free_kick_dangerous"],
+                            players=[p1, p2],
+                            section="tactical",
+                            source="matchup_analysis",
+                            confidence=0.7,
+                        ))
+
+        # Extract form patterns
+        team_form = all_outputs.get("team_form", {})
+        for side in ["home_team", "away_team"]:
+            form_data = team_form.get(side, {})
+            comprehensive = form_data.get("comprehensive_analysis", "")
+            if isinstance(comprehensive, str) and comprehensive:
+                # Split into sentences and create beats
+                sentences = comprehensive.replace("\n", " ").split(". ")
+                for sentence in sentences[:5]:
+                    if len(sentence.strip()) > 20:
+                        beats.append(NarrativeBeat(
+                            text=sentence.strip() + ".",
+                            event_tags=["corner", "offside"],  # General play beats
+                            players=[],
+                            section=side,
+                            source="team_form",
+                            confidence=0.6,
+                        ))
+
+        # Extract historical context
+        historical = all_outputs.get("historical", {})
+        narrative = historical.get("narrative", "")
+        if isinstance(narrative, str) and narrative:
+            sentences = narrative.replace("\n", " ").split(". ")
+            for sentence in sentences[:5]:
+                if len(sentence.strip()) > 20:
+                    beats.append(NarrativeBeat(
+                        text=sentence.strip() + ".",
+                        event_tags=["goal", "yellow_card", "red_card"],  # Historical storylines
+                        players=[],
+                        section="historical",
+                        source="historical_context",
+                        confidence=0.5,
+                    ))
+
+        # Extract weather impact
+        weather = all_outputs.get("weather", {})
+        weather_narrative = weather.get("narrative", "")
+        if isinstance(weather_narrative, str) and weather_narrative:
+            beats.append(NarrativeBeat(
+                text=f"Weather impact: {weather_narrative[:100]}",
+                event_tags=["foul", "corner"],  # Weather affects set pieces
+                players=[],
+                section="match_info",
+                source="weather_context",
+                confidence=0.6,
+            ))
+
+        return beats
+
+    async def synthesize_to_markdown_json(
+        self,
+        all_agent_outputs: Dict[str, Any],
+    ) -> Tuple[str, Dict[str, Any]]:
+        """
+        Legacy method for backwards compatibility.
+        Use synthesize_to_notes_store() for new code.
+
+        Returns:
+            Tuple of (markdown_notes: str, json_structure: dict)
+        """
+        notes_store = await self.synthesize_to_notes_store(all_agent_outputs)
+        return notes_store.raw_markdown, {"notes_store_available": True, "beat_count": len(notes_store.beats)}
 
     async def _build_markdown_document(self, all_outputs: Dict[str, Any]) -> str:
         """Build comprehensive Markdown document."""
