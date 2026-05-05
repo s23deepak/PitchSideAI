@@ -8,6 +8,8 @@ import VideoCanvas from './VideoCanvas'
 import MatchInsight from './MatchInsight'
 import MicButton from './MicButton'
 import SplitScreen from './SplitScreen'
+import Teleprompter from './Teleprompter'
+import ControlsTray from './ControlsTray'
 
 /* ── MatchDashboard — Live Match View ───────────────────────────────────────── */
 export default function MatchDashboard({
@@ -31,6 +33,9 @@ export default function MatchDashboard({
     const [isSplitScreenActive, setIsSplitScreenActive] = useState(false)
     const [currentAnswer, setCurrentAnswer] = useState(null)
     const [isAiReady, setIsAiReady] = useState(true) // False while vision model warming up
+    const [currentView, setCurrentView] = useState('fan') // 'fan' | 'commentator'
+    const [settings, setSettings] = useState({ bias: 0, excitement: 0.5, knowledge_depth: 0.5 })
+    const [language, setLanguage] = useState('en')
 
     const handleSendMatchEvent = async (description) => {
         onSendMatchEvent?.(description)
@@ -64,6 +69,39 @@ export default function MatchDashboard({
     const handleSplitScreenDismiss = () => {
         setIsSplitScreenActive(false)
         setCurrentAnswer(null)
+    }
+
+    // Handle settings change (Story 3.3)
+    const handleSettingsChange = (message) => {
+        console.log('[MatchDashboard] Settings update:', message)
+        setSettings({
+            bias: message.bias,
+            excitement: message.excitement,
+            knowledge_depth: message.knowledge_depth,
+        })
+        // Send to WebSocket (will be handled by parent App component)
+        window.dispatchEvent(new CustomEvent('pitchai:settings', { detail: message }))
+    }
+
+    // Handle language change (Story 3.4)
+    const handleLanguageChange = ({ language: newLanguage }) => {
+        console.log('[MatchDashboard] Language switch:', newLanguage)
+        setLanguage(newLanguage)
+        window.dispatchEvent(new CustomEvent('pitchai:language', { detail: { language: newLanguage } }))
+    }
+
+    // Handle view toggle
+    const handleViewChange = (newView) => {
+        setCurrentView(newView)
+    }
+
+    // Handle beat highlight (Story 3.2)
+    const handleBeatChange = ({ beatIndex, confidence, nextIndices }) => {
+        console.log('[MatchDashboard] Beat changed:', { beatIndex, confidence, nextIndices })
+        // Forward to Teleprompter via custom event
+        window.dispatchEvent(new CustomEvent('pitchai:beat_highlight', {
+            detail: { beatIndex, confidence, nextIndices }
+        }))
     }
 
     return (
@@ -195,16 +233,38 @@ export default function MatchDashboard({
                     </div>
                 </div>
 
-                {/* Commentary Notes (collapsible, full width) */}
-                {showNotes && commentaryData && (
+                {/* Commentary Notes / Teleprompter (collapsible, full width) */}
+                {showNotes && (
                     <div className="notes-container full-width">
-                        <CommentaryNotesViewer
-                            data={commentaryData}
-                            liveDetection={detection}
-                        />
+                        {currentView === 'commentator' ? (
+                            <Teleprompter
+                                notesData={commentaryData}
+                                buildingNotes={buildingNotes}
+                                buildProgress={buildProgress}
+                                buildStatus={buildStatus}
+                                onGenerateNotes={onPrepareNotes}
+                                liveDetection={detection}
+                                onBeatChange={handleBeatChange}
+                            />
+                        ) : (
+                            <CommentaryNotesViewer
+                                data={commentaryData}
+                                liveDetection={detection}
+                            />
+                        )}
                     </div>
                 )}
             </div>
+
+            {/* ControlsTray - Story 3.3 & 3.4: Settings & Language Toggle */}
+            <ControlsTray
+                homeTeam={homeTeam}
+                awayTeam={awayTeam}
+                onSettingsChange={handleSettingsChange}
+                onLanguageChange={handleLanguageChange}
+                onViewChange={handleViewChange}
+                currentView={currentView}
+            />
         </div>
     )
 }

@@ -175,3 +175,16 @@ class NotesStore:
             if 0 <= i < len(self.beats):
                 result.append(self.beats[i])
         return result
+
+    def get_beats_with_indices(self, tag: str) -> List[tuple]:
+        """Return all beats matching a canonical event tag with their indices. O(1).
+
+        Returns:
+            List of (index, NarrativeBeat) tuples sorted by index.
+        """
+        indices = self.lookup.get(tag, [])
+        result = []
+        for i in sorted(indices):
+            if 0 <= i < len(self.beats):
+                result.append((i, self.beats[i]))
+        return result

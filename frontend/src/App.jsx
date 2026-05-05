@@ -140,6 +140,13 @@ export default function App() {
     const ensureLiveSession = async () => {
         if (!homeTeam || !awayTeam) return false
 
+        // Fix #13: Close old WS if matchSession changed (race condition fix)
+        if (activeSessionKeyRef.current && activeSessionKeyRef.current !== matchSession) {
+            wsRef.current?.close()
+            wsRef.current = null
+            setLiveSessionReady(false)
+        }
+
         if (
             wsRef.current?.readyState === WebSocket.OPEN &&
             activeSessionKeyRef.current === matchSession &&
@@ -162,6 +169,22 @@ export default function App() {
 
             ws.onopen = () => {
                 ws.send(JSON.stringify({ type: 'init', home_team: homeTeam, away_team: awayTeam, sport }))
+
+                // Fix #12: Send any pending settings/language when WS connects
+                if (pendingSettingsRef.current) {
+                    ws.send(JSON.stringify({
+                        type: 'settings_update',
+                        ...pendingSettingsRef.current,
+                    }))
+                    pendingSettingsRef.current = null
+                }
+                if (pendingLanguageRef.current) {
+                    ws.send(JSON.stringify({
+                        type: 'language_switch',
+                        language: pendingLanguageRef.current,
+                    }))
+                    pendingLanguageRef.current = null
+                }
             }
 
             ws.onmessage = (e) => {
@@ -177,6 +200,27 @@ export default function App() {
                         setLiveSessionReady(false)
                     } else if (msg.type === 'commentary') {
                         setLiveCommentary((prev) => [msg, ...prev].slice(0, 100))
+                        // Story 3.2: Forward beat highlight to Teleprompter
+                        if (msg.beat_indices && msg.beat_indices.length > 0) {
+                            const bestBeatIdx = msg.beat_indices[0]
+                            const bestConfidence = msg.confidence || 0.8
+                            window.dispatchEvent(new CustomEvent('pitchai:beat_highlight', {
+                                detail: {
+                                    beatIndex: bestBeatIdx,
+                                    confidence: bestConfidence,
+                                    nextIndices: msg.beat_indices.slice(0, 3),
+                                }
+                            }))
+                        }
+                    } else if (msg.type === 'beat_highlight') {
+                        // Story 3.2: Direct beat highlight message
+                        window.dispatchEvent(new CustomEvent('pitchai:beat_highlight', {
+                            detail: {
+                                beatIndex: msg.beat_index,
+                                confidence: msg.confidence,
+                                nextIndices: msg.next_indices,
+                            }
+                        }))
                     } else if (msg.type === 'error' && !settled) {
                         settled = true
                         reject(new Error(msg.message || 'Live session failed'))
@@ -213,6 +257,47 @@ export default function App() {
             ensureLiveSession().catch((err) => console.warn('Live session init failed', err))
         }
     }, [matchReady, matchSession])
+
+    // Fix #12: Queue for settings/language when WS not ready
+    const pendingSettingsRef = useRef(null)
+    const pendingLanguageRef = useRef(null)
+
+    // Handle settings and language changes via custom events
+    useEffect(() => {
+        const handleSettingsUpdate = (e) => {
+            const settings = e.detail
+            if (wsRef.current?.readyState === WebSocket.OPEN) {
+                wsRef.current.send(JSON.stringify({
+                    type: 'settings_update',
+                    ...settings,
+                }))
+            } else {
+                // Queue settings for when WS connects (fix #12)
+                pendingSettingsRef.current = settings
+            }
+        }
+
+        const handleLanguageSwitch = (e) => {
+            const { language } = e.detail
+            if (wsRef.current?.readyState === WebSocket.OPEN) {
+                wsRef.current.send(JSON.stringify({
+                    type: 'language_switch',
+                    language,
+                }))
+            } else {
+                // Queue language for when WS connects (fix #12)
+                pendingLanguageRef.current = language
+            }
+        }
+
+        window.addEventListener('pitchai:settings', handleSettingsUpdate)
+        window.addEventListener('pitchai:language', handleLanguageSwitch)
+
+        return () => {
+            window.removeEventListener('pitchai:settings', handleSettingsUpdate)
+            window.removeEventListener('pitchai:language', handleLanguageSwitch)
+        }
+    }, [])
 
     // Cleanup on unmount
     useEffect(() => {

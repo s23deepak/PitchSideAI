@@ -287,6 +287,7 @@ class LiveAgent(BaseLiveAgent):
         event_description: str,
         vision_tactical_label: Optional[str] = None,
         game_state: Optional[Any] = None,
+        settings: Optional[dict] = None,
     ) -> Dict[str, Any]:
         """
         Generate live commentary for a match event with NotesStore lookup.
@@ -298,6 +299,7 @@ class LiveAgent(BaseLiveAgent):
             event_description: Description of what happened
             vision_tactical_label: Optional vision detection label for tag resolution
             game_state: Optional GameState object for active player filter
+            settings: Optional dict with bias, excitement, knowledge_depth for personalization
 
         Returns:
             Dict with commentary text, source ("notes_lookup" or "raw_markdown"),
@@ -319,20 +321,21 @@ class LiveAgent(BaseLiveAgent):
             resolved_tag = self.tag_resolver.resolve(vision_tactical_label)
 
             if resolved_tag:
-                # O(1) lookup
-                beats = self.notes_store.get_beats_for_tag(resolved_tag)
+                # O(1) lookup with indices
+                beats_with_indices = self.notes_store.get_beats_with_indices(resolved_tag)
 
                 # Apply game_state active-player filter if available
                 if game_state and hasattr(game_state, 'active_players'):
                     active_players = getattr(game_state, 'active_players', set())
                     if active_players:
-                        beats = [
-                            b for b in beats
+                        beats_with_indices = [
+                            (idx, b) for idx, b in beats_with_indices
                             if not b.players or any(p in active_players for p in b.players)
                         ]
 
-                if beats:
-                    retrieved_beats = beats
+                if beats_with_indices:
+                    retrieved_beats = [b for _, b in beats_with_indices]
+                    retrieved_indices = [idx for idx, _ in beats_with_indices]
                     source = "notes_lookup"
 
         # Build prompt with retrieved beats
@@ -343,11 +346,31 @@ class LiveAgent(BaseLiveAgent):
                 beat_lines.append(f"- {beat.text} (source: {beat.source})")
             beat_context = "\n".join(beat_lines)
 
+        # Fix #1: Build settings-based personalization
+        settings = settings or {"bias": 0, "excitement": 0.5, "knowledge_depth": 0.5}
+        bias = settings.get("bias", 0)
+        excitement = settings.get("excitement", 0.5)
+        knowledge = settings.get("knowledge_depth", 0.5)
+
+        # Derive tone modifiers from settings
+        bias_direction = (
+            f"favor {self.home_team}" if bias < -0.3
+            else f"favor {self.away_team}" if bias > 0.3
+            else "remain neutral"
+        )
+        energy_level = "measured and calm" if excitement < 0.3 else "high-energy and enthusiastic" if excitement > 0.7 else "balanced"
+        tactical_depth = "basic, accessible explanations" if knowledge < 0.3 else "deep tactical analysis with advanced concepts" if knowledge > 0.7 else "moderate tactical detail"
+
         prompt = f"""You are a professional {self.sport} commentator providing real-time match analysis in the style of Peter Drury — poetic, insightful, and emotionally resonant.
 
 MATCH: {self.home_team} vs {self.away_team}
 
 EVENT: {event_description}
+
+COMMENTATOR SETTINGS:
+- Bias: {bias_direction}
+- Energy: {energy_level}
+- Tactical Depth: {tactical_depth}
 """
 
         if beat_context:
@@ -385,11 +408,14 @@ Commentary:"""
                     "players": b.players,
                     "source": b.source,
                     "confidence": b.confidence,
+                    "section": b.section,
+                    "index": idx,
                 }
-                for b in retrieved_beats
+                for idx, b in zip(retrieved_indices, retrieved_beats)
             ],
             "trivia_formatted": trivia_formatted,
             "resolved_tag": resolved_tag,
+            "beat_indices": retrieved_indices,  # For teleprompter highlighting
         }
 
         await write_event(

@@ -156,6 +156,8 @@ class ConnectionManager:
         self._sessions: dict[str, list[WebSocket]] = defaultdict(list)
         self._notes_stores: dict[str, Any] = {}  # match_session -> NotesStore
         self._qa_runners: dict[str, Any] = {}  # match_session -> QARunner
+        self._settings: dict[str, dict] = {}  # match_session -> commentary settings
+        self._languages: dict[str, str] = {}  # match_session -> language code
 
     def store_notes(self, match_session: str, notes_store: Any) -> None:
         """Store NotesStore for a match session."""
@@ -172,6 +174,26 @@ class ConnectionManager:
     def get_qa_runner(self, match_session: str) -> Optional[Any]:
         """Retrieve Q&A parallel runner for a match session."""
         return self._qa_runners.get(match_session)
+
+    def store_settings(self, match_session: str, settings: dict) -> None:
+        """Store commentary settings for a match session."""
+        self._settings[match_session] = settings
+
+    def get_settings(self, match_session: str) -> dict:
+        """Retrieve commentary settings for a match session."""
+        return self._settings.get(match_session, {
+            "bias": 0,
+            "excitement": 0.5,
+            "knowledge_depth": 0.5,
+        })
+
+    def store_language(self, match_session: str, language: str) -> None:
+        """Store commentary language for a match session."""
+        self._languages[match_session] = language
+
+    def get_language(self, match_session: str) -> str:
+        """Retrieve commentary language for a match session."""
+        return self._languages.get(match_session, "en")
 
     async def connect(self, session_id: str, ws: WebSocket) -> None:
         self._sessions[session_id].append(ws)
@@ -959,14 +981,19 @@ async def live_audio_ws(websocket: WebSocket):
                         if ctx:
                             full_seed = f"{ctx}\n{full_seed}"
 
+                        # Fix #1: Get settings and inject into commentary generation
+                        settings = manager.get_settings(match_session)
+
                         # Call LiveAgent with vision label for NotesStore lookup
                         result = await agent.generate_live_commentary(
                             event_description=full_seed,
                             vision_tactical_label=tactical_label,
                             game_state=game_state,
+                            settings=settings,  # Inject user settings
                         )
 
-                        # Broadcast enhanced commentary
+                        # Broadcast enhanced commentary with beat indices for teleprompter highlighting
+                        beat_indices = result.get("beat_indices", [])
                         broadcast_msg = {
                             "type": "commentary",
                             "text": result.get("commentary", ""),
@@ -984,8 +1011,28 @@ async def live_audio_ws(websocket: WebSocket):
                             "gameState": game_state.to_dict(),
                             "resolved_tag": result.get("resolved_tag"),
                             "retrieved_beat_count": len(result.get("retrieved_beats", [])),
+                            "beat_indices": beat_indices,  # For teleprompter highlighting (Story 3.2)
                         }
                         await manager.broadcast(workflow_id, broadcast_msg)
+
+                        # Story 3.2: Broadcast beat highlight for teleprompter
+                        if beat_indices:
+                            # Find the best beat (highest confidence) for highlighting
+                            retrieved_beats = result.get("retrieved_beats", [])
+                            best_beat_idx = beat_indices[0]
+                            best_confidence = 0
+                            for beat_data in retrieved_beats:
+                                if beat_data.get("confidence", 0) > best_confidence:
+                                    best_confidence = beat_data["confidence"]
+                                    best_beat_idx = beat_data.get("index", beat_indices[0])
+
+                            await manager.broadcast(workflow_id, {
+                                "type": "beat_highlight",
+                                "beat_index": best_beat_idx,
+                                "confidence": best_confidence,
+                                "next_indices": beat_indices[:3],  # Next 3 beats for preview
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                            })
 
                         # Broadcast trivia card if high-confidence beat retrieved
                         trivia = result.get("trivia_formatted")
@@ -1001,6 +1048,53 @@ async def live_audio_ws(websocket: WebSocket):
                                 "fade_out_ms": trivia["fade_out_ms"],
                                 "timestamp": datetime.now(timezone.utc).isoformat(),
                             })
+
+                elif msg_type == "settings_update":
+                    # Story 3.3: Commentary Settings — store for next commentary cycle
+                    # Fix #14: Validate settings values
+                    raw_bias = data.get("bias", 0)
+                    raw_excitement = data.get("excitement", 0.5)
+                    raw_knowledge = data.get("knowledge_depth", 0.5)
+
+                    # Type coercion and range validation
+                    try:
+                        bias = float(raw_bias) if isinstance(raw_bias, (int, float)) else 0
+                        bias = max(-1.0, min(1.0, bias))  # Clamp to [-1, 1]
+
+                        excitement = float(raw_excitement) if isinstance(raw_excitement, (int, float)) else 0.5
+                        excitement = max(0.0, min(1.0, excitement))  # Clamp to [0, 1]
+
+                        knowledge = float(raw_knowledge) if isinstance(raw_knowledge, (int, float)) else 0.5
+                        knowledge = max(0.0, min(1.0, knowledge))  # Clamp to [0, 1]
+                    except (TypeError, ValueError):
+                        # Fallback to defaults on invalid input
+                        bias, excitement, knowledge = 0, 0.5, 0.5
+
+                    settings = {
+                        "bias": bias,
+                        "excitement": excitement,
+                        "knowledge_depth": knowledge,
+                    }
+                    manager.store_settings(match_session, settings)
+                    logger.log_event("settings_updated", {
+                        "match_session": match_session,
+                        "settings": settings,
+                    })
+
+                elif msg_type == "language_switch":
+                    # Story 3.4: Language Toggle — store language for commentary routing
+                    new_language = data.get("language", "en")
+                    manager.store_language(match_session, new_language)
+                    logger.log_event("language_switched", {
+                        "match_session": match_session,
+                        "language": new_language,
+                    })
+                    # Acknowledge to client
+                    await manager.send(websocket, {
+                        "type": "language_confirmed",
+                        "language": new_language,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    })
 
                 elif msg_type == "query":
                     query_text = data.get("text", "").strip()

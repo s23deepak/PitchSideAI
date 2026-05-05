@@ -17,3 +17,12 @@
 - Hardcoded 1000ms confirmation delay — deferred, accessibility enhancement
 - Missing language change effect — deferred, language is static for now
 - Interim Transcript Memory Leak — deferred, minor performance issue
+
+## Deferred from: code review of Epic 3 (2026-05-05)
+
+- Language translation pipeline not implemented — requires LLM prompt engineering (larger scope) [ControlsTray.jsx, api/server.py]
+- Hold mode false positive on micro-scroll — UX tuning, no threshold for intentional scroll delta [Teleprompter.jsx:119-124]
+- Tooltip shown only once ever — hasSeenTooltip blocks all subsequent tooltips after first [ControlsTray.jsx:145-150]
+- Beat parsing assumes notesData.beats exists — no fallback for markdown-only notes [Teleprompter.jsx:155-158]
+- ▶ marker pulse animation barely visible — scale(1.05) too subtle for small character [index.css:103-106]
+- Hold mode exit threshold too permissive — 100px may be too generous [Teleprompter.jsx:134-140]
