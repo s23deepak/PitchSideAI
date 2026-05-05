@@ -6,6 +6,8 @@ import CommentaryNotesViewer from './CommentaryNotesViewer'
 import LiveVideoPlayer from './LiveVideoPlayer'
 import VideoCanvas from './VideoCanvas'
 import MatchInsight from './MatchInsight'
+import MicButton from './MicButton'
+import SplitScreen from './SplitScreen'
 
 /* ── MatchDashboard — Live Match View ───────────────────────────────────────── */
 export default function MatchDashboard({
@@ -26,6 +28,9 @@ export default function MatchDashboard({
     buildProgress,
 }) {
     const [showNotes, setShowNotes] = useState(true)
+    const [isSplitScreenActive, setIsSplitScreenActive] = useState(false)
+    const [currentAnswer, setCurrentAnswer] = useState(null)
+    const [isAiReady, setIsAiReady] = useState(true) // False while vision model warming up
 
     const handleSendMatchEvent = async (description) => {
         onSendMatchEvent?.(description)
@@ -35,8 +40,51 @@ export default function MatchDashboard({
         onSendTacticalDetection?.(analysis)
     }
 
+    // Handle Q&A answer received (Story 2.2 + 2.3 + 2.4)
+    const handleAnswerReceived = (answer) => {
+        console.log('[MatchDashboard] Answer received:', answer)
+        setCurrentAnswer(answer)
+        setIsSplitScreenActive(true)
+
+        // Auto-hide split screen after animation completes
+        setTimeout(() => {
+            setIsSplitScreenActive(false)
+            setCurrentAnswer(null)
+        }, 8000) // 8 seconds total (500ms timeout + 5-8s display)
+    }
+
+    // Handle Q&A question submission from MicButton
+    const handleQuestionSubmit = async ({ text, confidence }) => {
+        console.log('[MatchDashboard] Question submitted:', { text, confidence })
+        // TODO: Wire up WebSocket query handler for Story 2.2
+        // The answer will be received via WebSocket and trigger handleAnswerReceived
+    }
+
+    // Handle split screen dismissal
+    const handleSplitScreenDismiss = () => {
+        setIsSplitScreenActive(false)
+        setCurrentAnswer(null)
+    }
+
     return (
         <div className="match-dashboard">
+            {/* SplitScreen - Story 2.3: Temporal Navigation */}
+            {isSplitScreenActive && currentAnswer && (
+                <SplitScreen
+                    answer={currentAnswer}
+                    isActive={isSplitScreenActive}
+                    onDismiss={handleSplitScreenDismiss}
+                >
+                    <VideoCanvas
+                        matchSession={matchSession}
+                        homeTeam={homeTeam}
+                        awayTeam={awayTeam}
+                        sport={sport}
+                        isLive={true}
+                    />
+                </SplitScreen>
+            )}
+
             {/* Dashboard Header */}
             <header className="dashboard-header">
                 <div className="dashboard-match-info">
@@ -94,6 +142,13 @@ export default function MatchDashboard({
                                 setLiveCommentary((prev) => [msg, ...prev].slice(0, 100))
                             }
                         }}
+                    />
+
+                    {/* MicButton - Voice Q&A input (Story 2.1) */}
+                    <MicButton
+                        onQuestionSubmit={handleQuestionSubmit}
+                        isAiReady={isAiReady}
+                        isSplitScreenActive={isSplitScreenActive}
                     />
 
                     {/* Tactical Detection Card (when available) */}

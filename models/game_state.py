@@ -75,6 +75,10 @@ class GameState:
     match_minute: Optional[int] = None
     phase: MatchPhase = MatchPhase.PRE_MATCH
     events: List[GameEvent] = field(default_factory=list)
+    # Active players on pitch (for Story 2.4 Player ID contextual bonus)
+    active_players: set = field(default_factory=set)
+    # Players with recent touches (for Story 2.4 contextual bonus)
+    recent_touches: set = field(default_factory=set)
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -162,6 +166,38 @@ class GameState:
         if isinstance(ts_ms, (int, float)) and ts_ms >= 0:
             self.match_minute = int(ts_ms // 60_000)
 
+        # Update active players if provided in detection
+        detected_players = analysis.get("players", [])
+        if detected_players:
+            self.active_players.update(detected_players)
+
+        # Update recent touches if provided
+        player_with_touch = analysis.get("player_with_touch")
+        if player_with_touch:
+            self.recent_touches.add(player_with_touch)
+            # Keep only last 5 touches
+            if len(self.recent_touches) > 5:
+                self.recent_touches = set(list(self.recent_touches)[-5:])
+
+    def update_active_players(self, players: set) -> None:
+        """Update set of active players on pitch."""
+        self.active_players = players
+
+    def add_player_to_pitch(self, player_name: str) -> None:
+        """Add a player to the active players set (e.g., after sub)."""
+        self.active_players.add(player_name)
+
+    def remove_player_from_pitch(self, player_name: str) -> None:
+        """Remove a player from active players (e.g., after red card or sub)."""
+        self.active_players.discard(player_name)
+
+    def record_player_touch(self, player_name: str) -> None:
+        """Record that a player has touched the ball recently."""
+        self.recent_touches.add(player_name)
+        # Keep only last 5 touches
+        if len(self.recent_touches) > 5:
+            self.recent_touches = set(list(self.recent_touches)[-5:])
+
     def to_context_string(self) -> str:
         """Compact prompt string for LLM injection. Returns '' if no state yet."""
         if self.phase == MatchPhase.PRE_MATCH and not self.events:
@@ -213,6 +249,8 @@ class GameState:
                 }
                 for e in recent
             ],
+            "active_players": list(self.active_players),
+            "recent_touches": list(self.recent_touches),
         }
 
     # ── Internals ─────────────────────────────────────────────────────────────

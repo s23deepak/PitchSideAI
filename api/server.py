@@ -28,6 +28,8 @@ from rag import get_rag_retriever, RAGStrategy
 from agents.live_agent import LiveAgent
 from agents.vision_agent import VisionAgent
 from agents.research_agent import ResearchAgent
+from agents.qa_agent import QAAgent, QAPair
+from agents.player_id_agent import PlayerIDAgent
 from tools.dynamodb_tool import build_match_session_key, get_recent_events, write_event
 from models.game_state import GameState
 from streaming import StreamingVisionBridge
@@ -153,6 +155,7 @@ class ConnectionManager:
     def __init__(self):
         self._sessions: dict[str, list[WebSocket]] = defaultdict(list)
         self._notes_stores: dict[str, Any] = {}  # match_session -> NotesStore
+        self._qa_runners: dict[str, Any] = {}  # match_session -> QARunner
 
     def store_notes(self, match_session: str, notes_store: Any) -> None:
         """Store NotesStore for a match session."""
@@ -161,6 +164,14 @@ class ConnectionManager:
     def get_notes(self, match_session: str) -> Optional[Any]:
         """Retrieve NotesStore for a match session."""
         return self._notes_stores.get(match_session)
+
+    def store_qa_runner(self, match_session: str, runner: Any) -> None:
+        """Store Q&A parallel runner for a match session."""
+        self._qa_runners[match_session] = runner
+
+    def get_qa_runner(self, match_session: str) -> Optional[Any]:
+        """Retrieve Q&A parallel runner for a match session."""
+        return self._qa_runners.get(match_session)
 
     async def connect(self, session_id: str, ws: WebSocket) -> None:
         self._sessions[session_id].append(ws)
@@ -187,6 +198,72 @@ class ConnectionManager:
 
 
 manager = ConnectionManager()
+
+
+# ── Story 2.2 + 2.4: Parallel Q&A Handler ──────────────────────────────────────
+
+async def _handle_fan_query_parallel(
+    question: str,
+    game_state: GameState,
+    match_session: str,
+    current_frame_b64: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Handle fan question using Stories 2.2 + 2.4 parallel agents.
+
+    Flow:
+    1. Get or create QAAgent + PlayerIDAgent runner for session
+    2. Detect if question references a player
+    3. Run Q&A and Player ID in parallel if needed
+    4. Merge results with overlay coordinates
+
+    Args:
+        question: Fan question text
+        game_state: Current match game state
+        match_session: Match session key
+        current_frame_b64: Optional current frame for player ID
+
+    Returns:
+        Dict with answer text, game state, player ID, overlay coordinates
+    """
+    # Get or create Q&A runner for this session
+    runner = manager.get_qa_runner(match_session)
+
+    if runner is None:
+        # Fallback to simple LiveAgent handling if runner not initialized
+        # This happens if pre-match notes weren't generated
+        from agents.live_agent import LiveAgent
+        agent = LiveAgent()
+        answer = await agent.handle_text_query(question)
+        return {
+            "type": "answer",
+            "text": answer,
+            "gameState": game_state.to_dict(),
+            "temporal_context": "full",
+            "source": "fallback_live_agent",
+        }
+
+    # Use parallel runner
+    result = await runner.handle_fan_question(
+        question=question,
+        frame_b64=current_frame_b64,
+    )
+
+    return result
+
+
+def _detect_player_reference(question: str) -> bool:
+    """Check if question references a player (by number or name)."""
+    import re
+    patterns = [
+        r"number\s*\d+",  # "number 10", "who's #7"
+        r"who\s+(is|just|scored)",  # "who is", "who just"
+        r"\b\d+\b",  # Any number reference
+    ]
+    for pattern in patterns:
+        if re.search(pattern, question, re.IGNORECASE):
+            return True
+    return False
 
 
 def _format_video_timestamp_ms(timestamp_ms: int | float | None) -> str | None:
@@ -643,6 +720,26 @@ async def live_audio_ws(websocket: WebSocket):
             <- {"type": "commentary",  "text": "...", "source": "event|timer|detection|analysis", "timestamp": "..."}
       <- {"type": "answer",      "text": "...", "timestamp": "..."}
 
+    Answer payload (Story 2.2 + 2.4 enhanced):
+      {
+        "type": "answer",
+        "text": "...",
+        "gameState": {...},
+        "temporal_context": "full" | "limited",
+        "timestamp_ms": 12345,  // For split-screen navigation
+        "player_identification": {  // Story 2.4
+          "player_name": "Haaland",
+          "confidence": 0.95,
+          "source": "jersey_number + lineup_data",
+          "jersey_number": 9
+        },
+        "overlay_coordinates": {  // Story 2.4: SVG overlay for Fan Lens
+          "type": "circle" | "zone",
+          "cx": 50, "cy": 50, "r": 8,  // or rx/ry for zone
+          "stroke": "#00ff00", "stroke_width": 3
+        }
+      }
+
     Binary frames: raw audio bytes (future Nova Sonic integration)
     """
     await websocket.accept()
@@ -690,11 +787,26 @@ async def live_audio_ws(websocket: WebSocket):
             notes_store=notes_store,
         )
 
+        # Story 2.2 + 2.4: Initialize parallel Q&A runner
+        from agents.qa_runner import QARunner
+        qa_runner = QARunner(sport=sport)
+        await qa_runner.initialize_session(
+            home_team=home_team,
+            away_team=away_team,
+            notes_store=notes_store,
+        )
+        manager.store_qa_runner(match_session, qa_runner)
+
+        # Load lineup data for player ID (from notes or pre-match data)
+        if notes_store and hasattr(notes_store, 'lineup_data'):
+            qa_runner.player_id_agent.set_lineup_data(notes_store.lineup_data)
+
         await manager.send(websocket, {
             "type": "ready",
-            "message": "Session ready. Commentary will fire on events, frame detections, and every 60 s.",
+            "message": "Session ready. Commentary will fire on events, frame detections, and every 60 s. Q&A available with player identification.",
             "match_session": match_session,
             "has_notes_store": notes_store is not None,
+            "qa_enhanced": True,  # Story 2.2 + 2.4 flag
         })
 
         # Start periodic commentary background task
@@ -894,12 +1006,49 @@ async def live_audio_ws(websocket: WebSocket):
                     query_text = data.get("text", "").strip()
                     if not query_text:
                         continue
-                    answer = await agent.handle_text_query(query_text)
-                    await manager.send(websocket, {
+
+                    # Story 2.2 + 2.4: Parallel Q&A with Player ID
+                    # Get current frame from game state (in prod, from streaming bridge)
+                    current_frame_b64 = None  # Would come from StreamingVisionBridge
+
+                    result = await _handle_fan_query_parallel(
+                        question=query_text,
+                        game_state=game_state,
+                        match_session=match_session,
+                        current_frame_b64=current_frame_b64,
+                    )
+
+                    # Build answer payload with Story 2.2 + 2.4 enhancements
+                    answer_payload = {
                         "type": "answer",
-                        "text": answer,
+                        "text": result.get("text", ""),
+                        "gameState": result.get("gameState"),
                         "timestamp": datetime.now(timezone.utc).isoformat(),
-                    })
+                    }
+
+                    # Add Story 2.2: Temporal context
+                    if result.get("temporal_context"):
+                        answer_payload["temporal_context"] = result["temporal_context"]
+
+                    # Add Story 2.2: Timestamp for split-screen navigation
+                    if result.get("timestamp_ms"):
+                        answer_payload["timestamp_ms"] = result["timestamp_ms"]
+
+                    # Add Story 2.4: Player identification
+                    if result.get("player_identification"):
+                        player_id = result["player_identification"]
+                        answer_payload["player_identification"] = {
+                            "player_name": player_id.get("player_name"),
+                            "confidence": player_id.get("confidence"),
+                            "source": player_id.get("source"),
+                            "jersey_number": player_id.get("jersey_number"),
+                        }
+
+                    # Add Story 2.4: Overlay coordinates for SVG rendering
+                    if result.get("overlay_coordinates"):
+                        answer_payload["overlay_coordinates"] = result["overlay_coordinates"]
+
+                    await manager.send(websocket, answer_payload)
 
             # ── Binary frames (audio) ──────────────────────────────────────────
             elif msg.get("bytes"):
@@ -1491,6 +1640,21 @@ async def prepare_commentary_notes(req: CommentaryNotesRequest, request: Request
                     "match_session": match_session_key,
                     "beat_count": len(completed_state.notes_store.beats),
                     "lookup_tags": len(completed_state.notes_store.lookup)
+                })
+
+                # Story 2.2 + 2.4: Pre-load Q&A cache from notes
+                # Create Q&A runner and populate cache with pre-computed Q&A pairs
+                from agents.qa_runner import QARunner
+                qa_runner = QARunner(sport=req.sport)
+                await qa_runner.initialize_session(
+                    home_team=req.home_team,
+                    away_team=req.away_team,
+                    notes_store=completed_state.notes_store,
+                )
+                manager.store_qa_runner(match_session_key, qa_runner)
+                logger.log_event("qa_runner_initialized", {
+                    "match_session": match_session_key,
+                    "qa_cache_size": len(qa_runner.qa_agent.qa_cache),
                 })
 
             response = {

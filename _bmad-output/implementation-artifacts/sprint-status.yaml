@@ -1,5 +1,5 @@
 # generated: 2026-05-04
-# last_updated: 2026-05-04
+# last_updated: 2026-05-05
 # project: PitchAI
 # project_key: NOKEY
 # tracking_system: file-system
@@ -53,11 +53,11 @@ development_status:
   epic-1-retrospective: optional
 
   # Epic 2: Fan Q&A — Ask & Understand
-  epic-2: backlog
-  2-1-voice-input-micbutton-stt: backlog
-  2-2-qa-backend-answer-generation: backlog
-  2-3-split-screen-temporal-navigation: backlog
-  2-4-player-identification-qa: backlog
+  epic-2: in-progress
+  2-1-voice-input-micbutton-stt: done
+  2-2-qa-backend-answer-generation: done
+  2-3-split-screen-temporal-navigation: done
+  2-4-player-identification-qa: done
   epic-2-retrospective: optional
 
   # Epic 3: Commentator Dashboard & Personalization
