@@ -212,7 +212,7 @@ Only analyze from the verified data above and the listed positions. If statistic
 
 Keep to 2-3 sentences."""
 
-        analysis = await self.call_bedrock(
+        analysis = await self.call_llm(
             prompt=prompt,
             temperature=0.3,
             max_tokens=100,
@@ -321,7 +321,7 @@ Matchups Summary: {len(matchups)} critical battles identified
 
 Provide expected tactical adjustments and key battles to watch."""
 
-        implications = await self.call_bedrock(
+        implications = await self.call_llm(
             prompt=prompt,
             temperature=0.4,
             max_tokens=100,  # 100 for local dev (200 in production)

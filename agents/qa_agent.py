@@ -336,7 +336,7 @@ Answer:"""
         prompt = self._build_qa_prompt(question, game_state, temporal_ctx, vision_context)
 
         # Step 4: Call LLM (Priority 1 GPU scheduling)
-        answer_text = await self.call_bedrock(
+        answer_text = await self.call_llm(
             prompt,
             temperature=0.7,
             max_tokens=300,

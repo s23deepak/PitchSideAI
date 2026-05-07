@@ -89,8 +89,8 @@ class TestLiveAgentNotesStoreIntegration:
         live_agent.home_team = "Man City"
         live_agent.away_team = "Liverpool"
 
-        # Mock call_bedrock to return predictable commentary
-        with patch.object(live_agent, 'call_bedrock', new_callable=AsyncMock) as mock_bedrock:
+        # Mock call_llm to return predictable commentary
+        with patch.object(live_agent, 'call_llm', new_callable=AsyncMock) as mock_bedrock:
             mock_bedrock.return_value = "Haaland strikes again! What a finish from the Norwegian!"
 
             # Call with vision label that matches a beat tag
@@ -127,8 +127,8 @@ class TestLiveAgentNotesStoreIntegration:
         live_agent.home_team = "Man City"
         live_agent.away_team = "Liverpool"
 
-        # Mock call_bedrock
-        with patch.object(live_agent, 'call_bedrock', new_callable=AsyncMock) as mock_bedrock:
+        # Mock call_llm
+        with patch.object(live_agent, 'call_llm', new_callable=AsyncMock) as mock_bedrock:
             mock_bedrock.return_value = "The match continues at a high tempo."
 
             # Call with vision label that has NO matching beats
@@ -153,7 +153,7 @@ class TestLiveAgentNotesStoreIntegration:
         live_agent.away_team = "Liverpool"
         live_agent.notes_store = None
 
-        with patch.object(live_agent, 'call_bedrock', new_callable=AsyncMock) as mock_bedrock:
+        with patch.object(live_agent, 'call_llm', new_callable=AsyncMock) as mock_bedrock:
             mock_bedrock.return_value = "Standard commentary without notes."
 
             result = await live_agent.generate_live_commentary(
@@ -173,7 +173,7 @@ class TestLiveAgentNotesStoreIntegration:
         live_agent.home_team = "Man City"
         live_agent.away_team = "Liverpool"
 
-        with patch.object(live_agent, 'call_bedrock', new_callable=AsyncMock) as mock_bedrock:
+        with patch.object(live_agent, 'call_llm', new_callable=AsyncMock) as mock_bedrock:
             mock_bedrock.return_value = "Commentary text"
 
             result = await live_agent.generate_live_commentary(
@@ -201,7 +201,7 @@ class TestLiveAgentNotesStoreIntegration:
         live_agent.home_team = "Man City"
         live_agent.away_team = "Liverpool"
 
-        with patch.object(live_agent, 'call_bedrock', new_callable=AsyncMock) as mock_bedrock:
+        with patch.object(live_agent, 'call_llm', new_callable=AsyncMock) as mock_bedrock:
             mock_bedrock.return_value = "Commentary text"
 
             result = await live_agent.generate_live_commentary(
@@ -239,7 +239,7 @@ class TestLiveAgentNotesStoreIntegration:
         live_agent.home_team = "Team A"
         live_agent.away_team = "Team B"
 
-        with patch.object(live_agent, 'call_bedrock', new_callable=AsyncMock) as mock_bedrock:
+        with patch.object(live_agent, 'call_llm', new_callable=AsyncMock) as mock_bedrock:
             mock_bedrock.return_value = "Commentary text"
 
             result = await live_agent.generate_live_commentary(

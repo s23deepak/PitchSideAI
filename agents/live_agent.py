@@ -6,8 +6,10 @@ Supports dynamic sport types with contextual responses.
 Enhanced with NotesStore integration for O(1) retrieval of pre-computed
 commentary beats triggered by vision detections.
 """
-import json
+import base64
 from typing import List, Optional, Any, Dict
+
+import httpx
 
 from agents.base import LiveAgent as BaseLiveAgent
 from agents.research_agent import ResearchAgent
@@ -164,9 +166,8 @@ class LiveAgent(BaseLiveAgent):
         })
 
         try:
-            # TODO: Implement actual speech-to-text via Bedrock
-            # For now, return placeholder
-            response = "Audio processing active. Please speak your question."
+            transcribed = await self._transcribe_audio(audio_bytes)
+            response = await self.handle_text_query(transcribed) if transcribed.strip() else "I couldn't hear that. Please try again."
 
             await write_event(
                 "audio_interaction",
@@ -199,7 +200,7 @@ class LiveAgent(BaseLiveAgent):
         })
 
         try:
-            # Transcribe audio to text using Bedrock
+            # Transcribe audio to text
             transcribed_text = await self._transcribe_audio(audio_bytes)
 
             if not transcribed_text or not transcribed_text.strip():
@@ -228,59 +229,81 @@ class LiveAgent(BaseLiveAgent):
             self.logger.error("voice_query_failed", error=str(exc), exc_info=True)
             return "I'm having trouble processing your voice question. Please try again or type your question."
 
-    async def _transcribe_audio(self, audio_bytes: bytes) -> str:
+    async def _transcribe_audio(self, audio_bytes: bytes, audio_format: str = "wav") -> str:
         """
-        Transcribe audio to text using Amazon Bedrock.
+        Transcribe audio to text via a vLLM OpenAI-compatible ASR endpoint.
+
+        Supports two API formats controlled by AUDIO_API_TYPE in config:
+          - "whisper" (default): POST /v1/audio/transcriptions — multipart form,
+            compatible with Whisper family (whisper-large-v3-turbo, distil-large-v3,
+            whisper-small, etc.)  Recommended for local RTX hardware.
+          - "chat": POST /v1/chat/completions — multimodal audio_url content block,
+            for Qwen2-Audio-7B-Instruct on high-VRAM servers.
 
         Args:
-            audio_bytes: Raw audio bytes (WAV/PCM format expected)
+            audio_bytes: Raw audio bytes. WAV is preferred; other formats accepted.
+            audio_format: MIME subtype string (e.g. "wav", "mp3", "webm").
 
         Returns:
-            Transcribed text
+            Transcribed text string (stripped).
         """
-        import base64
+        from config import AUDIO_VLLM_BASE_URL, AUDIO_MODEL, AUDIO_API_TYPE
 
-        try:
-            # Use Bedrock's InvokeModel with a speech-to-text capable model
-            # For now, use a simple approach with Bedrock Runtime
-            from config import AWS_REGION
-            import boto3
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            if AUDIO_API_TYPE == "whisper":
+                # ── Whisper API: /v1/audio/transcriptions (multipart form) ──────
+                # vLLM serves this for openai/whisper-* and distil-whisper/* models.
+                # No base64 needed — raw bytes sent directly.
+                files = {
+                    "file": (f"audio.{audio_format}", audio_bytes, f"audio/{audio_format}"),
+                }
+                data = {
+                    "model": AUDIO_MODEL,
+                    "language": "en",          # skip language detection for speed
+                    "response_format": "text", # plain text, no JSON parsing needed
+                }
+                response = await client.post(
+                    f"{AUDIO_VLLM_BASE_URL}/v1/audio/transcriptions",
+                    files=files,
+                    data=data,
+                )
+                if response.is_error:
+                    raise ValueError(
+                        f"Whisper transcription failed ({response.status_code}): {response.text[:200]}"
+                    )
+                return response.text.strip()
 
-            bedrock_runtime = boto3.client("bedrock-runtime", region_name=AWS_REGION)
-
-            # Encode audio as base64
-            audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
-
-            # Use Nova Sonic or another STT-capable model
-            # Note: This is a simplified implementation
-            # In production, you'd use the actual Bedrock STT API
-            prompt = "Transcribe the following audio. Return ONLY the transcribed text, nothing else:"
-
-            response = bedrock_runtime.invoke_model(
-                modelId="amazon.nova-sonic-v1:0",  # Or appropriate STT model
-                body=json.dumps({
-                    "prompt": prompt,
-                    "audio_data": audio_b64,
-                    "max_tokens": 256,
-                })
-            )
-
-            result = json.loads(response["body"].read())
-            transcribed = result.get("transcription", "").strip()
-
-            self.log_event("audio_transcribed", {
-                "transcription_length": len(transcribed)
-            })
-
-            return transcribed
-
-        except ImportError:
-            self.logger.warning("boto3_not_available_for_stt")
-            return ""
-        except Exception as exc:
-            self.logger.error("stt_transcription_failed", error=str(exc))
-            # Fallback: return empty string (caller will handle)
-            return ""
+            else:
+                # ── Chat completions: audio_url content block (Qwen2-Audio) ─────
+                b64_audio = base64.b64encode(audio_bytes).decode("utf-8")
+                payload = {
+                    "model": AUDIO_MODEL,
+                    "messages": [{
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "audio_url",
+                                "audio_url": {"url": f"data:audio/{audio_format};base64,{b64_audio}"},
+                            },
+                            {
+                                "type": "text",
+                                "text": "Transcribe this audio exactly. Output only the transcribed text, nothing else.",
+                            },
+                        ],
+                    }],
+                    "temperature": 0.0,
+                    "max_tokens": 512,
+                }
+                response = await client.post(
+                    f"{AUDIO_VLLM_BASE_URL}/v1/chat/completions",
+                    json=payload,
+                    headers={"Content-Type": "application/json"},
+                )
+                if response.is_error:
+                    raise ValueError(
+                        f"Qwen2-Audio transcription failed ({response.status_code}): {response.text[:200]}"
+                    )
+                return response.json()["choices"][0]["message"]["content"].strip()
 
     async def generate_live_commentary(
         self,
@@ -313,6 +336,7 @@ class LiveAgent(BaseLiveAgent):
 
         # Retrieve relevant beats via NotesStore lookup chain
         retrieved_beats = []
+        retrieved_indices: list[int] = []  # always defined — set inside branch if notes_store hits
         source = "raw_markdown"
         resolved_tag = None
 
@@ -391,7 +415,7 @@ Use metaphors and narrative flair characteristic of Peter Drury.
 
 Commentary:"""
 
-        commentary = await self.call_bedrock(prompt, temperature=0.7, max_tokens=250)
+        commentary = await self.call_llm(prompt, temperature=0.7, max_tokens=250)
 
         # Format trivia card (2-line fact for Fan Lens)
         trivia_formatted = self._format_trivia_card(

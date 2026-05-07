@@ -142,7 +142,7 @@ Provide:
 
 Keep analysis concise (4-5 sentences for commentary notes)."""
 
-        form_analysis = await self.call_bedrock(
+        form_analysis = await self.call_llm(
             prompt=analysis_prompt,
             temperature=0.4,
             max_tokens=200,
@@ -219,7 +219,7 @@ Provide:
 
 Keep to 3-4 sentences."""
 
-        comparison = await self.call_bedrock(
+        comparison = await self.call_llm(
             prompt=comparison_prompt,
             temperature=0.4,
             max_tokens=150,  # 150 for local dev (300 in production)

@@ -15,10 +15,6 @@ AWS_REGION          = os.getenv("AWS_REGION", "us-east-1")
 AWS_ACCESS_KEY_ID   = os.getenv("AWS_ACCESS_KEY_ID", "")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "")
 
-# ── Bedrock AgentCore (deployment-specific) ───────────────────────────────────
-AGENT_ID       = os.getenv("BEDROCK_AGENT_ID", "")
-AGENT_ALIAS_ID = os.getenv("BEDROCK_AGENT_ALIAS_ID", "")
-
 # ── Amazon OpenSearch (deployment-specific) ───────────────────────────────────
 OPENSEARCH_ENDPOINT = os.getenv("OPENSEARCH_ENDPOINT", "")
 
@@ -61,6 +57,10 @@ VLLM_BASE_URL    = os.getenv("VLLM_BASE_URL",    _d.VLLM_BASE_URL)
 VLLM_MODEL       = os.getenv("VLLM_MODEL",       _d.VLLM_MODEL)
 VLLM_VISION_MODEL = os.getenv("VLLM_VISION_MODEL", VLLM_MODEL or _d.VLLM_VISION_MODEL)
 VLLM_EMBED_MODEL = os.getenv("VLLM_EMBED_MODEL", _d.VLLM_EMBED_MODEL)
+
+AUDIO_VLLM_BASE_URL = os.getenv("AUDIO_VLLM_BASE_URL", os.getenv("VLLM_BASE_URL", _d.AUDIO_VLLM_BASE_URL))
+AUDIO_MODEL         = os.getenv("AUDIO_MODEL",         _d.AUDIO_MODEL)
+AUDIO_API_TYPE      = os.getenv("AUDIO_API_TYPE",      _d.AUDIO_API_TYPE)
 
 RATE_LIMIT_RPM         = int(os.getenv("RATE_LIMIT_RPM",         _d.RATE_LIMIT_RPM))
 RATE_LIMIT_BURST       = int(os.getenv("RATE_LIMIT_BURST",       _d.RATE_LIMIT_BURST))

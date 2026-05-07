@@ -196,7 +196,7 @@ Return ONLY valid JSON:
 If jersey number is not visible due to occlusion or angle, set it to null.
 Be honest about confidence levels."""
 
-        response_text = await self.call_bedrock(
+        response_text = await self.call_llm(
             prompt,
             temperature=0.3,  # Low temp for factual extraction
             max_tokens=300,

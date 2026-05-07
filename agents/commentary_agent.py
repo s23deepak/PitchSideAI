@@ -48,7 +48,7 @@ class CommentaryAgent(BaseCommentaryAgent):
         prompt = get_commentary_prompt(self.sport, match_context, recent_events)
 
         # Generate commentary
-        commentary = await self.call_bedrock(
+        commentary = await self.call_llm(
             prompt,
             temperature=0.7,  # Higher temp for varied commentary
             max_tokens=500
@@ -91,7 +91,7 @@ class CommentaryAgent(BaseCommentaryAgent):
 
         prompt = get_tactical_prompt(self.sport, tactical_situation)
 
-        commentary = await self.call_bedrock(
+        commentary = await self.call_llm(
             prompt,
             temperature=0.5,
             max_tokens=400
@@ -142,7 +142,7 @@ Generate 2-3 sentences of engaging commentary about this player's performance, h
 Keep it professional yet engaging for broadcast.
 """
 
-        insight = await self.call_bedrock(
+        insight = await self.call_llm(
             prompt,
             temperature=0.6,
             max_tokens=300
@@ -197,7 +197,7 @@ Generate a engaging 4-5 sentence narrative that:
 Write as if describing the match to someone who missed it.
 """
 
-        narrative = await self.call_bedrock(
+        narrative = await self.call_llm(
             prompt,
             temperature=0.6,
             max_tokens=400
@@ -247,7 +247,7 @@ What are the likely scenarios that could unfold next? Provide:
 Be specific and base predictions on current match dynamics.
 """
 
-        prediction = await self.call_bedrock(
+        prediction = await self.call_llm(
             prompt,
             temperature=0.6,
             max_tokens=350
@@ -305,7 +305,7 @@ Generate a 4-5 paragraph post-match summary that:
 Use authentic {self.sport} analysis terminology.
 """
 
-        summary = await self.call_bedrock(
+        summary = await self.call_llm(
             prompt,
             temperature=0.6,
             max_tokens=800

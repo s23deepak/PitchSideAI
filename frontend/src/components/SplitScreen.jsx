@@ -31,13 +31,16 @@ const SplitScreenState = {
  */
 const ANIMATION_DURATION = 300
 const CONTENT_TIMEOUT = 500
-const AUTO_DISMISS_TIMEOUT = 5000 // 5-8 seconds per AC4
+const AUTO_DISMISS_TIMEOUT = 5000      // 5s for voice Q&A
+const VIDEO_AUTO_DISMISS_TIMEOUT = 15000 // 15s for video clip Q&A
 
 export default function SplitScreen({
     answer,
     isActive,
     onDismiss,
     children,
+    videoPreview = null,   // Object URL for uploaded video clip
+    isAnalyzing = false,   // True while video Q&A backend is processing
 }) {
     const [state, setState] = useState(SplitScreenState.HIDDEN)
     const [contentReady, setContentReady] = useState(false)
@@ -67,16 +70,18 @@ export default function SplitScreen({
                 setLoadingSkeleton(true)
             }, CONTENT_TIMEOUT)
 
-            // Check if content is ready (frozen frame loaded)
-            if (answer.timestamp_ms || answer.temporal_context === 'limited') {
+            // Check if content is ready
+            const isVideoQA = answer.source === 'video_qa'
+            if (isVideoQA || answer.timestamp_ms || answer.temporal_context === 'limited') {
                 setContentReady(true)
                 clearTimeout(contentTimeoutRef.current)
             }
 
-            // Start auto-dismiss timer
+            // Longer auto-dismiss for video Q&A (more text to read)
+            const timeout = isVideoQA ? VIDEO_AUTO_DISMISS_TIMEOUT : AUTO_DISMISS_TIMEOUT
             autoDismissRef.current = setTimeout(() => {
                 handleDismiss()
-            }, AUTO_DISMISS_TIMEOUT)
+            }, timeout)
 
             // Start slide-in animation
             setState(SplitScreenState.SLIDING_IN)
@@ -187,7 +192,7 @@ export default function SplitScreen({
             {/* Right Panel - Frozen Frame (40%) */}
             <div
                 className="split-screen-right"
-                style={{ width: getPanelWidth() }}
+                style={{ width: getPanelWidth(), background: '#0E0E0E', borderLeft: '2px solid #1a1a1a' }}
                 onClick={handleRightPanelClick}
                 role="button"
                 tabIndex={0}
@@ -199,19 +204,72 @@ export default function SplitScreen({
                 }}
                 aria-label="Click or press Enter to dismiss"
             >
-                {loadingSkeleton && !contentReady ? (
+                {/* Dismiss X button — always visible when active */}
+                <button
+                    onClick={(e) => { e.stopPropagation(); handleDismiss() }}
+                    aria-label="Dismiss Q&A panel"
+                    style={{
+                        position: 'absolute', top: '12px', right: '12px', zIndex: 10,
+                        width: '28px', height: '28px', borderRadius: '50%',
+                        background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)',
+                        color: '#c3c9ae', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: '16px', lineHeight: 1, fontFamily: 'system-ui',
+                    }}
+                >×</button>
+
+                {answer?.source === 'video_qa' ? (
+                    /* ── Video Q&A panel ── */
+                    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: '16px 14px 14px' }}>
+                        {/* Video preview */}
+                        {videoPreview && (
+                            <div style={{ borderRadius: '8px', overflow: 'hidden', flexShrink: 0, marginBottom: '12px', border: '1px solid rgba(255,255,255,0.08)' }}>
+                                <video
+                                    src={videoPreview}
+                                    style={{ width: '100%', display: 'block', maxHeight: '180px', objectFit: 'cover' }}
+                                    muted autoPlay loop playsInline
+                                />
+                            </div>
+                        )}
+
+                        {/* Header */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '10px' }}>
+                            <span className="material-symbols-outlined" style={{ fontSize: '16px', color: '#c3f400' }}>smart_toy</span>
+                            <span style={{ fontFamily: "'Space Grotesk', monospace", fontSize: '11px', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#c3c9ae' }}>AI CLIP ANALYSIS</span>
+                        </div>
+
+                        {/* Streaming answer text */}
+                        <div style={{ flex: 1, overflow: 'auto', paddingRight: '4px' }}>
+                            {isAnalyzing && !answer?.text ? (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                    {[100, 85, 70].map((w, i) => (
+                                        <div key={i} style={{
+                                            height: '12px', borderRadius: '4px', width: `${w}%`,
+                                            background: 'linear-gradient(90deg, #1e2a1e 0%, #2a3a1a 50%, #1e2a1e 100%)',
+                                            backgroundSize: '200% 100%', animation: 'shimmer 1.5s infinite',
+                                        }} />
+                                    ))}
+                                    <span style={{ color: '#c3c9ae', fontFamily: "'Inter', sans-serif", fontSize: '12px', marginTop: '4px' }}>Analyzing clip…</span>
+                                </div>
+                            ) : (
+                                <p style={{
+                                    color: '#e5e2e1', fontFamily: "'Inter', sans-serif",
+                                    fontSize: '14px', lineHeight: '1.6', margin: 0,
+                                }}>
+                                    {answer?.text}
+                                    {isAnalyzing && <span style={{ color: '#c3f400', animation: 'pulse 1s infinite' }}>▌</span>}
+                                </p>
+                            )}
+                        </div>
+                    </div>
+                ) : loadingSkeleton && !contentReady ? (
                     <div className="loading-skeleton">
                         <div className="skeleton-frame" />
                         <div className="skeleton-text" />
                     </div>
                 ) : isLimitedContext ? (
                     <div className="limited-context-panel">
-                        <div className="limited-context-indicator">
-                            Based on available footage
-                        </div>
-                        <div className="answer-text">
-                            {answer?.text}
-                        </div>
+                        <div className="limited-context-indicator">Based on available footage</div>
+                        <div className="answer-text">{answer?.text}</div>
                     </div>
                 ) : (
                     <FrozenFrameWithSVG
@@ -250,7 +308,7 @@ export default function SplitScreen({
                     flex: 0 0 40%;
                     height: 100%;
                     position: relative;
-                    background-color: rgb(2, 6, 23); /* Slate 950 */
+                    background-color: #0E0E0E; /* Midnight Stadium surface-container-lowest */
                     overflow: hidden;
                     transition: width ${ANIMATION_DURATION}ms ease-in-out;
                 }

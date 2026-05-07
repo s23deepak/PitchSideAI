@@ -98,7 +98,7 @@ Provide:
 
 Keep to 4-5 sentences focused on storytelling."""
 
-        narrative = await self.call_bedrock(
+        narrative = await self.call_llm(
             prompt=narrative_prompt,
             temperature=0.5,
             max_tokens=175,  # 175 for local dev (350 in production)

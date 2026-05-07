@@ -228,7 +228,7 @@ Provide:
 
 Keep it concise (2-3 sentences) for commentary notes."""
 
-            profile_text = await self.call_bedrock(
+            profile_text = await self.call_llm(
                 prompt=profile_prompt,
                 temperature=0.3,
                 max_tokens=120,

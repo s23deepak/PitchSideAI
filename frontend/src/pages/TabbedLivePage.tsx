@@ -1,9 +1,12 @@
 import { useSearchParams } from 'react-router-dom'
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs'
+// @ts-expect-error — JSX contexts/pages have no .d.ts; runtime types are correct
 import { LiveSessionProvider } from '@/contexts/LiveSessionContext'
 import TopNavBar from '@/components/TopNavBar'
+// @ts-expect-error
 import FanLensBroadcast from '@/pages/FanLensBroadcast'
+// @ts-expect-error
 import CommentatorDashboard from '@/pages/CommentatorDashboard'
+// @ts-expect-error
 import NotesGenerationHub from '@/pages/NotesGenerationHub'
 
 const TABS = [
@@ -27,11 +30,20 @@ export default function TabbedLivePage() {
     return (
         <LiveSessionProvider homeTeam={home} awayTeam={away} sport={sport}>
             <div className="tabbed-live-page">
-                <TopNavBar onSettingsClick={() => console.log('settings')} onAccountClick={() => console.log('account')} />
+                {/* TopNavBar uses useLocation() internally for active-tab highlighting */}
+                <TopNavBar
+                    onSettingsClick={() => console.log('settings')}
+                    onAccountClick={() => console.log('account')}
+                />
                 <div className="live-tab-content">
                     {TABS.map(({ value, Component }) => (
-                        <div key={value} style={{ display: tab === value ? 'block' : 'none' }}>
-                            <Component />
+                        <div
+                            key={value}
+                            role="tabpanel"
+                            aria-selected={tab === value}
+                            style={{ display: tab === value ? 'block' : 'none' }}
+                        >
+                            <Component onTabChange={handleTabChange} />
                         </div>
                     ))}
                 </div>

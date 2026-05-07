@@ -52,7 +52,7 @@ class ResearchAgent(BaseResearchAgent):
         prompt = get_research_prompt(home_team, away_team, self.sport)
 
         # Call model
-        brief_text = await self.call_bedrock(
+        brief_text = await self.call_llm(
             prompt,
             temperature=0.5,
             max_tokens=2000
@@ -132,7 +132,7 @@ class ResearchAgent(BaseResearchAgent):
         prompt = get_query_prompt(context, query, self.sport)
 
         # Answer
-        answer = await self.call_bedrock(
+        answer = await self.call_llm(
             prompt,
             temperature=0.3,
             max_tokens=300
@@ -322,7 +322,7 @@ Rules:
 Answer:
 """
 
-        return await self.call_bedrock(
+        return await self.call_llm(
             prompt,
             temperature=0.1,
             max_tokens=140,
@@ -459,7 +459,7 @@ Rules:
 Answer:
 """
 
-        return await self.call_bedrock(
+        return await self.call_llm(
             prompt,
             temperature=0.1,
             max_tokens=120,
@@ -616,7 +616,7 @@ Research the following for {home_team} vs {away_team}:
 Provide specific, data-driven insights for each topic.
 """
 
-        response = await self.call_bedrock(prompt, temperature=0.5, max_tokens=1500)
+        response = await self.call_llm(prompt, temperature=0.5, max_tokens=1500)
 
         results = {}
         current_topic = None

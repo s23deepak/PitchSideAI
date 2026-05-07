@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Optional, Any, List, Dict
 import httpx
 
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, HTTPException, Depends
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, HTTPException, Depends, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import StreamingResponse, HTMLResponse, FileResponse
@@ -828,6 +828,131 @@ async def analyze_video(req: VideoAnalysisRequest) -> dict:
     except Exception as exc:
         logger.error("video_analysis_failed", error=str(exc))
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ── Video Q&A — streaming SSE endpoint ───────────────────────────────────────
+# Users upload a clip and ask a question; the backend auto-selects the best
+# available streaming vision backend (StreamingVLM → SGLang → vLLM+sliding window).
+# No backend, fps, or chunk parameters are exposed to the client.
+
+@app.post("/api/v1/video/qa")
+async def video_qa(
+    video: UploadFile = File(...),
+    query: str = Form(default=""),
+    sport: str = Form(default="soccer"),
+) -> StreamingResponse:
+    """
+    Upload a video clip and ask an AI question about it.
+
+    Returns a Server-Sent Events stream:
+      data: {"type": "meta",  "backend_level": 4, "model": "Qwen2.5-VL-3B-AWQ"}
+      data: {"type": "token", "text": "The ..."}
+      data: {"type": "token", "text": "team is ..."}
+      data: [DONE]
+
+    The backend is automatically selected via FallbackStreamingBackend:
+      Level 1: StreamingVLM (mit-han-lab/StreamingVLM) — needs 40GB+ VRAM
+      Level 2: SGLang + KV sliding window
+      Level 4: vLLM frame-by-frame (always available)
+    """
+    import json as _json
+    from streaming.factory import FallbackStreamingBackend
+
+    video_bytes = await video.read()
+    default_query = (
+        f"Analyze this {sport} clip. Describe the tactical situation, "
+        "key players visible, formation, and likely next move."
+    )
+    question = query.strip() or default_query
+
+    async def event_stream():
+        backend = FallbackStreamingBackend(start_level=1)
+        try:
+            await backend.initialize()
+        except Exception as e:
+            yield f"data: {_json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            return
+
+        level = getattr(backend, 'current_level', 4)
+        model = os.environ.get("VISION_MODEL", "Qwen/Qwen2.5-VL-3B-Instruct-AWQ")
+        yield f"data: {_json.dumps({'type': 'meta', 'backend_level': level, 'model': model})}\n\n"
+
+        try:
+            # ── Sample frames from uploaded video bytes ──────────────────────
+            from streaming.frame_buffer import VideoChunk, FrameSample
+            import tempfile, os as _os
+
+            frames: list[FrameSample] = []
+            try:
+                import cv2
+                # Write to temp file (cv2 needs a path)
+                with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+                    tmp.write(video_bytes)
+                    tmp_path = tmp.name
+                try:
+                    cap = cv2.VideoCapture(tmp_path)
+                    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                    fps_v = cap.get(cv2.CAP_PROP_FPS) or 25.0
+                    # Sample at most 8 evenly-spaced frames
+                    indices = [int(i * total / min(8, total)) for i in range(min(8, total))]
+                    for idx in indices:
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+                        ok, frame = cap.read()
+                        if not ok:
+                            continue
+                        _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                        frames.append(FrameSample(
+                            data=jpeg.tobytes(),
+                            timestamp_ms=int((idx / fps_v) * 1000),
+                            frame_index=idx,
+                        ))
+                    cap.release()
+                finally:
+                    _os.unlink(tmp_path)
+            except ImportError:
+                # cv2 not available — encode entire video as single "frame" for vLLM native video
+                import base64 as _b64
+                frames.append(FrameSample(
+                    data=_b64.b64encode(video_bytes),  # base64 for native-video backends
+                    timestamp_ms=0,
+                    frame_index=0,
+                ))
+
+            if not frames:
+                raise ValueError("Could not extract frames from uploaded video")
+
+            chunk = VideoChunk(
+                frames=frames,
+                start_timestamp_ms=frames[0].timestamp_ms,
+                end_timestamp_ms=frames[-1].timestamp_ms,
+                duration_seconds=(frames[-1].timestamp_ms - frames[0].timestamp_ms) / 1000.0,
+                chunk_index=0,
+            )
+            result = await backend.process_chunk(chunk, query_hint=question)
+            text = result.get("analysis") or result.get("text") or str(result)
+
+            # Stream as tokens (sentence-level for smooth UI)
+            import re as _re
+            sentences = _re.split(r'(?<=[.!?])\s+', text.strip())
+            for sentence in sentences:
+                if sentence:
+                    yield f"data: {_json.dumps({'type': 'token', 'text': sentence + ' '})}\n\n"
+
+        except Exception as e:
+            logger.error("video_qa_stream_failed", error=str(e))
+            yield f"data: {_json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+        finally:
+            await backend.reset()
+            yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ── Advanced Query Endpoint ───────────────────────────────────────────────────

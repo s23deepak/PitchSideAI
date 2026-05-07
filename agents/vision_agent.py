@@ -58,7 +58,7 @@ class VisionAgent(BaseVisionAgent):
         prompt = get_frame_prompt(self.sport, temporal_context=temporal_context)
 
         # Call model with image
-        response_text = await self.call_bedrock(
+        response_text = await self.call_llm(
             prompt,
             temperature=0.6,
             max_tokens=300,
@@ -232,7 +232,7 @@ class VisionAgent(BaseVisionAgent):
     ) -> Dict[str, Any]:
         """Analyze a native video clip through the active video-capable backend."""
         prompt = get_video_clip_prompt(self.sport)
-        response_text = await self.call_bedrock(
+        response_text = await self.call_llm(
             prompt,
             temperature=0.4,
             max_tokens=300,
@@ -592,7 +592,7 @@ class VisionAgent(BaseVisionAgent):
     async def _summarize_sequence(self, sequence_summary: str) -> Dict[str, Any]:
         """Use the model to summarize the tactical evolution across a clip."""
         prompt = get_video_sequence_prompt(self.sport, sequence_summary)
-        response_text = await self.call_bedrock(
+        response_text = await self.call_llm(
             prompt,
             temperature=0.4,
             max_tokens=512,

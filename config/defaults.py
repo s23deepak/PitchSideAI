@@ -5,17 +5,18 @@ These values are safe to commit to version control.
 Secrets and deployment-specific overrides belong in .env
 """
 
-# ── Amazon Bedrock Model IDs ──────────────────────────────────────────────────
-LIVE_AUDIO_MODEL = "amazon.nova-sonic-v2:0"
-VISION_MODEL = "amazon.nova-lite-v2:0"
-RESEARCH_MODEL = "amazon.nova-pro-v2:0"
-EMBEDDING_MODEL = "amazon.titan-embed-text-v2:0"
+# ── Model ID Defaults (override via .env or per-backend config) ───────────────
+# These are used only when no backend-specific model is configured.
+LIVE_AUDIO_MODEL = ""        # Unused: audio goes through Qwen2-Audio / AUDIO_VLLM_BASE_URL
+VISION_MODEL = ""             # Override with OLLAMA_VISION_MODEL / VLLM_VISION_MODEL
+RESEARCH_MODEL = ""           # Override with OLLAMA_MODEL / VLLM_MODEL / OPENAI_MODEL
+EMBEDDING_MODEL = ""          # Override with OLLAMA_EMBED_MODEL / VLLM_EMBED_MODEL
 
-# ── Amazon OpenSearch ─────────────────────────────────────────────────────────
+# ── Search / Vector Store ─────────────────────────────────────────────────────
 OPENSEARCH_INDEX = "pitchside-match-notes"
-OPENSEARCH_AUTH = "aws_sig4"
+OPENSEARCH_AUTH = "none"   # Options: "none", "basic", "aws_sig4"
 
-# ── DynamoDB ──────────────────────────────────────────────────────────────────
+# ── Event Store ───────────────────────────────────────────────────────────────
 DYNAMODB_TABLE_NAME = "PitchSideMatchEvents"
 
 # ── API Server ────────────────────────────────────────────────────────────────
@@ -46,6 +47,20 @@ VLLM_BASE_URL = "http://localhost:8000"
 VLLM_MODEL = ""
 VLLM_VISION_MODEL = ""
 VLLM_EMBED_MODEL = ""
+
+# ── Qwen2-Audio / Whisper ASR (separate vLLM instance) ───────────────────────
+# AUDIO_API_TYPE controls which endpoint format _transcribe_audio uses:
+#   "whisper" → POST /v1/audio/transcriptions (multipart, standard Whisper API)
+#   "chat"    → POST /v1/chat/completions     (multimodal, Qwen2-Audio format)
+#
+# Recommended local models by VRAM budget:
+#   openai/whisper-large-v3-turbo   ~2 GB  (best quality/size ratio)  ← default
+#   distil-whisper/distil-large-v3  ~1.5GB (fastest)
+#   openai/whisper-small            ~0.5GB (minimum viable)
+#   Qwen/Qwen2-Audio-7B-Instruct    ~14GB  (most capable, needs A100)
+AUDIO_VLLM_BASE_URL = "http://localhost:8001"
+AUDIO_MODEL         = "openai/whisper-large-v3-turbo"
+AUDIO_API_TYPE      = "whisper"   # "whisper" | "chat"
 
 # ── Rate Limiting ─────────────────────────────────────────────────────────────
 RATE_LIMIT_RPM = 100

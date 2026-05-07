@@ -176,7 +176,7 @@ Provide:
 
 Keep to 3-4 sentences, suitable for match commentary."""
 
-        narrative = await self.call_bedrock(
+        narrative = await self.call_llm(
             prompt=prompt,
             temperature=0.3,
             max_tokens=125,  # 125 for local dev (250 in production)

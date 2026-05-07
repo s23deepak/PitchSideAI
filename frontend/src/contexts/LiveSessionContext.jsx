@@ -356,6 +356,16 @@ export function LiveSessionProvider({
         }
     }, [])
 
+    // Action: prepend a commentary message to the feed (capped at 100 items)
+    const addCommentaryItem = useCallback((msg) => {
+        setLiveCommentary((prev) => [msg, ...prev].slice(0, 100))
+    }, [])
+
+    // Action: update the current tactical detection result
+    const updateDetection = useCallback((data) => {
+        setDetection(data)
+    }, [])
+
     const value = {
         // Match info
         homeTeam,
@@ -383,6 +393,8 @@ export function LiveSessionProvider({
         sendQuery,
         updateSettings,
         updateLanguage,
+        addCommentaryItem,
+        updateDetection,
 
         // Direct refs for advanced usage
         wsRef,

@@ -78,7 +78,7 @@ class TestAC1_VisualCuePriority:
     @pytest.mark.asyncio
     async def test_visual_cues_extracted_from_frame(self, player_id_agent, sample_frame_b64):
         """Visual cues are extracted from frame."""
-        with patch.object(player_id_agent, 'call_bedrock', AsyncMock(return_value='''{
+        with patch.object(player_id_agent, 'call_llm', AsyncMock(return_value='''{
             "jersey_number": 9,
             "jersey_number_confidence": 0.95,
             "position": "striker",
@@ -118,7 +118,7 @@ class TestAC2_HighConfidenceIdentification:
     @pytest.mark.asyncio
     async def test_high_confidence_direct_identification(self, player_id_agent, sample_frame_b64):
         """High confidence allows direct player identification by name."""
-        with patch.object(player_id_agent, 'call_bedrock', AsyncMock(return_value='''{
+        with patch.object(player_id_agent, 'call_llm', AsyncMock(return_value='''{
             "jersey_number": 9,
             "jersey_number_confidence": 0.98,
             "position": "striker",
@@ -365,7 +365,7 @@ class TestPlayerIDForQA:
     @pytest.mark.asyncio
     async def test_general_player_question(self, player_id_agent, sample_frame_b64):
         """General player questions use vision analysis."""
-        with patch.object(player_id_agent, 'call_bedrock', AsyncMock(return_value='''{
+        with patch.object(player_id_agent, 'call_llm', AsyncMock(return_value='''{
             "jersey_number": 11,
             "jersey_number_confidence": 0.90,
             "position": "right_wing",

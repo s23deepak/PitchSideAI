@@ -64,7 +64,7 @@ class TestAC1_QueryMessageHandling:
     @pytest.mark.asyncio
     async def test_query_includes_game_state(self, qa_agent, sample_game_state):
         """Game state is included in answer payload."""
-        with patch.object(qa_agent, 'call_bedrock', AsyncMock(return_value="Test answer")):
+        with patch.object(qa_agent, 'call_llm', AsyncMock(return_value="Test answer")):
             result = await qa_agent.handle_query(
                 question="Who scored?",
                 game_state=sample_game_state,
@@ -85,15 +85,15 @@ class TestAC1_QueryMessageHandling:
             knowledge_depth=0.3,  # Beginner-friendly
         )
 
-        with patch.object(qa_agent, 'call_bedrock', AsyncMock(return_value="Test answer")):
+        with patch.object(qa_agent, 'call_llm', AsyncMock(return_value="Test answer")):
             await qa_agent.handle_query(
                 question="Why did he do that?",
                 game_state=sample_game_state,
             )
 
-            # Verify call_bedrock was called (prompt would include settings)
-            qa_agent.call_bedrock.assert_called_once()
-            call_args = qa_agent.call_bedrock.call_args
+            # Verify call_llm was called (prompt would include settings)
+            qa_agent.call_llm.assert_called_once()
+            call_args = qa_agent.call_llm.call_args
             prompt = call_args[0][0]
 
             assert "Bias: 0.5" in prompt
@@ -124,13 +124,13 @@ class TestAC2_PreComputedCache:
         """Cache miss falls through to LLM generation."""
         qa_agent.qa_cache = sample_qa_cache
 
-        with patch.object(qa_agent, 'call_bedrock', AsyncMock(return_value="LLM answer")):
+        with patch.object(qa_agent, 'call_llm', AsyncMock(return_value="LLM answer")):
             result = await qa_agent.handle_query(
                 question="What's the weather like?",
                 game_state=None,
             )
 
-            qa_agent.call_bedrock.assert_called_once()
+            qa_agent.call_llm.assert_called_once()
             assert result["source"] == "llm_generate"
 
 
@@ -185,7 +185,7 @@ class TestAC4_LimitedTemporalContextFallback:
         """Answers with limited temporal context include calm indicator."""
         retained_frames = []  # No retained frames
 
-        with patch.object(qa_agent, 'call_bedrock', AsyncMock(return_value="Test answer")):
+        with patch.object(qa_agent, 'call_llm', AsyncMock(return_value="Test answer")):
             result = await qa_agent.handle_query(
                 question="What happened in the 10th minute?",
                 game_state=sample_game_state,
@@ -193,7 +193,7 @@ class TestAC4_LimitedTemporalContextFallback:
             )
 
             # Prompt would include temporal context hint (empty in this case)
-            qa_agent.call_bedrock.assert_called_once()
+            qa_agent.call_llm.assert_called_once()
 
 
 class TestAC5_NonFootballQuestionHandling:
@@ -202,7 +202,7 @@ class TestAC5_NonFootballQuestionHandling:
     @pytest.mark.asyncio
     async def test_non_football_question_redirected(self, qa_agent, sample_game_state):
         """Non-football questions get graceful redirect."""
-        with patch.object(qa_agent, 'call_bedrock', AsyncMock(return_value="The weather is nice")):
+        with patch.object(qa_agent, 'call_llm', AsyncMock(return_value="The weather is nice")):
             result = await qa_agent.handle_query(
                 question="What's the weather like in Manchester?",
                 game_state=sample_game_state,
