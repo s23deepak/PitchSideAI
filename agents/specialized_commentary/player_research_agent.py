@@ -259,25 +259,27 @@ Keep it concise (2-3 sentences) for commentary notes."""
     async def _fetch_player_stats(
         self, player_name: str, team_name: str
     ) -> Dict[str, Any]:
-        """Fetch player stats from local DB first, then FBref as fallback."""
+        """Fetch player stats from local DB first, then MultiSourceRetriever as fallback."""
         db = get_player_db()
 
-        # Check DB for current season stats (saved from a previous successful FBref fetch)
-        cached_stats = db.get_season_stats(player_name, self.sport, "25-26", "fbref")
+        # Check DB for current season stats (saved from a previous successful fetch)
+        cached_stats = db.get_season_stats(player_name, self.sport, "25-26", "multi")
         if cached_stats:
-            logger.info("DB stats hit for %s — skipping FBref", player_name)
+            logger.info("DB stats hit for %s — skipping external fetch", player_name)
             return cached_stats
 
         if not self.fbref or not self.fbref.is_available:
             return {}
 
         try:
-            stats = await self.fbref.get_player_season_stats(player_name, team_name)
-            if stats:
-                db.upsert_season_stats(player_name, self.sport, "25-26", stats.get("data_source", "fbref"), stats)
-            return stats
+            # MultiSourceRetriever uses get_player_stats(player_name, team_name, sport)
+            stats = await self.fbref.get_player_stats(player_name, team_name, self.sport)
+            if stats and not stats.get("error"):
+                db.upsert_season_stats(player_name, self.sport, "25-26", stats.get("data_source", "multi"), stats)
+                return stats
+            return {}
         except Exception as exc:
-            logger.warning("FBref player stats failed for %s: %s", player_name, exc)
+            logger.warning("MultiSource player stats failed for %s: %s", player_name, exc)
             return {}
 
     async def close(self):

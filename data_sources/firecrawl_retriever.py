@@ -237,6 +237,181 @@ class FirecrawlRetriever:
 
         return []
 
+    # Alias for MultiSourceRetriever compatibility
+    async def get_head_to_head(
+        self,
+        team1: str,
+        team2: str,
+        sport: str = "soccer",
+    ) -> List[Dict[str, Any]]:
+        """Alias for get_head_to_head_matches with sport parameter."""
+        return await self.get_head_to_head_matches(team1, team2)
+
+    async def get_player_stats(
+        self,
+        player_name: str,
+        team_name: str,
+        sport: str = "soccer",
+    ) -> Dict[str, Any]:
+        """Alias for get_player_season_stats with sport parameter."""
+        return await self.get_player_season_stats(player_name, team_name)
+
+    # ── Additional methods for MultiSourceRetriever compatibility ─────────────
+
+    async def get_team_squad(
+        self,
+        team_name: str,
+        sport: str = "soccer",
+    ) -> Dict[str, Any]:
+        """Return empty squad - Firecrawl is not ideal for full squad lists."""
+        return {"team": team_name, "players": [], "data_source": "firecrawl"}
+
+    async def get_team_news(
+        self,
+        team_name: str,
+        sport: str = "soccer",
+    ) -> List[Dict[str, Any]]:
+        """Fetch team news via Firecrawl search."""
+        if not self.is_available:
+            return []
+
+        cache_key = f"fc_news|{team_name}"
+        cached = self.cache.get("firecrawl_news", cache_key)
+        if cached:
+            return cached
+
+        query = f'"{team_name}" news transfers injuries site:bbc.com/sport OR site:skysports.com'
+
+        try:
+            results = await self.search(query, limit=5)
+            news = [
+                {
+                    "headline": r.get("title", ""),
+                    "url": r.get("url", ""),
+                    "published": "",  # Firecrawl doesn't provide this directly
+                }
+                for r in results
+            ]
+            self.cache.set("firecrawl_news", cache_key, news)
+            return news
+        except Exception as exc:
+            logger.warning("Firecrawl news failed [%s]: %s", team_name, exc)
+            return []
+
+    async def get_recent_form(
+        self,
+        team_name: str,
+        sport: str = "soccer",
+        num_games: int = 5,
+    ) -> Dict[str, Any]:
+        """Fetch recent form via Firecrawl search."""
+        if not self.is_available:
+            return {"team": team_name, "form_string": "UNKNOWN", "data_source": "firecrawl"}
+
+        cache_key = f"fc_form|{team_name}"
+        cached = self.cache.get("firecrawl_form", cache_key)
+        if cached:
+            return cached
+
+        # Use current year to ensure recent results only
+        from datetime import datetime
+        current_year = datetime.now().year
+        query = f'"{team_name}" match results 2025 2026 site:fbref.com OR site:sofascore.com OR site:bbc.com/sport'
+
+        try:
+            results = await self.search(query, limit=5)
+            form_results = []
+            for r in results:
+                markdown = r.get("markdown", "")
+                matches = _extract_match_log_from_markdown(team_name, markdown)
+                # Filter for recent matches only (2025-2026)
+                for m in matches:
+                    date_str = m.get("date", "")
+                    if date_str and (date_str.startswith("2025") or date_str.startswith("2026")):
+                        form_results.append(m)
+
+            if form_results:
+                # Convert to form string (W/D/L)
+                form_string = "".join([m.get("result", "D") for m in form_results[:num_games]])
+                result = {
+                    "team": team_name,
+                    "form_string": form_string,
+                    "recent_results": form_results[:num_games],
+                    "data_source": "firecrawl",
+                }
+                self.cache.set("firecrawl_form", cache_key, result)
+                return result
+        except Exception as exc:
+            logger.warning("Firecrawl form failed [%s]: %s", team_name, exc)
+
+        return {"team": team_name, "form_string": "UNKNOWN", "data_source": "firecrawl"}
+
+    async def get_injuries(
+        self,
+        team_name: str,
+        sport: str = "soccer",
+    ) -> List[Dict[str, Any]]:
+        """Fetch injury list via Firecrawl search."""
+        if not self.is_available:
+            return []
+
+        cache_key = f"fc_injuries|{team_name}"
+        cached = self.cache.get("firecrawl_injuries", cache_key)
+        if cached:
+            return cached
+
+        query = f'"{team_name}" injuries squad news site:premierleague.com OR site:bbc.com/sport'
+
+        try:
+            results = await self.search(query, limit=3)
+            injuries: List[Dict[str, Any]] = []
+            for r in results:
+                markdown = r.get("markdown", "")
+                # Look for injury mentions in markdown
+                if "injured" in markdown.lower() or "out" in markdown.lower():
+                    # Extract player names - simplified extraction
+                    injuries.append({
+                        "source_url": r.get("url", ""),
+                        "note": "Check source for details",
+                    })
+            self.cache.set("firecrawl_injuries", cache_key, injuries)
+            return injuries
+        except Exception as exc:
+            logger.warning("Firecrawl injuries failed [%s]: %s", team_name, exc)
+            return []
+
+    async def get_match_context(
+        self,
+        team_name: str,
+        sport: str = "soccer",
+    ) -> Dict[str, Any]:
+        """Fetch next match info via Firecrawl search."""
+        if not self.is_available:
+            from datetime import datetime, timezone
+            return {"date": datetime.now(timezone.utc).isoformat(), "venue": "Unknown"}
+
+        cache_key = f"fc_match|{team_name}"
+        cached = self.cache.get("firecrawl_match", cache_key)
+        if cached:
+            return cached
+
+        query = f'"{team_name}" next match fixture schedule site:premierleague.com OR site:fbref.com'
+
+        try:
+            results = await self.search(query, limit=2)
+            if results:
+                # Return first result as context
+                return {
+                    "source_url": results[0].get("url", ""),
+                    "title": results[0].get("title", ""),
+                    "data_source": "firecrawl",
+                }
+        except Exception as exc:
+            logger.warning("Firecrawl match context failed [%s]: %s", team_name, exc)
+
+        from datetime import datetime, timezone
+        return {"date": datetime.now(timezone.utc).isoformat(), "venue": "Unknown"}
+
     async def close(self) -> None:
         return None
 

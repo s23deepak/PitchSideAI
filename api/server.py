@@ -1923,8 +1923,26 @@ async def prepare_commentary_notes(req: CommentaryNotesRequest, request: Request
                 venue_lon=req.venue_lon,
             )
 
+            # Phase-to-progress mapping (float 0.0 to 1.0)
+            PROGRESS_MAP = {
+                "initialize": 0.05,
+                "initial_context": 0.20,
+                "squad_research": 0.45,
+                "form_analysis": 0.70,
+                "synthesis": 0.90,
+            }
+
             async def on_progress(phase: str, message: str, extra: dict):
-                event = {"phase": phase, "message": message, "done": extra.get("done", False)}
+                progress = PROGRESS_MAP.get(phase, 0.0)
+                if extra.get("done", False):
+                    # Bump progress slightly when phase completes
+                    progress = min(1.0, progress + 0.05)
+                event = {
+                    "phase": phase,
+                    "message": message,
+                    "progress": progress,
+                    "done": extra.get("done", False)
+                }
                 yield f"data: {_json.dumps(event)}\n\n"
 
             workflow = create_workflow()
@@ -1934,7 +1952,15 @@ async def prepare_commentary_notes(req: CommentaryNotesRequest, request: Request
             progress_queue: asyncio.Queue = asyncio.Queue()
 
             async def _queue_progress(phase: str, message: str, extra: dict):
-                await progress_queue.put({"phase": phase, "message": message, "done": extra.get("done", False)})
+                progress = PROGRESS_MAP.get(phase, 0.0)
+                if extra.get("done", False):
+                    progress = min(1.0, progress + 0.05)
+                await progress_queue.put({
+                    "phase": phase,
+                    "message": message,
+                    "progress": progress,
+                    "done": extra.get("done", False)
+                })
 
             async def _run():
                 try:
@@ -2027,7 +2053,7 @@ async def prepare_commentary_notes(req: CommentaryNotesRequest, request: Request
                 "beat_count": len(completed_state.notes_store.beats) if completed_state.notes_store else 0
             })
 
-            yield f"data: {_json.dumps({'phase': 'complete', 'message': 'Done', 'done': True, 'result': response})}\n\n"
+            yield f"data: {_json.dumps({'phase': 'complete', 'message': 'Done', 'progress': 1.0, 'done': True, 'result': response})}\n\n"
 
         except Exception as exc:
             error_msg = f"Commentary preparation failed: {str(exc)}"

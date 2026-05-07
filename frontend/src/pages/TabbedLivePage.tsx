@@ -27,24 +27,13 @@ export default function TabbedLivePage() {
     return (
         <LiveSessionProvider homeTeam={home} awayTeam={away} sport={sport}>
             <div className="tabbed-live-page">
-                <TopNavBar />
-                <div className="live-tab-bar">
-                    <Tabs value={tab} onValueChange={handleTabChange}>
-                        <TabsList className="live-tabs-list">
-                            {TABS.map(({ value, label }) => (
-                                <TabsTrigger key={value} value={value} className="live-tab-trigger">
-                                    {label}
-                                </TabsTrigger>
-                            ))}
-                        </TabsList>
-
-                        {TABS.map(({ value, Component }) => (
-                            <TabsContent key={value} value={value} className="live-tab-content" forceMount>
-                                {/* Only render the active tab to avoid unnecessary work */}
-                                {tab === value && <Component />}
-                            </TabsContent>
-                        ))}
-                    </Tabs>
+                <TopNavBar onSettingsClick={() => console.log('settings')} onAccountClick={() => console.log('account')} />
+                <div className="live-tab-content">
+                    {TABS.map(({ value, Component }) => (
+                        <div key={value} style={{ display: tab === value ? 'block' : 'none' }}>
+                            <Component />
+                        </div>
+                    ))}
                 </div>
             </div>
         </LiveSessionProvider>

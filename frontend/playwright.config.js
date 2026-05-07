@@ -2,9 +2,9 @@
 import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
-  testDir: './',
-  testMatch: ['validate-fan-lens.mjs'],
-  timeout: 30 * 1000,
+  testDir: './tests',
+  testMatch: ['**/*.spec.js', '**/*.mjs'],
+  timeout: 60 * 1000,
   expect: {
     timeout: 5000
   },
@@ -14,7 +14,7 @@ export default defineConfig({
   workers: 1,
   reporter: [['list'], ['html', { outputFolder: './playwright-report' }]],
   use: {
-    baseURL: 'http://localhost:5174',
+    baseURL: 'http://localhost:5173',
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
   },

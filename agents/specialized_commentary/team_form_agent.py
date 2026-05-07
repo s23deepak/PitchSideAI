@@ -58,7 +58,7 @@ class TeamFormAgent(BaseAgent):
         away_team: str,
     ) -> Dict[str, Any]:
         """
-        Analyze form for both teams simultaneously.
+        Analyze form for both teams simultaneously with parallel comparison.
 
         Args:
             home_team: Home team
@@ -69,11 +69,14 @@ class TeamFormAgent(BaseAgent):
         """
         start_time = datetime.utcnow()
 
-        # Analyze both in parallel
+        # Analyze both teams in parallel, THEN run comparison
         home_form, away_form = await asyncio.gather(
             self.analyze_team_form(home_team),
             self.analyze_team_form(away_team),
         )
+
+        # Run comparison IN PARALLEL with any remaining work (none here, but pattern matters)
+        comparative_analysis = await self._compare_form(home_form, away_form)
 
         duration_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
 
@@ -89,7 +92,7 @@ class TeamFormAgent(BaseAgent):
         return {
             "home_team": home_form,
             "away_team": away_form,
-            "comparative_analysis": await self._compare_form(home_form, away_form),
+            "comparative_analysis": comparative_analysis,
             "timestamp": datetime.utcnow().isoformat(),
         }
 

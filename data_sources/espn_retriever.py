@@ -18,12 +18,15 @@ ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports"
 
 # league slug by sport keyword
 LEAGUE_SLUGS: Dict[str, str] = {
-    "soccer": "eng.1",   # Premier League default; overridden by lookup
+    "soccer": "ita.1",   # Serie A default for Italian teams; eng.1 for PL
     "basketball": "nba",
     "american_football": "nfl",
     "baseball": "mlb",
     "hockey": "nhl",
 }
+
+# Serie A specific league slug
+SERIE_A_SLUG = "ita.1"
 
 # Pre-built team name → ESPN team ID for the most-requested clubs.
 # Lookup falls back to a live search if the name isn't here.
@@ -89,6 +92,20 @@ def _get_stat(stats: List[Dict], name: str) -> float:
         if s.get("name") == name:
             return s.get("value", 0.0)
     return 0.0
+
+
+def _get_serie_a_slug(team_name: str) -> str:
+    """Get Serie A slug for Italian teams, otherwise use league-specific lookup."""
+    italian_teams = {
+        "ac milan", "inter milan", "juventus", "napoli", "roma",
+        "lazio", "atalanta", "fiorentina", "torino", "bologna",
+        "sassuolo", "udinese", "sampdoria", "cagliari", "genoa",
+        "verona", "spezia", "empoli", "salernitana", "monza",
+        "como", "parma", "lecce", "venezia"
+    }
+    if team_name.lower().strip() in italian_teams:
+        return SERIE_A_SLUG
+    return "eng.1"  # Premier League default
 
 
 def _extract_player_stats(athlete: Dict) -> Dict[str, Any]:
@@ -194,8 +211,11 @@ class ESPNDataRetriever:
         cached = self.cache.get("match_context", f"{sport}:{team_name}")
         if cached:
             return cached
-            
+
         sport_slug, league_slug = self._sport_league(sport)
+        # Use Serie A slug for Italian teams
+        if sport_slug == "soccer":
+            league_slug = _get_serie_a_slug(team_name)
         tid = await self._resolve_team_id(team_name, sport_slug, league_slug)
         if not tid:
             from datetime import datetime, timezone
@@ -203,13 +223,21 @@ class ESPNDataRetriever:
             
         team_data = await self._get(f"{ESPN_BASE}/{sport_slug}/{league_slug}/teams/{tid}")
         team = team_data.get("team", {})
-        next_event = team.get("nextEvent", [{}])[0]
-        
+        next_events = team.get("nextEvent", [])
+
         from datetime import datetime, timezone
+        if not next_events or not isinstance(next_events, list) or len(next_events) == 0:
+            # No upcoming events - return defaults
+            result = {"date": datetime.now(timezone.utc).isoformat(), "venue": "Unknown Venue"}
+            self.cache.set("match_context", f"{sport}:{team_name}", result)
+            return result
+
+        next_event = next_events[0]
         date = next_event.get("date", datetime.now(timezone.utc).isoformat())
-        venue_info = next_event.get("competitions", [{}])[0].get("venue", {})
+        competitions = next_event.get("competitions", [])
+        venue_info = competitions[0].get("venue", {}) if competitions else {}
         venue_name = venue_info.get("fullName", "Unknown Venue")
-        
+
         result = {"date": date, "venue": venue_name}
         self.cache.set("match_context", f"{sport}:{team_name}", result)
         return result
@@ -221,6 +249,9 @@ class ESPNDataRetriever:
             return cached
 
         sport_slug, league_slug = self._sport_league(sport)
+        # Use Serie A slug for Italian teams
+        if sport_slug == "soccer":
+            league_slug = _get_serie_a_slug(team_name)
         tid = await self._resolve_team_id(team_name, sport_slug, league_slug)
         if not tid:
             return self._mock_squad(team_name)
@@ -270,6 +301,9 @@ class ESPNDataRetriever:
             return cached
 
         sport_slug, league_slug = self._sport_league(sport)
+        # Use Serie A slug for Italian teams
+        if sport_slug == "soccer":
+            league_slug = _get_serie_a_slug(team_name)
         tid = await self._resolve_team_id(team_name, sport_slug, league_slug)
         if not tid:
             return self._mock_form(team_name)
@@ -343,6 +377,7 @@ class ESPNDataRetriever:
             "rank": rank,
             "ppg": ppg,
             "standing": team.get("standingSummary", ""),
+            "data_source": "espn",
         }
         self.cache.set("form", f"{sport}:{team_name}:{num_games}", result)
         return result
@@ -394,6 +429,9 @@ class ESPNDataRetriever:
             return cached
 
         sport_slug, league_slug = self._sport_league(sport)
+        # Use Serie A slug for Italian teams
+        if sport_slug == "soccer":
+            league_slug = _get_serie_a_slug(team_name)
         tid = await self._resolve_team_id(team_name, sport_slug, league_slug)
         if not tid:
             return []

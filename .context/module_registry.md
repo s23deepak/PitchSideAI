@@ -77,7 +77,7 @@ Live match state machine for WebSocket sessions. `MatchPhase` enum (`PRE_MATCH`,
 ## data_sources/
 
 **`data_sources/factory.py`**
-Singleton factory for all data source clients. `get_retriever(sport)` routes to `CricbuzzRetriever` for cricket and `ESPNDataRetriever` for all other sports. `get_fbref_retriever()` now returns a `FallbackStatsRetriever` singleton implementing a 3-layer chain: **StatsBomb → Firecrawl → FBref direct**. A shared `_chain()` helper iterates retrievers in order and returns the first non-empty result. Also provides `get_statsbomb_retriever()`, `get_football_data_retriever()`, and `get_search_service()` singletons.
+Singleton factory for all data source clients. `get_retriever(sport)` routes to `MultiSourceRetriever` for soccer (load-balanced across 5 sources) and `ESPNDataRetriever` for other sports. `get_fbref_retriever()` returns a `MultiSourceRetriever` implementing round-robin distribution: **ESPN → FootballData.org → Transfermarkt → OneVersusOne.com → Firecrawl**. Also provides `get_statsbomb_retriever()`, `get_football_data_retriever()`, and `get_search_service()` singletons.
 
 **`data_sources/base.py`**
 Structural Protocol (duck-typed interface) defining the 7-method contract for all sport-specific retrievers: `get_match_context`, `get_team_squad`, `get_recent_form`, `get_player_stats`, `get_head_to_head`, `get_team_news`, `get_injuries`. New retrievers must satisfy this interface.

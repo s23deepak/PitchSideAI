@@ -13,8 +13,19 @@ export default function LandingPage() {
         navigate('/watch')
     }
 
-    const quickMatches = [
-        { home: 'Barcelona', away: 'Real Madrid', label: 'Now Live' },
+    const handleFixtureClick = (home, away) => {
+        const encodedHome = encodeURIComponent(home)
+        const encodedAway = encodeURIComponent(away)
+        navigate(`/live?tab=fan-lens&home=${encodedHome}&away=${encodedAway}`)
+    }
+
+    const presetFixtures = [
+        { home: 'Real Madrid', away: 'Barcelona', competition: 'La Liga', label: 'El Clásico' },
+        { home: 'Manchester United', away: 'Liverpool', competition: 'Premier League', label: 'Classic Rivalry' },
+        { home: 'Bayern Munich', away: 'Borussia Dortmund', competition: 'Bundesliga', label: 'Der Klassiker' },
+        { home: 'Argentina', away: 'France', competition: 'World Cup', label: 'Final Rematch' },
+        { home: 'Manchester City', away: 'Arsenal', competition: 'Premier League', label: 'Title Clash' },
+        { home: 'AC Milan', away: 'Inter Milan', competition: 'Serie A', label: 'Derby della Madonnina' },
     ]
 
     return (
@@ -88,7 +99,36 @@ export default function LandingPage() {
                     {/* Now Live Indicator */}
                     <div className="now-live-indicator">
                         <span className="live-dot" />
-                        Now Live: {quickMatches[0].home} vs. {quickMatches[0].away}
+                        Now Live: {presetFixtures[0].home} vs. {presetFixtures[0].away}
+                    </div>
+                </div>
+            </section>
+
+            {/* Quick Matches Section */}
+            <section className="quick-matches-section">
+                <div className="quick-matches-content">
+                    <h2 className="quick-matches-title">Quick Matches</h2>
+                    <p className="quick-matches-subtitle">
+                        Jump into classic fixtures and instant matchups
+                    </p>
+                    <div className="fixture-grid">
+                        {presetFixtures.map((fixture, index) => (
+                            <button
+                                key={index}
+                                className="fixture-button"
+                                onClick={() => handleFixtureClick(fixture.home, fixture.away)}
+                            >
+                                <div className="fixture-matchup">
+                                    <span className="fixture-home">{fixture.home}</span>
+                                    <span className="fixture-vs">vs</span>
+                                    <span className="fixture-away">{fixture.away}</span>
+                                </div>
+                                <div className="fixture-meta">
+                                    <span className="fixture-competition">{fixture.competition}</span>
+                                    <span className="fixture-label">{fixture.label}</span>
+                                </div>
+                            </button>
+                        ))}
                     </div>
                 </div>
             </section>

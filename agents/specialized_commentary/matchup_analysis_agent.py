@@ -2,7 +2,8 @@
 Matchup Analysis Agent - Analyze 1v1 player matchups and positional battles.
 
 Identifies critical matchups, positional strengths, and tactical battles
-that will define the match. Uses FBref stats for real player comparison.
+that will define the match. Uses MultiSource retriever (ESPN → FootballData → Transfermarkt)
+for real player comparison.
 """
 
 from typing import Dict, List, Any, Optional
@@ -11,7 +12,7 @@ import asyncio
 import logging
 from agents.base import BaseAgent
 from data_sources import DataCache
-from data_sources.factory import get_fbref_retriever
+from data_sources.factory import get_fbref_retriever  # Returns MultiSourceRetriever
 from data_sources.player_profile_db import get_player_db
 
 logger = logging.getLogger(__name__)
@@ -102,19 +103,47 @@ class MatchupAnalysisAgent(BaseAgent):
         home_lineup: List[Dict[str, str]],
         away_lineup: List[Dict[str, str]],
     ) -> List[Dict[str, Any]]:
-        """Identify key 1v1 matchups."""
-        # Simple heuristic: match by position and form
-        matchups = []
+        """Identify key 1v1 matchups - pairing opposite positions (attacker vs defender)."""
+        # Pair opposite positions: attackers vs defenders, wingers vs fullbacks
+        matchup_tasks = []
 
-        for home_player in home_lineup[:6]:  # Key outfield players
-            for away_player in away_lineup[:6]:
-                if home_player.get("position") == away_player.get("position"):
-                    matchup = await self._analyze_player_matchup(home_player, away_player)
-                    if matchup:
-                        matchups.append(matchup)
-                    break
+        # Build position-based lookup for away team
+        away_by_position = {}
+        for player in away_lineup:
+            pos = player.get("position", "").upper()
+            away_by_position[pos] = player
 
-        return matchups[:5]  # Top 5 matchups
+        # Match home attackers against away defenders
+        for home_player in home_lineup:
+            home_pos = home_player.get("position", "").upper()
+            away_opponent = None
+
+            # Striker/Forward vs Center Back
+            if home_pos in {"ST", "CF", "FW", "FWD", "STRIKER", "FORWARD"}:
+                away_opponent = away_by_position.get("CB") or away_by_position.get("DEFENDER")
+            # Winger vs Fullback
+            elif home_pos in {"LW", "RW", "LM", "RM", "WINGER"}:
+                if home_pos in {"LW", "LM"}:
+                    away_opponent = away_by_position.get("LB") or away_by_position.get("LWB")
+                else:
+                    away_opponent = away_by_position.get("RB") or away_by_position.get("RWB")
+            # Attacking Midfielder vs Defensive Midfielder
+            elif home_pos in {"CAM", "AM"}:
+                away_opponent = away_by_position.get("CDM") or away_by_position.get("CM")
+            # Midfielder vs Midfielder (same position ok here)
+            elif home_pos in {"CM", "CDM"}:
+                away_opponent = away_by_position.get("CM") or away_by_position.get("CAM")
+
+            if away_opponent and home_pos not in {"GK", "GOALKEEPER"}:
+                matchup_tasks.append(self._analyze_player_matchup(home_player, away_opponent))
+
+        # Execute all matchup analyses IN PARALLEL
+        if matchup_tasks:
+            results = await asyncio.gather(*matchup_tasks, return_exceptions=True)
+            matchups = [r for r in results if isinstance(r, dict) and r]
+            return matchups[:5]  # Top 5 matchups
+
+        return []
 
     async def _analyze_player_matchup(
         self,
@@ -125,33 +154,37 @@ class MatchupAnalysisAgent(BaseAgent):
         db = get_player_db()
         p1_name = player1.get('name', '')
         p2_name = player2.get('name', '')
+        p1_team = player1.get('team', '')
+        p2_team = player2.get('team', '')
 
         # Check local DB first
         player1_stats = db.get_season_stats(p1_name, self.sport, "25-26", "fbref") or {}
         player2_stats = db.get_season_stats(p2_name, self.sport, "25-26", "fbref") or {}
 
-        # Only hit FBref for players not in the DB
+        # Only hit MultiSource retriever for players not in the DB
         if not player1_stats or not player2_stats:
             if self.fbref and self.fbref.is_available:
                 try:
                     tasks = []
+                    # MultiSourceRetriever.get_player_stats(player_name, team_name, sport)
+                    # MultiSourceRetriever.get_player_stats(player_name, team_name, sport)
                     tasks.append(
-                        self.fbref.get_player_season_stats(p1_name, stat_type="standard")
+                        self.fbref.get_player_stats(p1_name, p1_team or "Unknown", self.sport)
                         if not player1_stats else asyncio.sleep(0, result=player1_stats)
                     )
                     tasks.append(
-                        self.fbref.get_player_season_stats(p2_name, stat_type="standard")
+                        self.fbref.get_player_stats(p2_name, p2_team or "Unknown", self.sport)
                         if not player2_stats else asyncio.sleep(0, result=player2_stats)
                     )
                     p1_result, p2_result = await asyncio.gather(*tasks, return_exceptions=True)
                     if isinstance(p1_result, dict) and p1_result:
                         player1_stats = p1_result
-                        db.upsert_season_stats(p1_name, self.sport, "25-26", p1_result.get("data_source", "fbref"), p1_result)
+                        db.upsert_season_stats(p1_name, self.sport, "25-26", p1_result.get("data_source", "multi"), p1_result)
                     if isinstance(p2_result, dict) and p2_result:
                         player2_stats = p2_result
-                        db.upsert_season_stats(p2_name, self.sport, "25-26", p2_result.get("data_source", "fbref"), p2_result)
+                        db.upsert_season_stats(p2_name, self.sport, "25-26", p2_result.get("data_source", "multi"), p2_result)
                 except Exception as exc:
-                    logger.warning("FBref stats fetch failed: %s", exc)
+                    logger.warning("MultiSource stats fetch failed: %s", exc)
 
         # Build prompt with stats if available
         stats_context = ""

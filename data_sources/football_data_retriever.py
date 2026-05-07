@@ -275,6 +275,34 @@ class FootballDataRetriever:
     # ── H2H ──────────────────────────────────────────────────────────────────
 
     async def get_head_to_head(
+        self, team1: str, team2: str, sport: str = "soccer"
+    ) -> Dict[str, Any]:
+        """Wrapper for MultiSourceRetriever compatibility (sport param ignored)."""
+        return await self._get_head_to_head_impl(team1, team2, limit=10)
+
+    async def get_player_stats(
+        self, player_name: str, team_name: str, sport: str = "soccer"
+    ) -> Dict[str, Any]:
+        """
+        Get player stats from football-data.org.
+        Note: This API doesn't have detailed player stats, so we return squad data.
+        """
+        # football-data.org doesn't have per-player season stats
+        # Return a stub that MultiSource can use
+        squad = await self.get_team_squad(team_name, sport)
+        players = squad.get('squad', [])
+        for p in players:
+            if player_name.lower() in p.get('name', '').lower():
+                return {
+                    'name': p.get('name'),
+                    'position': p.get('position'),
+                    'nationality': p.get('nationality'),
+                    'stats': {},  # No detailed stats available
+                    'data_source': 'football_data',
+                }
+        return {}
+
+    async def _get_head_to_head_impl(
         self, team1: str, team2: str, limit: int = 10
     ) -> Dict[str, Any]:
         """
@@ -390,7 +418,7 @@ class FootballDataRetriever:
 
     # ── team squad ────────────────────────────────────────────────────────────
 
-    async def get_team_squad(self, team_name: str) -> Dict[str, Any]:
+    async def get_team_squad(self, team_name: str, sport: str = "soccer") -> Dict[str, Any]:
         """Get team squad with player details."""
         cache_key = team_name.lower()
         cached = self.cache.get("fd_squad", cache_key)
@@ -482,6 +510,77 @@ class FootballDataRetriever:
     def resolve_competition_code(self, team_name: str) -> Optional[str]:
         """Resolve a likely competition code from a team name."""
         return TEAM_COMPETITIONS.get(team_name.lower().strip())
+
+    async def get_recent_form(self, team_name: str, sport: str = "soccer", num_games: int = 5) -> Dict[str, Any]:
+        """
+        Fetch recent form via football-data.org matches endpoint.
+
+        Returns form string like "WDLWW" for last N games.
+        """
+        cache_key = f"fd_form_{team_name}_{num_games}"
+        cached = self.cache.get("fd_form", cache_key)
+        if cached:
+            return cached
+
+        team_id = self._resolve_team_id(team_name)
+        if not team_id:
+            return {"team": team_name, "form_string": "UNKNOWN", "data_source": "football_data"}
+
+        # Fetch recent matches
+        data = await self._get(f"/teams/{team_id}/matches", {
+            "status": "FINISHED",
+            "limit": num_games,
+        })
+        matches = data.get("matches", [])
+
+        if not matches:
+            return {"team": team_name, "form_string": "UNKNOWN", "data_source": "football_data"}
+
+        # Build form string
+        form = []
+        for m in matches[:num_games]:
+            home_team = m.get("homeTeam", {}).get("id")
+            away_team = m.get("awayTeam", {}).get("id")
+            score_home = m.get("score", {}).get("fullTime", {}).get("home")
+            score_away = m.get("score", {}).get("fullTime", {}).get("away")
+
+            if score_home is None or score_away is None:
+                continue
+
+            is_home = home_team == team_id
+            if is_home:
+                if score_home > score_away:
+                    form.append("W")
+                elif score_home < score_away:
+                    form.append("L")
+                else:
+                    form.append("D")
+            else:
+                if score_away > score_home:
+                    form.append("W")
+                elif score_away < score_home:
+                    form.append("L")
+                else:
+                    form.append("D")
+
+        form_string = "".join(form[:num_games])
+        result = {
+            "team": team_name,
+            "form_string": form_string if form_string else "UNKNOWN",
+            "matches": matches[:num_games],
+            "data_source": "football_data",
+        }
+        self.cache.set("fd_form", cache_key, result)
+        return result
+
+    async def get_team_news(self, team_name: str, sport: str = "soccer") -> List[Dict[str, Any]]:
+        """
+        Fetch team news headlines.
+        Note: football-data.org doesn't provide news endpoints.
+        Returns empty list to allow fallback chain to continue.
+        """
+        # This API doesn't support news - return empty to let fallback chain continue
+        return []
 
     async def close(self) -> None:
         """Compatibility no-op."""

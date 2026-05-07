@@ -107,5 +107,9 @@ temp/
 *.sqlite3
 postgres_data/
 redis_data/
-.mcp.jsonstreaming-vlm/
+.mcp.json
+streaming-vlm/
 test_images/*.mp4
+test_images
+tests
+to remove

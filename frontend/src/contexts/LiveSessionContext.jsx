@@ -32,6 +32,7 @@ export function LiveSessionProvider({
     const [buildingNotes, setBuildingNotes] = useState(false)
     const [buildStatus, setBuildStatus] = useState(null)
     const [buildProgress, setBuildProgress] = useState('')
+    const [liveLogs, setLiveLogs] = useState([])
 
     // Live session state
     const [liveCommentary, setLiveCommentary] = useState([])
@@ -207,6 +208,7 @@ export function LiveSessionProvider({
         setBuildStatus('loading')
         setBuildProgress('Starting...')
         setCommentaryData(null)
+        setLiveLogs([])
 
         // Cancel any previous request
         if (abortControllerRef.current) {
@@ -236,6 +238,13 @@ export function LiveSessionProvider({
             const decoder = new TextDecoder()
             let buffer = ''
 
+            // Helper to add log entry
+            const addLog = (message, type = 'info') => {
+                const now = new Date()
+                const time = now.toLocaleTimeString('en-GB', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                setLiveLogs(prev => [...prev, { time, message, type }])
+            }
+
             while (true) {
                 const { done, value } = await reader.read()
                 if (done) break
@@ -252,11 +261,17 @@ export function LiveSessionProvider({
                             const data = event.result
                             setCommentaryData(data)
                             setBuildStatus('ready')
-                            setBuildProgress('')
+                            setBuildProgress(1.0)
+                            addLog('COMPLETE: Commentary notes ready for review.', 'success')
                         } else if (event.phase === 'error') {
+                            addLog(`ERROR: ${event.message}`, 'error')
                             throw new Error(event.message)
                         } else {
-                            setBuildProgress(event.message || event.phase)
+                            // Use numeric progress if available, otherwise fallback to message
+                            setBuildProgress(event.progress !== undefined ? event.progress : (event.message || event.phase))
+                            // Stream log entry
+                            const phaseLabel = event.phase?.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) || 'Processing'
+                            addLog(`${phaseLabel}: ${event.message || 'Working...'}`, event.done ? 'success' : 'running')
                         }
                     } catch (parseErr) {
                         if (parseErr.message && !parseErr.message.startsWith('Unexpected')) {
@@ -269,10 +284,12 @@ export function LiveSessionProvider({
             if (err.name === 'AbortError') {
                 console.log('[LiveSession] Notes preparation cancelled')
                 setBuildProgress('Cancelled')
+                addLog('Cancelled by user', 'info')
             } else {
                 console.error('[LiveSession] Notes generation failed:', err)
                 setBuildStatus('error')
                 setBuildProgress(err.message || 'Generation failed')
+                addLog(`FAILED: ${err.message}`, 'error')
             }
         } finally {
             setBuildingNotes(false)
@@ -351,6 +368,7 @@ export function LiveSessionProvider({
         buildingNotes,
         buildStatus,
         buildProgress,
+        liveLogs,
 
         // Live session
         liveCommentary,

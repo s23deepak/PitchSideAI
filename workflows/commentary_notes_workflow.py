@@ -186,6 +186,7 @@ class CommentaryNotesWorkflow:
             cache = getattr(self, "_cache", None)
             agent = PlayerResearchAgent(sport=state.sport, cache=cache)
             result = await agent.research_squad_pair(state.home_team, state.away_team)
+
             state.player_research = result
             state.completed_agents.append("player_research")
             logger.info(
@@ -210,6 +211,9 @@ class CommentaryNotesWorkflow:
         Phase 3: Analyze form for both teams and key matchups in parallel.
         - TeamFormAgent.analyze_both_teams(home, away) → team_form
         - MatchupAnalysisAgent.analyze_key_matchups(lineups) → matchup_analysis
+
+        Note: TeamForm can run immediately (only needs team names), but MatchupAnalysis
+        must wait for player_research to complete (Phase 2).
         """
         from agents.specialized_commentary.team_form_agent import TeamFormAgent
         from agents.specialized_commentary.matchup_analysis_agent import MatchupAnalysisAgent
@@ -318,31 +322,42 @@ class CommentaryNotesWorkflow:
         }
 
     async def run_workflow(self, state: CommentaryNotesState, on_progress: ProgressCallback = None) -> CommentaryNotesState:
-        """Execute full workflow sequentially, emitting progress via callback."""
-        logger.info("Starting commentary notes workflow...")
+        """Execute workflow with maximum parallelization, emitting progress via callback."""
+        logger.info("Starting commentary notes workflow (optimized)...")
 
         async def _emit(phase: str, message: str, **extra):
             if on_progress:
                 await on_progress(phase, message, extra)
 
-        # Phase 1: Initialize
+        # Phase 1: Initialize (must be first - gets venue/datetime)
         await _emit("initialize", "Fetching match schedule and venue...")
         state = await self.initialize_workflow(state)
         await _emit("initialize", "Match context ready", done=True)
 
-        # Phase 2: Gather initial context
-        await _emit("initial_context", "Researching news, weather, and history...", agents=["news", "weather", "historical"])
-        state = await self.gather_initial_context(state)
-        await _emit("initial_context", f"Initial context gathered ({len(state.completed_agents)} agents)", done=True)
+        # OPTIMIZATION 1: Run Phase 2 (initial context) + Phase 3 (squad research) IN PARALLEL
+        # These are independent - squad research only needs team names
+        await _emit("parallel_phase", "Running parallel research phase...",
+                    agents=["news", "weather", "historical", "player_research"])
 
-        # Phase 3: Research squads
-        await _emit("squad_research", "Researching player squads and profiles...")
-        state = await self.research_squads(state)
-        home_count = len(state.player_research.get("home_team", {}).get("players", []))
-        away_count = len(state.player_research.get("away_team", {}).get("players", []))
-        await _emit("squad_research", f"Squads researched ({home_count} + {away_count} players)", done=True)
+        async def _gather_context():
+            result = await self.gather_initial_context(state)
+            await _emit("initial_context", f"Initial context gathered (3 agents)", done=True)
+            return result
 
-        # Phase 4: Analyze form
+        async def _research_squads():
+            result = await self.research_squads(state)
+            home_count = len(result.player_research.get("home_team", {}).get("players", []))
+            away_count = len(result.player_research.get("away_team", {}).get("players", []))
+            await _emit("squad_research", f"Squads researched ({home_count} + {away_count} players)", done=True)
+            return result
+
+        # Execute both phases in parallel
+        await asyncio.gather(_gather_context(), _research_squads())
+        await _emit("parallel_phase", "Parallel research phase complete", done=True)
+
+        # OPTIMIZATION 2: TeamForm analysis can start immediately after Phase 1 (only needs team names)
+        # But we run it after Phase 2 to ensure all data is ready before MatchupAnalysis
+        # MatchupAnalysis MUST wait for player_research (Phase 2)
         await _emit("form_analysis", "Analyzing team form and key matchups...", agents=["team_form", "matchup_analysis"])
         state = await self.analyze_form(state)
         await _emit("form_analysis", f"Form and matchups analyzed ({len(state.completed_agents)} agents)", done=True)
