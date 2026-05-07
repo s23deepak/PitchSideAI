@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { BrowserRouter, Routes, Route, useNavigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom'
 import './index.css'
 import HomeScreen from './components/HomeScreen'
 import MatchDashboard from './components/MatchDashboard'
@@ -10,6 +10,11 @@ import CommentaryFeed from './components/CommentaryFeed'
 import LiveVideoPlayer from './components/LiveVideoPlayer'
 import LandingPage from './pages/LandingPage'
 import VideoPage from './pages/VideoPage'
+import FanLensBroadcast from './pages/FanLensBroadcast'
+import CommentatorDashboard from './pages/CommentatorDashboard'
+import NotesGenerationHub from './pages/NotesGenerationHub'
+import TabbedLivePage from './pages/TabbedLivePage'
+import { LiveSessionProvider } from './contexts/LiveSessionContext'
 
 const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
 
@@ -404,6 +409,10 @@ export default function App() {
                 <Route path="/" element={<LandingPage />} />
                 <Route path="/watch" element={<VideoPage />} />
                 <Route path="/dashboard" element={<AppContent />} />
+                <Route path="/live" element={<TabbedLivePage />} />
+                <Route path="/fan-lens" element={<Navigate to="/live?tab=fan-lens" replace />} />
+                <Route path="/commentator" element={<Navigate to="/live?tab=commentator" replace />} />
+                <Route path="/notes" element={<Navigate to="/live?tab=notes" replace />} />
             </Routes>
         </BrowserRouter>
     )

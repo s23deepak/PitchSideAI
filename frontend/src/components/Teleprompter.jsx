@@ -20,8 +20,7 @@ export default function Teleprompter({
     buildStatus,
     onGenerateNotes,
     liveDetection,
-    currentBeatIndex,
-    onBeatChange,
+    onBeatChange, // Used for beat change notifications to parent
 }) {
     const [activeTab, setActiveTab] = useState('match_info')
     const [isLongSheetMode, setIsLongSheetMode] = useState(false)
@@ -32,6 +31,7 @@ export default function Teleprompter({
     const beatRefs = useRef({}) // Map of beat index → DOM element
     const userScrollTimeoutRef = useRef(null)
     const autoScrollAnimationRef = useRef(null)
+    const isMountedRef = useRef(true) // Fix #4: Prevent setState on unmounted component
 
     // Switch to long-sheet mode when match is live
     useEffect(() => {
@@ -46,8 +46,8 @@ export default function Teleprompter({
             const { beatIndex, confidence, nextIndices } = e.detail
             console.log('[Teleprompter] Beat highlight received:', { beatIndex, confidence, nextIndices })
 
-            // Confidence gating: don't highlight below 0.7 threshold
-            if (confidence < 0.7) {
+            // Confidence gating: don't highlight below 0.6 threshold (Story 5.6 AC)
+            if (confidence < 0.6) {
                 console.log('[Teleprompter] Skipping highlight: confidence too low', confidence)
                 return
             }
@@ -76,7 +76,9 @@ export default function Teleprompter({
 
     // Cleanup effect for memory leaks (fix #4, #5)
     useEffect(() => {
+        isMountedRef.current = true
         return () => {
+            isMountedRef.current = false
             // Clear user scroll timeout
             if (userScrollTimeoutRef.current) {
                 clearTimeout(userScrollTimeoutRef.current)
@@ -119,6 +121,9 @@ export default function Teleprompter({
         const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3)
 
         const animateScroll = (currentTime) => {
+            // Fix #4: Check if component is still mounted before updating scrollTop
+            if (!isMountedRef.current || !container) return
+
             const elapsed = currentTime - startTime
             const progress = Math.min(elapsed / duration, 1)
             const easedProgress = easeOutCubic(progress)
@@ -159,8 +164,8 @@ export default function Teleprompter({
                 const beatRect = beatElement.getBoundingClientRect()
                 const distance = Math.abs(beatRect.top - containerRect.top - (containerRect.height * 0.3))
 
-                // If within 100px of target, exit hold mode
-                if (distance < 100) {
+                // If within 200px of target, exit hold mode (increased from 100px for better UX)
+                if (distance < 200) {
                     setIsHoldMode(false)
                     console.log('[Teleprompter] Hold mode deactivated: user near current beat')
                 }
@@ -177,10 +182,44 @@ export default function Teleprompter({
         }
     }, [highlightedBeatIndex, scrollToBeat])
 
+    // Fix #1: Compute hold mode button label without stale closure
+    const holdModeButtonLabel = useCallback(() => {
+        if (highlightedBeatIndex === null || !scrollContainerRef.current || !beatRefs.current[highlightedBeatIndex]) {
+            return 'Back to live'
+        }
+        const container = scrollContainerRef.current
+        const beatElement = beatRefs.current[highlightedBeatIndex]
+        const containerRect = container.getBoundingClientRect()
+        const beatRect = beatElement.getBoundingClientRect()
+        // If beat is below viewport top, user scrolled up → "Back to live"
+        // If beat is above viewport top, user scrolled past → "Catch up"
+        return beatRect.top > containerRect.top ? 'Back to live' : 'Catch up'
+    }, [highlightedBeatIndex])
+
     // Parse notes into beats for long-sheet mode
+    // Fix: Add fallback for markdown-only notes (no beats structure)
     const parseBeats = () => {
-        if (!notesData?.beats) return []
-        return notesData.beats
+        if (!notesData) return []
+
+        // If beats array exists, use it
+        if (notesData.beats && Array.isArray(notesData.beats)) {
+            return notesData.beats
+        }
+
+        // Fallback: parse markdown into pseudo-beats
+        if (notesData.markdown_notes) {
+            const lines = notesData.markdown_notes.split('\n').filter(line => line.trim())
+            return lines.map((line, index) => ({
+                text: line.replace(/^[#\-*]\s*/, ''),
+                source: 'markdown',
+                confidence: 1.0, // Fix #5: Markdown fallback should highlight (bypasses 0.6 gating)
+                event_tags: [],
+                section: 'general',
+                index,
+            }))
+        }
+
+        return []
     }
 
     const beats = parseBeats()
@@ -273,12 +312,12 @@ export default function Teleprompter({
     // Render a single beat with highlighting
     const renderBeat = useCallback((beat, index) => {
         const isHighlighted = index === highlightedBeatIndex
-        const isNextBeat = beatConfidence >= 0.7 && index > highlightedBeatIndex && index <= highlightedBeatIndex + 3
+        const isNextBeat = beatConfidence >= 0.6 && index > highlightedBeatIndex && index <= highlightedBeatIndex + 3
         const isPreviousBeat = index === highlightedBeatIndex - 1
         const nextOffset = isNextBeat ? index - highlightedBeatIndex : 0
 
-        // Confidence gating: don't highlight below 0.7
-        const shouldHighlight = isHighlighted && beatConfidence >= 0.7
+        // Confidence gating: don't highlight below 0.6 (Story 5.6 AC)
+        const shouldHighlight = isHighlighted && beatConfidence >= 0.6
 
         // Fix #16: Keyboard navigation for accessibility
         const handleBeatKeyDown = (e) => {
@@ -323,7 +362,7 @@ export default function Teleprompter({
         )
     }, [highlightedBeatIndex, beatConfidence])
 
-    // Empty state
+    // Empty state - no notes generated yet
     if (!notesData && !buildingNotes) {
         return (
             <div className="teleprompter teleprompter-empty" role="complementary" aria-label="Commentary teleprompter">
@@ -331,15 +370,15 @@ export default function Teleprompter({
                     <div className="empty-icon">📋</div>
                     <h3>Commentary Notes</h3>
                     <p>Generate commentary notes to get started.</p>
-                    <button className="btn btn-primary" onClick={onGenerateNotes}>
-                        Generate Notes
+                    <button className="teleprompter-generate-btn" onClick={onGenerateNotes}>
+                        <span>⚡</span> Generate Commentary Notes
                     </button>
                 </div>
             </div>
         )
     }
 
-    // Progress state
+    // Progress state - generating notes via SSE
     if (buildingNotes) {
         return (
             <div className="teleprompter teleprompter-generating" role="complementary" aria-label="Commentary teleprompter">
@@ -352,6 +391,11 @@ export default function Teleprompter({
                 </div>
             </div>
         )
+    }
+
+    // Ready state - show regenerate button
+    if (notesData && !buildingNotes && buildStatus === 'ready') {
+        // Add regenerate button to header in long-sheet mode
     }
 
     // Error state
@@ -376,13 +420,35 @@ export default function Teleprompter({
             <div className="teleprompter" role="complementary" aria-label="Commentary teleprompter">
                 <div className="teleprompter-header">
                     <h3 className="teleprompter-title">Commentary Notes</h3>
-                    <button
-                        className="btn btn-sm btn-ghost"
-                        onClick={() => setIsLongSheetMode(true)}
-                        title="Switch to long-sheet mode"
-                    >
-                        📜 Long Sheet
-                    </button>
+                    <div className="teleprompter-header-actions">
+                        {/* Generate Notes button - hidden when notes exist (Story 5.5 AC) */}
+                        {!notesData && (
+                            <button
+                                className="btn btn-sm btn-primary"
+                                onClick={onGenerateNotes}
+                                title="Generate commentary notes"
+                            >
+                                ⚡ Generate Notes
+                            </button>
+                        )}
+                        {/* Regenerate Notes button - shown when notes are ready */}
+                        {notesData && buildStatus === 'ready' && (
+                            <button
+                                className="btn btn-sm btn-secondary"
+                                onClick={onGenerateNotes}
+                                title="Regenerate commentary notes"
+                            >
+                                🔄 Regenerate Notes
+                            </button>
+                        )}
+                        <button
+                            className="btn btn-sm btn-ghost"
+                            onClick={() => setIsLongSheetMode(true)}
+                            title="Switch to long-sheet mode"
+                        >
+                            📜 Long Sheet
+                        </button>
+                    </div>
                 </div>
 
                 {/* Tab Navigation */}
@@ -437,21 +503,23 @@ export default function Teleprompter({
                     >
                         📑 Tabbed View
                     </button>
+                    {/* Regenerate Notes button (Story 5.5 AC) */}
+                    {buildStatus === 'ready' && (
+                        <button
+                            className="btn btn-sm btn-secondary"
+                            onClick={onGenerateNotes}
+                            title="Regenerate commentary notes"
+                        >
+                            🔄 Regenerate Notes
+                        </button>
+                    )}
                     {isHoldMode && (
                         <button
                             className="btn btn-sm btn-primary"
                             onClick={handleReturnToLive}
                             title="Return to live auto-scroll"
                         >
-                            {highlightedBeatIndex !== null && scrollContainerRef.current && beatRefs.current[highlightedBeatIndex]
-                                ? (() => {
-                                      const container = scrollContainerRef.current
-                                      const beatElement = beatRefs.current[highlightedBeatIndex]
-                                      const containerRect = container.getBoundingClientRect()
-                                      const beatRect = beatElement.getBoundingClientRect()
-                                      return beatRect.top > containerRect.top ? 'Back to live' : 'Catch up'
-                                  })()
-                                : 'Back to live'}
+                            {holdModeButtonLabel()}
                         </button>
                     )}
                 </div>

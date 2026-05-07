@@ -23,7 +23,7 @@ import os
 import sys
 from dataclasses import dataclass, asdict
 from typing import List, Optional, Callable, Awaitable
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -72,14 +72,14 @@ class LatencyBenchmarker:
             end = time.perf_counter()
             measurements.append((end - start) * 1000)  # Convert to ms
 
-        p50 = statistics.median(measurements)
-        sorted_measurements = sorted(measurements)
+        p50 = statistics.median(measurements) if measurements else 0
+        sorted_measurements = sorted(measurements) if measurements else [0]
         p95_idx = int(len(sorted_measurements) * 0.95)
         p99_idx = int(len(sorted_measurements) * 0.99)
         p95 = sorted_measurements[p95_idx] if p95_idx < len(sorted_measurements) else sorted_measurements[-1]
         p99 = sorted_measurements[p99_idx] if p99_idx < len(sorted_measurements) else sorted_measurements[-1]
 
-        passed = p95 <= 3500
+        passed = p95 <= 3500 if measurements else False
 
         return BenchmarkResult(
             nfr="NFR-1",
@@ -96,7 +96,7 @@ class LatencyBenchmarker:
             p95_silence=None,
             passed=passed,
             sample_size=len(measurements),
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=datetime.now(timezone.utc).isoformat()
         )
 
     async def measure_nfr2_language_switch(self) -> BenchmarkResult:
@@ -126,7 +126,7 @@ class LatencyBenchmarker:
         p95 = sorted_measurements[p95_idx] if p95_idx < len(sorted_measurements) else sorted_measurements[-1]
 
         p95_silence = None
-        if sorted_silence:
+        if sorted_silence and len(sorted_silence) > 0:
             p95_silence_idx = int(len(sorted_silence) * 0.95)
             p95_silence = sorted_silence[p95_silence_idx] if p95_silence_idx < len(sorted_silence) else sorted_silence[-1]
 
@@ -147,7 +147,7 @@ class LatencyBenchmarker:
             p95_silence=p95_silence,
             passed=passed,
             sample_size=len(measurements),
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=datetime.now(timezone.utc).isoformat()
         )
 
     async def measure_nfr3_cold_start(self) -> BenchmarkResult:
@@ -189,7 +189,7 @@ class LatencyBenchmarker:
             p95_silence=None,
             passed=passed,
             sample_size=len(measurements),
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=datetime.now(timezone.utc).isoformat()
         )
 
     async def measure_nfr4_commentary_ttft(self) -> BenchmarkResult:
@@ -231,7 +231,7 @@ class LatencyBenchmarker:
             p95_silence=None,
             passed=passed,
             sample_size=len(measurements),
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=datetime.now(timezone.utc).isoformat()
         )
 
     async def measure_nfr5_vision_fps(self) -> BenchmarkResult:
@@ -252,10 +252,11 @@ class LatencyBenchmarker:
             fps_measurements.append(fps)
 
         p50 = statistics.median(fps_measurements) if fps_measurements else 0
-        sorted_fps = sorted(fps_measurements, reverse=True)  # Higher is better
+        sorted_fps = sorted(fps_measurements, reverse=True) if fps_measurements else [0]  # Higher is better
         p95_idx = int(len(sorted_fps) * 0.05)  # Bottom 5% for FPS
-        p95 = sorted_fps[p95_idx] if p95_idx < len(sorted_fps) else sorted_fps[-1] if sorted_fps else 0
-        p99 = sorted_fps[int(len(sorted_fps) * 0.01)] if len(sorted_fps) > 0 and int(len(sorted_fps) * 0.01) < len(sorted_fps) else sorted_fps[-1] if sorted_fps else 0
+        p99_idx = min(int(len(sorted_fps) * 0.01), len(sorted_fps) - 1)  # Bounds-safe index
+        p95 = sorted_fps[p95_idx] if p95_idx < len(sorted_fps) else sorted_fps[-1]
+        p99 = sorted_fps[p99_idx]
 
         passed = p95 >= 5.0
 
@@ -274,7 +275,7 @@ class LatencyBenchmarker:
             p95_silence=None,
             passed=passed,
             sample_size=len(fps_measurements),
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=datetime.now(timezone.utc).isoformat()
         )
 
     # Simulation methods - replace with actual pipeline hooks in production
@@ -372,7 +373,12 @@ class LatencyBenchmarker:
 
     def save_results(self, output_path: str = "VALIDATION_REPORT.md"):
         """Save results to a markdown report."""
-        timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+        # Ensure parent directory exists
+        output_dir = os.path.dirname(output_path)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
         report = f"""# PitchAI Validation Report
 
@@ -437,6 +443,10 @@ async def main():
     if not args.nfr and not args.all:
         parser.print_help()
         print("\nError: Either --nfr or --all must be specified")
+        sys.exit(1)
+
+    if args.runs < 1:
+        print(f"\nError: --runs must be at least 1, got {args.runs}")
         sys.exit(1)
 
     benchmarker = LatencyBenchmarker(runs=args.runs)

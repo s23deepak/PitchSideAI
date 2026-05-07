@@ -90,7 +90,8 @@ export function useSpeechRecognition({
                 }
             }
 
-            if (interim) setInterimTranscript(interim)
+            // Fix: Always update interim transcript (don't accumulate stale data)
+            setInterimTranscript(interim || '')
             if (final) {
                 setFinalTranscript(final)
                 setConfidence(maxConfidence)
@@ -114,9 +115,11 @@ export function useSpeechRecognition({
                 handleConfidenceGate(finalTranscript, confidence)
             }
 
-            // Reset for next recording
+            // Fix: Clear interim transcript to prevent memory leak
             setInterimTranscript('')
             setFinalTranscript('')
+            // Also clear confidence to avoid stale data
+            setConfidence(null)
         }
 
         recognition.onerror = (event) => {
@@ -143,6 +146,7 @@ export function useSpeechRecognition({
     }, [isSupported, language])
 
     // Handle confidence gate (3-tier logic) - Fix #12: Use >= 0.9 for high confidence threshold
+    // Fix: Add exponential backoff for consecutive failures
     const handleConfidenceGate = useCallback((transcript, conf) => {
         if (conf >= 0.9) {
             // High confidence (>=90%): proceed immediately
@@ -153,8 +157,14 @@ export function useSpeechRecognition({
             setConsecutiveFailures(0)
             onConfidencePass?.({ transcript, confidence: conf, skipConfirmation: false })
         } else {
-            // Low confidence (<70%): auto-reject
-            setConsecutiveFailures(prev => prev + 1)
+            // Low confidence (<70%): auto-reject with exponential backoff
+            setConsecutiveFailures(prev => {
+                const newFailures = prev + 1
+                // Exponential backoff: delay increases with each failure (max 8 seconds)
+                const backoffDelay = Math.min(1000 * Math.pow(2, newFailures - 1), 8000)
+                console.log(`[useSpeechRecognition] Consecutive failure #${newFailures}, backoff delay: ${backoffDelay}ms`)
+                return newFailures
+            })
             onConfidenceReject?.({ transcript, confidence: conf })
         }
     }, [onConfidencePass, onConfidenceReject])

@@ -51,6 +51,16 @@ htmlcov/
 coverage.xml
 *.cover
 
+# Playwright
+**/.playwright-cli/
+**/.playwright/
+**/test-results/
+**/blob-report/
+**/playwright-report/
+**/*.viewport.yaml
+**/watch-page*.yaml
+**/wave*-complete.png
+
 # Node & Frontend
 frontend/node_modules/
 frontend/dist/
@@ -85,7 +95,11 @@ Thumbs.db
 .appcache
 
 # Project specific
-.claude/
+# .claude/ — track agents and skills, ignore rest
+!.claude/agents/*.md
+!.claude/skills/**
+.claude/projects/
+.claude/settings.local.json
 logs/
 data/
 temp/
@@ -93,4 +107,5 @@ temp/
 *.sqlite3
 postgres_data/
 redis_data/
-.mcp.json
+.mcp.jsonstreaming-vlm/
+test_images/*.mp4

@@ -13,10 +13,17 @@ import asyncio
 import base64
 import json
 import logging
+import os
+import sys
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
+
+# Add streaming-vlm to Python path
+_STREAMING_VLM_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'streaming-vlm')
+if os.path.isdir(_STREAMING_VLM_PATH) and _STREAMING_VLM_PATH not in sys.path:
+    sys.path.insert(0, _STREAMING_VLM_PATH)
 
 from streaming.frame_buffer import FrameBuffer, FrameBufferConfig, VideoChunk
 from streaming.kv_cache_manager import KVCacheManager, KVCacheConfig, KVCacheState
@@ -312,11 +319,14 @@ class StreamingVLMBackend(StreamingBackend):
         loop = asyncio.get_event_loop()
 
         def _load():
+            # Use sdpa (scaled dot-product attention) - works without flash_attn
+            # FlashAttention2 requires flash_attn package which needs custom CUDA build
+            attn_impl = "sdpa"  # Available in PyTorch 2.0+, no extra deps
             model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
                 self.model_path,
                 torch_dtype=torch.bfloat16,
                 device_map=self.device,
-                attn_implementation="flash_attention_2" if torch.cuda.is_available() else "eager",
+                attn_implementation=attn_impl,
             )
             # Apply StreamingVLM patches
             from streaming_vlm.inference.qwen2_5.patch_model import convert_qwen2_5_to_streaming
@@ -491,9 +501,11 @@ class StreamingVLMBackend(StreamingBackend):
 @dataclass
 class StreamingBridgeConfig:
     """Top-level configuration for the streaming vision bridge."""
-    backend: str = "vllm"                # "vllm" or "streaming_vlm"
+    backend: str = "auto"                # "auto" | "vllm" | "sglang" | "streaming_vlm"
     vllm_base_url: str = "http://localhost:8001"
     vllm_model: str = "Qwen/Qwen2.5-VL-3B-Instruct-AWQ"
+    sglang_base_url: str = "http://localhost:30000"
+    sglang_model: str = "Qwen/Qwen2.5-VL-3B-Instruct"
     streaming_vlm_model: str = "mit-han-lab/StreamingVLM"
     sport: str = "football"
     # Frame buffer config
@@ -504,6 +516,8 @@ class StreamingBridgeConfig:
     window_size: int = 16
     text_sink: int = 512
     text_sliding_window: int = 512
+    # Fallback
+    use_fallback_chain: bool = True      # Use FallbackStreamingBackend for auto-failover
 
 
 class StreamingVisionBridge:
@@ -546,23 +560,43 @@ class StreamingVisionBridge:
 
     async def initialize(self):
         """Initialize the appropriate backend."""
-        if self.config.backend == "streaming_vlm":
-            self._backend = StreamingVLMBackend(
-                model_path=self.config.streaming_vlm_model,
-                sport=self.config.sport,
-                window_size=self.config.window_size,
-                text_sink=self.config.text_sink,
-                text_sliding_window=self.config.text_sliding_window,
-            )
+        from streaming.factory import get_streaming_backend, FallbackStreamingBackend
+
+        if self.config.use_fallback_chain:
+            # Use automatic fallback chain (recommended)
+            logger.info("Initializing with fallback chain (Level 1→2→3→4)")
+            self._backend = FallbackStreamingBackend(start_level=1)
+            await self._backend.initialize()
+            stats = self._backend.get_stats()
+            logger.info(f"Fallback chain initialized at Level {stats.get('fallback_level', 'unknown')}")
         else:
-            self._backend = VLLMStreamingBackend(
-                vllm_base_url=self.config.vllm_base_url,
-                model_name=self.config.vllm_model,
-                sport=self.config.sport,
-            )
-        await self._backend.initialize()
-        self._initialized = True
-        logger.info(f"StreamingVisionBridge initialized with {self.config.backend} backend")
+            # Explicit backend selection
+            if self.config.backend == "streaming_vlm":
+                self._backend = StreamingVLMBackend(
+                    model_path=self.config.streaming_vlm_model,
+                    sport=self.config.sport,
+                    window_size=self.config.window_size,
+                    text_sink=self.config.text_sink,
+                    text_sliding_window=self.config.text_sliding_window,
+                )
+            elif self.config.backend == "sglang":
+                from streaming.sglang_backend import SGLangStreamingBackend
+                self._backend = SGLangStreamingBackend(
+                    sglang_base_url=self.config.sglang_base_url,
+                    model_name=self.config.sglang_model,
+                    sport=self.config.sport,
+                )
+            elif self.config.backend == "vllm":
+                self._backend = VLLMStreamingBackend(
+                    vllm_base_url=self.config.vllm_base_url,
+                    model_name=self.config.vllm_model,
+                    sport=self.config.sport,
+                )
+            else:  # "auto" - use factory to pick best available
+                self._backend = get_streaming_backend()
+
+            await self._backend.initialize()
+            logger.info(f"StreamingVisionBridge initialized with {self.config.backend} backend")
 
     async def process_frame(self, frame_data: bytes, timestamp_ms: int,
                             keyframe: bool = False,

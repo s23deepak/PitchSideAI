@@ -49,9 +49,9 @@ export default function VideoCanvas({
     const captureInterval = useRef(null)
     const overlayTimeout = useRef(null)
 
-    // Connect to WebSocket
+    // Connect to video streaming WebSocket (separate from LiveSession /ws/live)
     const connectWebSocket = useCallback(() => {
-        const wsUrl = BACKEND.replace(/^http/, 'ws') + '/ws/live'
+        const wsUrl = BACKEND.replace(/^http/, 'ws') + '/ws/video/streaming'
         const ws = new WebSocket(wsUrl)
         wsRef.current = ws
 
@@ -62,8 +62,14 @@ export default function VideoCanvas({
                 type: 'init',
                 home_team: homeTeam,
                 away_team: awayTeam,
-                match_session: matchSession,
                 sport: sport,
+                config: {
+                    backend: backend,
+                    chunk_interval_seconds: chunkInterval,
+                    max_chunk_frames: Math.round(targetFps * chunkInterval),
+                    target_fps: targetFps,
+                    sport: sport,
+                },
             }))
             setConnectionState('connected')
             setWsReady(true)
@@ -80,26 +86,31 @@ export default function VideoCanvas({
                         setConnectionState('connected')
                         break
 
-                    case 'tactical_detection':
-                        setCurrentDetection(msg.analysis || msg)
-                        setOverlayVisible(true)
-                        // Auto-hide overlay after 3s
-                        if (overlayTimeout.current) clearTimeout(overlayTimeout.current)
-                        overlayTimeout.current = setTimeout(() => {
-                            setOverlayVisible(false)
-                        }, 3000)
-                        // Forward to parent if callback provided
-                        if (onTacticalDetection && msg.analysis?.confidence > 0.6) {
-                            onTacticalDetection(msg.analysis)
-                        }
+                    case 'status':
+                        // Stats/status messages, not an error
                         break
 
                     case 'commentary':
+                        // Tactical analysis coming from streaming video endpoint
+                        if (msg.tactical_label) {
+                            const detection = {
+                                tactical_label: msg.tactical_label,
+                                confidence: msg.confidence || 0,
+                            }
+                            setCurrentDetection(detection)
+                            setOverlayVisible(true)
+                            if (overlayTimeout.current) clearTimeout(overlayTimeout.current)
+                            overlayTimeout.current = setTimeout(() => {
+                                setOverlayVisible(false)
+                            }, 3000)
+                            if (onTacticalDetection && msg.confidence > 0.6) {
+                                onTacticalDetection(detection)
+                            }
+                        }
                         onCommentary?.(msg)
                         break
 
                     case 'trivia_card':
-                        // Show trivia card with confidence-based timing
                         const displayDuration = msg.confidence >= 0.8 ? 5000 : 3000
                         setTriviaCard({
                             text: msg.text,
@@ -108,10 +119,29 @@ export default function VideoCanvas({
                             fadeInMs: msg.fade_in_ms || 400,
                             fadeOutMs: msg.fade_out_ms || 400,
                         })
-                        // Auto-hide after display duration
                         setTimeout(() => {
                             setTriviaCard(null)
                         }, displayDuration)
+                        break
+
+                    case 'chunk_analyzed':
+                        // Full chunk analysis result
+                        if (msg.result?.tactical_label) {
+                            const detection = {
+                                tactical_label: msg.result.tactical_label,
+                                confidence: msg.result.confidence || 0,
+                                key_observation: msg.result.key_observation,
+                            }
+                            setCurrentDetection(detection)
+                            setOverlayVisible(true)
+                            if (overlayTimeout.current) clearTimeout(overlayTimeout.current)
+                            overlayTimeout.current = setTimeout(() => {
+                                setOverlayVisible(false)
+                            }, 5000)
+                            if (onTacticalDetection && msg.result.confidence > 0.6) {
+                                onTacticalDetection(detection)
+                            }
+                        }
                         break
 
                     case 'error':
@@ -120,7 +150,6 @@ export default function VideoCanvas({
                         break
 
                     case 'ping':
-                        // Heartbeat
                         break
                 }
             } catch (err) {
@@ -140,7 +169,7 @@ export default function VideoCanvas({
             setWsReady(false)
             setConnectionState('disconnected')
         }
-    }, [homeTeam, awayTeam, matchSession, sport, onTacticalDetection, onCommentary])
+    }, [homeTeam, awayTeam, sport, backend, chunkInterval, targetFps, onTacticalDetection, onCommentary])
 
     // Frame capture at target FPS
     const captureLoop = useCallback(() => {
@@ -287,15 +316,15 @@ export default function VideoCanvas({
                         width="25"
                         height="8"
                         rx="2"
-                        fill="rgba(15, 23, 42, 0.85)"
-                        stroke="rgba(255, 255, 255, 0.3)"
+                        fill="var(--bg-surface-container)"
+                        stroke="var(--border-dim)"
                         strokeWidth="0.5"
                     />
                     <text
                         x="2"
                         y="5.5"
                         fontSize="4"
-                        fill="white"
+                        fill="var(--text-primary)"
                         fontFamily="Inter, sans-serif"
                         fontWeight="600"
                     >
@@ -303,27 +332,27 @@ export default function VideoCanvas({
                     </text>
                 </g>
 
-                {/* Player dots - home team (blue) */}
+                {/* Player dots - home team */}
                 {players.filter(p => p.team === 'home').map((player, i) => (
                     <circle
                         key={`home-${i}`}
                         cx={player.x * 100}
                         cy={player.y * 100}
                         r="2"
-                        fill="rgba(79, 156, 249, 0.85)"
+                        fill="var(--accent-interactive)"
                         stroke="white"
                         strokeWidth="0.5"
                     />
                 ))}
 
-                {/* Player dots - away team (red) */}
+                {/* Player dots - away team */}
                 {players.filter(p => p.team === 'away').map((player, i) => (
                     <circle
                         key={`away-${i}`}
                         cx={player.x * 100}
                         cy={player.y * 100}
                         r="2"
-                        fill="rgba(248, 113, 113, 0.85)"
+                        fill="var(--danger)"
                         stroke="white"
                         strokeWidth="0.5"
                     />
@@ -346,9 +375,9 @@ export default function VideoCanvas({
     // Connection state indicator
     const renderConnectionIndicator = () => {
         const stateConfig = {
-            connected: { color: '#22c55e', label: 'Live', pulse: true },
-            reconnecting: { color: '#eab308', label: 'Reconnecting...', pulse: true },
-            disconnected: { color: '#ef4444', label: 'Disconnected', pulse: false },
+            connected: { color: 'var(--success)', label: 'Live', pulse: true },
+            reconnecting: { color: 'var(--warning)', label: 'Reconnecting...', pulse: true },
+            disconnected: { color: 'var(--danger)', label: 'Disconnected', pulse: false },
         }
 
         const config = stateConfig[connectionState] || stateConfig.disconnected
@@ -364,10 +393,10 @@ export default function VideoCanvas({
                     alignItems: 'center',
                     gap: 6,
                     padding: '6px 10px',
-                    background: 'rgba(15, 23, 42, 0.85)',
+                    background: 'var(--bg-surface-container)',
                     borderRadius: 20,
                     fontSize: 11,
-                    color: 'white',
+                    color: 'var(--text-primary)',
                     zIndex: 20,
                     cursor: 'default',
                 }}
@@ -390,10 +419,10 @@ export default function VideoCanvas({
     return (
         <div className="video-canvas" style={{
             position: 'relative',
-            background: 'var(--surface, #1e293b)',
+            background: 'var(--bg-secondary)',
             borderRadius: 12,
             overflow: 'hidden',
-            border: '1px solid var(--border-color, #334155)',
+            border: '1px solid var(--border)',
         }}>
             {/* Header */}
             <div style={{
@@ -402,24 +431,24 @@ export default function VideoCanvas({
                 left: 0,
                 right: 0,
                 padding: '10px 16px',
-                background: 'linear-gradient(180deg, rgba(15,23,42,0.9) 0%, transparent 100%)',
+                background: 'linear-gradient(180deg, var(--bg-secondary) 0%, transparent 100%)',
                 zIndex: 10,
                 display: 'flex',
                 justifyContent: 'space-between',
                 alignItems: 'center',
             }}>
                 <div>
-                    <h3 style={{ margin: 0, fontSize: 14, color: 'white' }}>
+                    <h3 style={{ margin: 0, fontSize: 14, color: 'var(--text-primary)' }}>
                         {homeTeam} vs {awayTeam}
                     </h3>
-                    <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.7)' }}>
+                    <span style={{ fontSize: 10, color: 'var(--text-secondary)' }}>
                         Fan Lens • {sport}
                     </span>
                 </div>
                 {framesSent > 0 && (
                     <span style={{
-                        background: 'rgba(59, 130, 246, 0.2)',
-                        color: '#60a5fa',
+                        background: 'var(--accent-interactive-focus)',
+                        color: 'var(--accent-interactive)',
                         padding: '2px 8px',
                         borderRadius: 12,
                         fontSize: 10,
@@ -433,7 +462,7 @@ export default function VideoCanvas({
             {renderConnectionIndicator()}
 
             {/* Video + Canvas layer */}
-            <div style={{ position: 'relative', width: '100%', aspectRatio: '16/9', background: '#000' }}>
+            <div style={{ position: 'relative', width: '100%', aspectRatio: '16/9', background: 'var(--bg-primary)' }}>
                 <video
                     ref={videoRef}
                     onTimeUpdate={() => videoRef.current && setCurrentTime(videoRef.current.currentTime)}
@@ -477,32 +506,32 @@ export default function VideoCanvas({
                         left: '50%',
                         transform: 'translateX(-50%)',
                         width: 'min(90%, 400px)',
-                        background: 'linear-gradient(135deg, rgba(15,23,42,0.95) 0%, rgba(30,41,59,0.9) 100%)',
+                        background: 'var(--bg-surface-container)',
                         borderRadius: 12,
                         padding: 16,
-                        border: '1px solid rgba(148,163,184,0.2)',
+                        border: '1px solid var(--border-dim)',
                         boxShadow: '0 10px 40px rgba(0,0,0,0.4)',
                         zIndex: 30,
                         animation: `slideUp ${triviaCard.fadeInMs}ms ease-out`,
                     }}
                 >
-                    <div style={{ fontSize: 13, color: '#e2e8f0', lineHeight: 1.5 }}>
+                    <div style={{ fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.5 }}>
                         {triviaCard.text}
                     </div>
                     {triviaCard.source && (
                         <div style={{
                             marginTop: 8,
                             fontSize: 10,
-                            color: 'rgba(255,255,255,0.6)',
+                            color: 'var(--text-secondary)',
                             display: 'flex',
                             alignItems: 'center',
                             gap: 4,
                         }}>
                             <span style={{
-                                background: 'rgba(59, 130, 246, 0.2)',
+                                background: 'var(--accent-interactive-focus)',
                                 padding: '1px 6px',
                                 borderRadius: 4,
-                                color: '#60a5fa',
+                                color: 'var(--accent-interactive)',
                             }}>
                                 {triviaCard.source}
                             </span>
@@ -519,15 +548,15 @@ export default function VideoCanvas({
                 <div style={{ padding: 16 }}>
                     <label style={{
                         display: 'block',
-                        border: '2px dashed var(--border-color, #334155)',
+                        border: '2px dashed var(--border)',
                         borderRadius: 10,
                         padding: 24,
                         textAlign: 'center',
                         cursor: 'pointer',
                         transition: 'border-color 200ms',
                     }}
-                    onMouseOver={(e) => e.currentTarget.style.borderColor = 'var(--accent, #3b82f6)'}
-                    onMouseOut={(e) => e.currentTarget.style.borderColor = 'var(--border-color, #334155)'}
+                    onMouseOver={(e) => e.currentTarget.style.borderColor = 'var(--accent-interactive)'}
+                    onMouseOut={(e) => e.currentTarget.style.borderColor = 'var(--border)'}
                     >
                         <input
                             type="file"
@@ -536,7 +565,7 @@ export default function VideoCanvas({
                             style={{ display: 'none' }}
                         />
                         <span style={{ fontSize: 32 }}>📹</span>
-                        <div style={{ marginTop: 8, color: 'var(--text-muted, #94a3b8)' }}>
+                        <div style={{ marginTop: 8, color: 'var(--text-muted)' }}>
                             {videoFile ? videoFile.name : 'Upload match footage'}
                         </div>
                     </label>
@@ -556,7 +585,7 @@ export default function VideoCanvas({
                     )}
                 </div>
             ) : (
-                <div style={{ padding: 12, background: 'var(--surface, #1e293b)' }}>
+                <div style={{ padding: 12, background: 'var(--bg-surface)' }}>
                     {/* Progress bar */}
                     <div style={{
                         display: 'flex',
@@ -609,7 +638,7 @@ export default function VideoCanvas({
                     flexWrap: 'wrap',
                 }}>
                     <div>
-                        <label style={{ fontSize: 10, color: 'var(--text-muted, #94a3b8)' }}>Backend</label>
+                        <label style={{ fontSize: 10, color: 'var(--text-muted)' }}>Backend</label>
                         <select
                             value={backend}
                             onChange={e => setBackend(e.target.value)}
@@ -617,9 +646,9 @@ export default function VideoCanvas({
                                 display: 'block',
                                 padding: '4px 8px',
                                 borderRadius: 6,
-                                border: '1px solid var(--border-color, #334155)',
-                                background: 'var(--bg, #0f172a)',
-                                color: 'var(--text-primary, #f1f5f9)',
+                                border: '1px solid var(--border)',
+                                background: 'var(--bg-primary)',
+                                color: 'var(--text-primary)',
                                 fontSize: 11,
                             }}
                         >
@@ -628,7 +657,7 @@ export default function VideoCanvas({
                         </select>
                     </div>
                     <div>
-                        <label style={{ fontSize: 10, color: 'var(--text-muted, #94a3b8)' }}>Chunk (s)</label>
+                        <label style={{ fontSize: 10, color: 'var(--text-muted)' }}>Chunk (s)</label>
                         <input
                             type="number"
                             value={chunkInterval}
@@ -639,15 +668,15 @@ export default function VideoCanvas({
                                 width: 60,
                                 padding: '4px 8px',
                                 borderRadius: 6,
-                                border: '1px solid var(--border-color, #334155)',
-                                background: 'var(--bg, #0f172a)',
-                                color: 'var(--text-primary, #f1f5f9)',
+                                border: '1px solid var(--border)',
+                                background: 'var(--bg-primary)',
+                                color: 'var(--text-primary)',
                                 fontSize: 11,
                             }}
                         />
                     </div>
                     <div>
-                        <label style={{ fontSize: 10, color: 'var(--text-muted, #94a3b8)' }}>FPS</label>
+                        <label style={{ fontSize: 10, color: 'var(--text-muted)' }}>FPS</label>
                         <input
                             type="number"
                             value={targetFps}
@@ -658,9 +687,9 @@ export default function VideoCanvas({
                                 width: 60,
                                 padding: '4px 8px',
                                 borderRadius: 6,
-                                border: '1px solid var(--border-color, #334155)',
-                                background: 'var(--bg, #0f172a)',
-                                color: 'var(--text-primary, #f1f5f9)',
+                                border: '1px solid var(--border)',
+                                background: 'var(--bg-primary)',
+                                color: 'var(--text-primary)',
                                 fontSize: 11,
                             }}
                         />

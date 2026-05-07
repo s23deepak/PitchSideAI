@@ -22,7 +22,7 @@ import sys
 import os
 from dataclasses import dataclass, field
 from typing import Dict, List, Callable, Awaitable, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -136,7 +136,7 @@ class ChaosTestRunner:
             passed=passed,
             errors=errors,
             execution_time_ms=execution_time,
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=datetime.now(timezone.utc).isoformat()
         )
 
     async def test_resize_during_draw(self) -> ChaosTestResult:
@@ -189,7 +189,7 @@ class ChaosTestRunner:
             passed=passed,
             errors=errors,
             execution_time_ms=execution_time,
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=datetime.now(timezone.utc).isoformat()
         )
 
     async def test_stt_timeout(self) -> ChaosTestResult:
@@ -252,7 +252,7 @@ class ChaosTestRunner:
             passed=passed,
             errors=errors,
             execution_time_ms=execution_time,
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=datetime.now(timezone.utc).isoformat()
         )
 
     async def test_websocket_drop_mid_qa(self) -> ChaosTestResult:
@@ -311,7 +311,7 @@ class ChaosTestRunner:
             passed=passed,
             errors=errors,
             execution_time_ms=execution_time,
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=datetime.now(timezone.utc).isoformat()
         )
 
     async def test_compound_failure(self) -> ChaosTestResult:
@@ -369,7 +369,7 @@ class ChaosTestRunner:
             passed=passed,
             errors=errors,
             execution_time_ms=execution_time,
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=datetime.now(timezone.utc).isoformat()
         )
 
     async def test_gpu_unreachable(self) -> ChaosTestResult:
@@ -431,7 +431,7 @@ class ChaosTestRunner:
             passed=passed,
             errors=errors,
             execution_time_ms=execution_time,
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=datetime.now(timezone.utc).isoformat()
         )
 
     async def run_scenario(self, scenario_name: str) -> ChaosTestResult:
@@ -444,7 +444,7 @@ class ChaosTestRunner:
                 expected="",
                 passed=False,
                 errors=[f"Unknown scenario: {scenario_name}"],
-                timestamp=datetime.utcnow().isoformat()
+                timestamp=datetime.now(timezone.utc).isoformat()
             )
 
         # Map scenario names to method names
@@ -468,7 +468,7 @@ class ChaosTestRunner:
                 expected=self.SCENARIOS[scenario_name]['expected'],
                 passed=False,
                 errors=[f"Test method not found: {method_name}"],
-                timestamp=datetime.utcnow().isoformat()
+                timestamp=datetime.now(timezone.utc).isoformat()
             )
 
         return await test_method()
@@ -527,7 +527,12 @@ class ChaosTestRunner:
 
     def save_results(self, output_path: str = "VALIDATION_REPORT.md", append: bool = True):
         """Save results to markdown report."""
-        timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+        # Ensure parent directory exists
+        output_dir = os.path.dirname(output_path)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
         section = f"""## Chaos Test Results
 

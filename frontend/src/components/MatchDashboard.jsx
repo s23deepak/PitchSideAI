@@ -10,6 +10,8 @@ import MicButton from './MicButton'
 import SplitScreen from './SplitScreen'
 import Teleprompter from './Teleprompter'
 import ControlsTray from './ControlsTray'
+import { FanLensLayout } from '@/layouts/FanLensLayout'
+import { CommentatorLayout } from '@/layouts/CommentatorLayout'
 
 /* ── MatchDashboard — Live Match View ───────────────────────────────────────── */
 export default function MatchDashboard({
@@ -21,6 +23,7 @@ export default function MatchDashboard({
     detection,
     setDetection,
     liveCommentary,
+    setLiveCommentary,
     onSendMatchEvent,
     onSendTacticalDetection,
     onGoBack,
@@ -104,167 +107,105 @@ export default function MatchDashboard({
         }))
     }
 
-    return (
-        <div className="match-dashboard">
-            {/* SplitScreen - Story 2.3: Temporal Navigation */}
-            {isSplitScreenActive && currentAnswer && (
-                <SplitScreen
-                    answer={currentAnswer}
-                    isActive={isSplitScreenActive}
-                    onDismiss={handleSplitScreenDismiss}
-                >
-                    <VideoCanvas
+    // Fan Lens View - Use FanLensLayout
+    if (currentView === 'fan') {
+        return (
+            <FanLensLayout
+                controlsTray={
+                    <ControlsTray
+                        homeTeam={homeTeam}
+                        awayTeam={awayTeam}
+                        onSettingsChange={handleSettingsChange}
+                        onLanguageChange={handleLanguageChange}
+                        onViewChange={handleViewChange}
+                        currentView={currentView}
+                    />
+                }
+                triviaCards={
+                    <MatchInsight
                         matchSession={matchSession}
                         homeTeam={homeTeam}
                         awayTeam={awayTeam}
                         sport={sport}
-                        isLive={true}
+                        initialTrivia={commentaryData?.notes?.beats || []}
                     />
-                </SplitScreen>
-            )}
-
-            {/* Dashboard Header */}
-            <header className="dashboard-header">
-                <div className="dashboard-match-info">
-                    <button className="btn btn-secondary btn-sm" onClick={onGoBack}>
-                        ← Back
-                    </button>
-                    <span className="team-name home">{homeTeam}</span>
-                    <span className="vs-text">vs</span>
-                    <span className="team-name away">{awayTeam}</span>
-                </div>
-                <div className="dashboard-actions">
-                    <button
-                        className={`btn btn-primary btn-sm${buildingNotes ? ' loading' : ''}`}
-                        onClick={onPrepareNotes}
-                        disabled={buildingNotes}
-                        title={buildProgress || ''}
-                    >
-                        {buildingNotes ? `📋 ${buildProgress || 'Preparing...'}` : commentaryData ? '📋 Refresh Notes' : '📋 Prepare Notes'}
-                    </button>
-                    <button
-                        className="btn btn-secondary btn-sm"
-                        onClick={() => setShowNotes(!showNotes)}
-                        disabled={!commentaryData}
-                    >
-                        {showNotes ? '📝 Hide Notes' : '📝 Show Notes'}
-                    </button>
-                </div>
-            </header>
-
-            {/* Main Dashboard - Full Width Content */}
-            <div className="dashboard-full-width">
-                {/* Top Row - Push to Talk + Video Player */}
-                <div className="dashboard-row">
-                    <div className="compact-ptt">
-                        <PushToTalk
-                            matchReady={true}
-                            homeTeam={homeTeam}
-                            awayTeam={awayTeam}
-                            sport={sport}
-                        />
-                    </div>
-
-                    {/* VideoCanvas - Fan Lens with tactical overlays */}
-                    <VideoCanvas
-                        matchSession={matchSession}
-                        homeTeam={homeTeam}
-                        awayTeam={awayTeam}
-                        sport={sport}
-                        onTacticalDetection={(analysis) => {
-                            setDetection(analysis)
-                            handleSendTacticalDetection(analysis)
-                        }}
-                        onCommentary={(msg) => {
-                            if (msg.type === 'commentary') {
-                                setLiveCommentary((prev) => [msg, ...prev].slice(0, 100))
-                            }
-                        }}
-                    />
-
-                    {/* MicButton - Voice Q&A input (Story 2.1) */}
+                }
+                micButton={
                     <MicButton
                         onQuestionSubmit={handleQuestionSubmit}
                         isAiReady={isAiReady}
                         isSplitScreenActive={isSplitScreenActive}
                     />
+                }
+                questionChips={null}
+            >
+                {/* Main Video Canvas */}
+                <VideoCanvas
+                    matchSession={matchSession}
+                    homeTeam={homeTeam}
+                    awayTeam={awayTeam}
+                    sport={sport}
+                    onTacticalDetection={(analysis) => {
+                        setDetection(analysis)
+                        handleSendTacticalDetection(analysis)
+                    }}
+                    onCommentary={(msg) => {
+                        if (msg.type === 'commentary') {
+                            setLiveCommentary((prev) => [msg, ...prev].slice(0, 100))
+                        }
+                    }}
+                />
+            </FanLensLayout>
+        )
+    }
 
-                    {/* Tactical Detection Card (when available) */}
-                    {detection && (
-                        <div className="tactical-detection-card full-width">
-                            <div className="detection-header">
-                                <span className="detection-label">Latest Analysis</span>
-                                <span className="detection-confidence">
-                                    {Math.round(detection.confidence * 100)}% confidence
-                                </span>
-                            </div>
-                            <div className="detection-value">{detection.tactical_label}</div>
-                            {detection.key_observation && (
-                                <div className="detection-observation">{detection.key_observation}</div>
-                            )}
-                        </div>
-                    )}
-                </div>
-
-                {/* Bottom Row - Commentary + Events + MatchInsight (side by side) */}
-                <div className="dashboard-bottom-row">
-                    {/* Live Commentary Feed */}
-                    <div className="bottom-panel">
-                        <CommentaryFeed
-                            messages={liveCommentary}
-                            sendMatchEvent={handleSendMatchEvent}
-                        />
+    // Commentator Dashboard View - Use CommentatorLayout
+    return (
+        <CommentatorLayout
+            videoCanvas={
+                <VideoCanvas
+                    matchSession={matchSession}
+                    homeTeam={homeTeam}
+                    awayTeam={awayTeam}
+                    sport={sport}
+                    onTacticalDetection={(analysis) => {
+                        setDetection(analysis)
+                        handleSendTacticalDetection(analysis)
+                    }}
+                    onCommentary={(msg) => {
+                        if (msg.type === 'commentary') {
+                            setLiveCommentary((prev) => [msg, ...prev].slice(0, 100))
+                        }
+                    }}
+                />
+            }
+            teleprompter={
+                showNotes ? (
+                    <Teleprompter
+                        notesData={commentaryData}
+                        buildingNotes={buildingNotes}
+                        buildProgress={buildProgress}
+                        buildStatus={buildStatus}
+                        onGenerateNotes={onPrepareNotes}
+                        liveDetection={detection}
+                        onBeatChange={handleBeatChange}
+                    />
+                ) : (
+                    <div className="teleprompter-placeholder flex items-center justify-center h-full text-text-secondary">
+                        Click "Show Notes" or switch to Fan Lens view
                     </div>
-
-                    {/* Event Feed */}
-                    <div className="bottom-panel">
-                        <EventFeed matchSession={matchSession} />
-                    </div>
-
-                    {/* MatchInsight - Trivia cards + Q&A */}
-                    <div className="bottom-panel">
-                        <MatchInsight
-                            matchSession={matchSession}
-                            homeTeam={homeTeam}
-                            awayTeam={awayTeam}
-                            sport={sport}
-                            initialTrivia={commentaryData?.notes?.beats || []}
-                        />
-                    </div>
-                </div>
-
-                {/* Commentary Notes / Teleprompter (collapsible, full width) */}
-                {showNotes && (
-                    <div className="notes-container full-width">
-                        {currentView === 'commentator' ? (
-                            <Teleprompter
-                                notesData={commentaryData}
-                                buildingNotes={buildingNotes}
-                                buildProgress={buildProgress}
-                                buildStatus={buildStatus}
-                                onGenerateNotes={onPrepareNotes}
-                                liveDetection={detection}
-                                onBeatChange={handleBeatChange}
-                            />
-                        ) : (
-                            <CommentaryNotesViewer
-                                data={commentaryData}
-                                liveDetection={detection}
-                            />
-                        )}
-                    </div>
-                )}
-            </div>
-
-            {/* ControlsTray - Story 3.3 & 3.4: Settings & Language Toggle */}
-            <ControlsTray
-                homeTeam={homeTeam}
-                awayTeam={awayTeam}
-                onSettingsChange={handleSettingsChange}
-                onLanguageChange={handleLanguageChange}
-                onViewChange={handleViewChange}
-                currentView={currentView}
-            />
-        </div>
+                )
+            }
+            controlsTray={
+                <ControlsTray
+                    homeTeam={homeTeam}
+                    awayTeam={awayTeam}
+                    onSettingsChange={handleSettingsChange}
+                    onLanguageChange={handleLanguageChange}
+                    onViewChange={handleViewChange}
+                    currentView={currentView}
+                />
+            }
+        />
     )
 }

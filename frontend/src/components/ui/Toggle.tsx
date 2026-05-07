@@ -44,7 +44,6 @@ const Toggle = React.forwardRef<HTMLButtonElement, ToggleProps>(
             : 'bg-background-card text-text-secondary hover:bg-background-card-hover hover:text-text-primary',
           className
         )}
-        {...props}
       >
         {children}
       </button>

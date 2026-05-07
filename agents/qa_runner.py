@@ -31,7 +31,7 @@ from typing import Dict, Any, List, Optional
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from agents.qa_agent import QAAgent, QAPair
+from agents.qa_agent import QAAgent, QAPair, VisionTacticalContext
 from agents.player_id_agent import PlayerIDAgent, PlayerIdentification
 from models.game_state import GameState
 from models.notes_store import NotesStore
@@ -178,13 +178,15 @@ class QARunner:
         self,
         question: str,
         player_id_result: Optional[Dict[str, Any]] = None,
+        vision_context: Optional[VisionTacticalContext] = None,
     ) -> Dict[str, Any]:
         """
-        Run Q&A answer generation.
+        Run Q&A answer generation with live vision tactical context.
 
         Args:
             question: Fan question
             player_id_result: Optional player ID result to inject into answer
+            vision_context: Optional live vision tactical context from StreamingVisionBridge
 
         Returns:
             QA result dict with answer, temporal_context, source, etc.
@@ -196,6 +198,7 @@ class QARunner:
             question=question,
             game_state=self.game_state,
             retained_frames=retained_frames,
+            vision_context=vision_context,
         )
 
         # Inject player info if available from parallel PlayerID agent
@@ -209,15 +212,17 @@ class QARunner:
         self,
         question: str,
         frame_b64: Optional[str] = None,
+        vision_context: Optional[VisionTacticalContext] = None,
     ) -> Dict[str, Any]:
         """
-        Handle fan question with parallel Q&A + Player ID execution.
+        Handle fan question with parallel Q&A + Player ID execution and live vision context.
 
         This is the main entry point called by the WebSocket handler.
 
         Args:
             question: Fan question text
             frame_b64: Optional current frame for player ID (base64 JPEG)
+            vision_context: Optional live vision tactical context from StreamingVisionBridge
 
         Returns:
             Combined result dict with:
@@ -225,6 +230,7 @@ class QARunner:
             - player_identification: Player info if identified
             - overlay_coordinates: SVG overlay coords for split-screen
             - gameState: Current match state
+            - vision_context: Tactical label from live vision analysis
         """
         logger.info(f"Handling question: {question}")
 
@@ -235,7 +241,7 @@ class QARunner:
             # Run both agents in parallel (asyncio.gather with return_exceptions)
             logger.info("Running Q&A + Player ID in parallel")
             qa_task, player_id_task = await asyncio.gather(
-                self._run_qa_generation(question, None),  # Will merge player info later
+                self._run_qa_generation(question, None, vision_context),  # Will merge player info later
                 self._run_player_identification(frame_b64, question),
                 return_exceptions=True,
             )
@@ -265,7 +271,7 @@ class QARunner:
         else:
             # Q&A only (no player reference or no frame available)
             logger.info("Running Q&A only (no player reference or no frame)")
-            qa_result = await self._run_qa_generation(question)
+            qa_result = await self._run_qa_generation(question, vision_context=vision_context)
 
         # Attach current game state for client display
         qa_result["gameState"] = self.game_state.to_dict() if self.game_state else None

@@ -22,7 +22,7 @@ import sys
 import os
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -126,7 +126,7 @@ class CrossBrowserTester:
             passed=passed,
             details=f"Video autoplay {'succeeded' if passed else 'failed'}",
             errors=errors,
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=datetime.now(timezone.utc).isoformat()
         )
 
     async def test_web_speech_api(self, browser: str) -> BrowserTestResult:
@@ -145,7 +145,7 @@ class CrossBrowserTester:
                 passed=False,
                 details="Web Speech API not supported in this browser",
                 errors=["Web Speech API not supported"],
-                timestamp=datetime.utcnow().isoformat()
+                timestamp=datetime.now(timezone.utc).isoformat()
             )
 
         try:
@@ -175,7 +175,7 @@ class CrossBrowserTester:
             passed=passed,
             details=f"Web Speech API {'functional' if passed else 'has limitations'}",
             errors=errors,
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=datetime.now(timezone.utc).isoformat()
         )
 
     async def test_websocket(self, browser: str) -> BrowserTestResult:
@@ -219,7 +219,7 @@ class CrossBrowserTester:
             passed=passed,
             details=f"WebSocket {'fully functional' if passed else 'has issues'}",
             errors=errors,
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=datetime.now(timezone.utc).isoformat()
         )
 
     async def test_canvas_svg(self, browser: str) -> BrowserTestResult:
@@ -262,7 +262,7 @@ class CrossBrowserTester:
             passed=passed,
             details=f"Canvas/SVG rendering {'consistent' if passed else 'has issues'}",
             errors=errors,
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=datetime.now(timezone.utc).isoformat()
         )
 
     async def test_animation_performance(self, browser: str) -> BrowserTestResult:
@@ -297,7 +297,7 @@ class CrossBrowserTester:
             passed=passed,
             details=f"Animation performance {'acceptable' if passed else 'below target'}",
             errors=errors,
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=datetime.now(timezone.utc).isoformat()
         )
 
     async def test_browser(self, browser: str) -> Dict[str, BrowserTestResult]:
@@ -358,7 +358,7 @@ class CrossBrowserTester:
             failed_tests=failed_tests,
             results=all_results,
             summary=summary,
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=datetime.now(timezone.utc).isoformat()
         )
 
         return report
@@ -392,6 +392,11 @@ class CrossBrowserTester:
 
     def save_results(self, report: CrossBrowserReport, output_path: str = "VALIDATION_REPORT.md", append: bool = True):
         """Save results to markdown report."""
+        # Ensure parent directory exists
+        output_dir = os.path.dirname(output_path)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+
         section = f"""## Cross-Browser Test Results
 
 **Test Date:** {report.timestamp}
@@ -461,7 +466,7 @@ async def main():
             failed_tests=sum(1 for r in results.values() if not r.passed),
             results={args.browser: results},
             summary="Single browser test",
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=datetime.now(timezone.utc).isoformat()
         )
 
         if args.json:

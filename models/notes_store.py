@@ -132,6 +132,10 @@ class TagResolver:
             return tag
         if current_score_total > previous_score_total:
             return "goal"
+        # Goal safety gate: score unchanged, suppress tag
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.debug(f"Goal safety gate suppressed: score unchanged (previous={previous_score_total}, current={current_score_total})")
         return None
 
 
@@ -152,7 +156,7 @@ class NotesStore:
     raw_markdown: str
     beats: List[NarrativeBeat] = field(default_factory=list)
     lookup: Dict[str, List[int]] = field(default_factory=dict)
-    index: Optional[Any] = None
+    index: Optional[Dict[str, int]] = None
 
     def __post_init__(self) -> None:
         """Build the lookup table from beats on initialisation."""

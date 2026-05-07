@@ -11,8 +11,8 @@ import { useState, useRef, useEffect } from 'react'
  * - View toggle (Fan Lens / Commentator Dashboard)
  */
 export default function ControlsTray({
-    homeTeam,
-    awayTeam,
+    homeTeam = 'Home',
+    awayTeam = 'Away',
     onSettingsChange,
     onLanguageChange,
     onViewChange,
@@ -84,9 +84,16 @@ export default function ControlsTray({
     }
 
     // Handle language toggle
+    // Fix: Add visual feedback effect when language changes
+    const [languageFlash, setLanguageFlash] = useState(false)
+
     const handleLanguageToggle = () => {
         const newLanguage = language === 'en' ? 'es' : 'en'
         setLanguage(newLanguage)
+
+        // Visual flash effect
+        setLanguageFlash(true)
+        setTimeout(() => setLanguageFlash(false), 300)
 
         onLanguageChange?.({ language: newLanguage })
 
@@ -190,10 +197,16 @@ export default function ControlsTray({
     }
 
     const [showTooltip, setShowTooltip] = useState(null)
+    const shownTooltipsRef = useRef(new Set())
 
     const handleMouseEnter = (control) => {
+        // Only show each tooltip once per control
+        if (shownTooltipsRef.current.has(control)) {
+            return
+        }
         if (!hasSeenTooltip) {
             setShowTooltip(control)
+            shownTooltipsRef.current.add(control)
             localStorage.setItem('pitchai-controls-tooltip-seen', 'true')
             setHasSeenTooltip(true)
         }
@@ -213,7 +226,7 @@ export default function ControlsTray({
                 onMouseLeave={() => setShowTooltip(null)}
             >
                 <button
-                    className="language-toggle"
+                    className={`language-toggle transition-all duration-300 ${languageFlash ? 'scale-110 bg-[var(--accent-interactive-focus)]' : ''}`}
                     onClick={handleLanguageToggle}
                     onKeyDown={(e) => e.key === 'Enter' && handleLanguageToggle()}
                     aria-label={`Switch commentary to ${language === 'en' ? 'Spanish' : 'English'}`}

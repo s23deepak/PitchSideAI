@@ -35,15 +35,15 @@ export default function TriviaCard({ card, onDismiss }) {
     const getEventTagColor = (tag) => {
         switch (tag) {
             case 'goal':
-                return { bg: 'rgba(16, 185, 129, 0.15)', border: '#10B981', text: '#10B981' }
+                return { bg: 'var(--success-muted)', border: 'var(--success)', text: 'var(--success)' }
             case 'yellow_card':
-                return { bg: 'rgba(245, 158, 11, 0.15)', border: '#F59E0B', text: '#F59E0B' }
+                return { bg: 'var(--warning-muted)', border: 'var(--warning)', text: 'var(--warning)' }
             case 'red_card':
-                return { bg: 'rgba(239, 68, 68, 0.15)', border: '#EF4444', text: '#EF4444' }
+                return { bg: 'var(--danger-muted)', border: 'var(--danger)', text: 'var(--danger)' }
             case 'substitution':
-                return { bg: 'rgba(59, 130, 246, 0.15)', border: '#3B82F6', text: '#3B82F6' }
+                return { bg: 'var(--accent-interactive-focus)', border: 'var(--accent-interactive)', text: 'var(--accent-interactive)' }
             default:
-                return { bg: 'rgba(167, 139, 250, 0.15)', border: '#A78BFA', text: '#A78BFA' }
+                return { bg: 'var(--accent-narrative-muted)', border: 'var(--accent-narrative)', text: 'var(--accent-narrative)' }
         }
     }
 

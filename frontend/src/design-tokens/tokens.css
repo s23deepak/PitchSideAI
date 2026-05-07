@@ -1,0 +1,197 @@
+/**
+ * Midnight Stadium Design Tokens
+ *
+ * Reference: .bmad/midnight-stadium-design.md
+ *
+ * Design Philosophy:
+ * - Bloomberg Terminal meets F1 telemetry — functional, dense, professional
+ * - Broadcast software aesthetic — every element serves a purpose
+ * - High contrast — AAA accessibility, critical states pop
+ * - Electric Lime (#CCFF00) ONLY for critical/live states
+ * - Gold (#FFD700) ONLY for narrative highlights
+ */
+
+:root {
+  /* =============================================
+     BACKGROUND COLORS (Midnight Stadium - UX-DS1)
+     ============================================= */
+  --bg-primary: #131313;        /* Deep Obsidian — main canvas */
+  --bg-secondary: #1A1A1A;      /* Charcoal — secondary surfaces */
+  --bg-surface: #1A1A1A;        /* Alias for --bg-secondary */
+  --bg-surface-hover: #20201F;  /* Hover states */
+  --bg-surface-container: #2A2A2A;  /* Container backgrounds */
+  --bg-elevated: #242424;       /* Elevated surfaces (neutral, not Slate) */
+  --bg-card: #1A1A1A;           /* Legacy alias */
+  --bg-card-hover: #20201F;     /* Legacy alias */
+
+  /* =============================================
+     FUNCTIONAL ACCENTS (from Stitch HTML Tailwind config)
+     ============================================= */
+  /* Electric Lime - CRITICAL states (live badge, recording, AI active) */
+  --accent-critical: #c3f400;           /* primary-fixed */
+  --accent-critical-dim: #abd600;       /* primary-fixed-dim */
+  --accent-critical-muted: rgba(195, 244, 0, 0.08);
+
+  /* Gold - NARRATIVE highlights (teleprompter beats, milestones) */
+  --accent-narrative: #ffe16d;          /* secondary-fixed */
+  --accent-narrative-dim: #e9c400;      /* secondary-fixed-dim */
+  --accent-narrative-muted: rgba(255, 225, 109, 0.08);
+
+  /* Interactive Accent (Cyan 400) - focus rings, hover, selected states */
+  --accent-interactive: #22D3EE;
+  --accent-interactive-focus: rgba(34, 211, 238, 0.25);
+
+  /* Legacy Aliases (for backwards compatibility) */
+  --accent-amber: var(--accent-narrative);      /* Gold alias */
+  --accent-blue: var(--accent-interactive);     /* Cyan alias */
+  --accent-purple: #A78BFA;                     /* Violet 400 for gradients */
+
+  /* =============================================
+     SEMANTIC COLORS
+     ============================================= */
+  --success: #10B981;           /* Emerald 500 */
+  --success-muted: rgba(16, 185, 129, 0.15);
+  --warning: #F59E0B;           /* Amber 500 */
+  --warning-muted: rgba(245, 158, 11, 0.15);
+  --danger: #EF4444;            /* Red 500 */
+  --danger-muted: rgba(239, 68, 68, 0.15);
+
+  /* =============================================
+     TEXT COLORS (from Stitch HTML)
+     ============================================= */
+  --text-primary: #e5e2e1;      /* on-surface - AAA 7:1+ */
+  --text-secondary: #c4c9ac;    /* on-surface-variant - AA 4.5:1+ */
+  --text-muted: #8e9379;        /* outline */
+
+  /* =============================================
+     BORDER & OVERLAY (from Stitch HTML)
+     ============================================= */
+  --border: #353535;            /* surface-variant */
+  --border-dim: rgba(255, 255, 255, 0.1);  /* border-white/10 for overlays */
+  --border-accent: var(--accent-interactive);
+  --overlay-stroke: rgba(255, 255, 255, 0.9);
+  --overlay-shadow: rgba(0, 0, 0, 0.5);
+
+  /* =============================================
+     FOCUS RING
+     ============================================= */
+  --focus-ring: 0 0 0 2px var(--accent-interactive);
+  --focus-ring-critical: 0 0 0 2px var(--accent-critical);
+
+  /* =============================================
+     TYPOGRAPHY
+     ============================================= */
+  --font-display: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-body: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-label: 'Space Grotesk', 'JetBrains Mono', 'Fira Code', monospace;
+  --font-data-mono: 'Space Grotesk', 'JetBrains Mono', 'Fira Code', monospace;
+
+  /* Font Sizes - 7-level scale */
+  --text-xs: 12px;
+  --text-sm: 14px;
+  --text-base: 16px;
+  --text-lg: 18px;
+  --text-xl: 20px;
+  --text-2xl: 24px;
+  --text-3xl: 30px;
+  --text-4xl: 36px;
+  --text-5xl: 48px;
+
+  /* Font Weights - 4-level hierarchy */
+  --font-regular: 400;
+  --font-medium: 500;
+  --font-semibold: 600;
+  --font-bold: 700;
+  --font-extrabold: 800;
+
+  /* Line Heights */
+  --leading-none: 1;
+  --leading-tight: 1.25;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.75;
+
+  /* Letter Spacing */
+  --tracking-tighter: -0.05em;
+  --tracking-tight: -0.025em;
+  --tracking-normal: 0;
+  --tracking-wide: 0.025em;
+  --tracking-wider: 0.05em;
+  --tracking-widest: 0.1em;
+
+  /* =============================================
+     SPACING (4px grid - UX-DR4)
+     ============================================= */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+  --space-20: 80px;
+  --space-24: 96px;
+
+  /* =============================================
+     BORDER RADIUS
+     ============================================= */
+  --radius-none: 0;
+  --radius-sm: 4px;     /* buttons, chips */
+  --radius-md: 8px;     /* cards */
+  --radius-lg: 12px;    /* containers */
+  --radius-xl: 16px;
+  --radius-2xl: 24px;
+  --radius-full: 9999px; /* pills, toggles */
+
+  /* =============================================
+     BOX SHADOWS
+     ============================================= */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --shadow-xl: 0 12px 36px rgba(0, 0, 0, 0.6);
+
+  /* =============================================
+     MOTION (UX-DR20)
+     ============================================= */
+  /* Durations */
+  --duration-fast: 150ms;
+  --duration-normal: 300ms;
+  --duration-slow: 500ms;
+  --duration-slower: 700ms;
+  --duration-slowest: 1000ms;
+
+  /* Easing */
+  --ease-linear: linear;
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --ease-out: cubic-bezier(0, 0, 0.2, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* Transitions */
+  --transition-fast: var(--duration-fast) var(--ease-in-out);
+  --transition-normal: var(--duration-normal) var(--ease-in-out);
+  --transition-slow: var(--duration-slow) var(--ease-in-out);
+}
+
+/* =============================================
+   REDUCED MOTION (UX-DR20)
+   ============================================= */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* =============================================
+   DARK MODE (default for PitchAI)
+   ============================================= */
+.dark {
+  /* Inherits all :root tokens above */
+  /* Override specific tokens if light mode ever needed */
+}

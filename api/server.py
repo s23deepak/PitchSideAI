@@ -10,6 +10,7 @@ from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Optional, Any, List, Dict
+import httpx
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -161,6 +162,7 @@ class ConnectionManager:
         self._qa_runners: dict[str, Any] = {}  # match_session -> QARunner
         self._settings: dict[str, dict] = {}  # match_session -> commentary settings
         self._languages: dict[str, str] = {}  # match_session -> language code
+        self._vision_context: dict[str, Any] = {}  # match_session -> VisionTacticalContext
 
     def store_notes(self, match_session: str, notes_store: Any) -> None:
         """Store NotesStore for a match session."""
@@ -198,6 +200,14 @@ class ConnectionManager:
         """Retrieve commentary language for a match session."""
         return self._languages.get(match_session, "en")
 
+    def store_vision_context(self, match_session: str, vision_context: Any) -> None:
+        """Store latest vision tactical context for a match session."""
+        self._vision_context[match_session] = vision_context
+
+    def get_vision_context(self, match_session: str) -> Optional[Any]:
+        """Retrieve latest vision tactical context for a match session."""
+        return self._vision_context.get(match_session)
+
     async def connect(self, session_id: str, ws: WebSocket) -> None:
         self._sessions[session_id].append(ws)
 
@@ -232,24 +242,27 @@ async def _handle_fan_query_parallel(
     game_state: GameState,
     match_session: str,
     current_frame_b64: Optional[str] = None,
+    vision_context: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
-    Handle fan question using Stories 2.2 + 2.4 parallel agents.
+    Handle fan question using Stories 2.2 + 2.4 parallel agents with live vision context.
 
     Flow:
     1. Get or create QAAgent + PlayerIDAgent runner for session
     2. Detect if question references a player
     3. Run Q&A and Player ID in parallel if needed
     4. Merge results with overlay coordinates
+    5. Include live vision tactical context for tactical questions
 
     Args:
         question: Fan question text
         game_state: Current match game state
         match_session: Match session key
         current_frame_b64: Optional current frame for player ID
+        vision_context: Optional VisionTacticalContext from StreamingVisionBridge
 
     Returns:
-        Dict with answer text, game state, player ID, overlay coordinates
+        Dict with answer text, game state, player ID, overlay coordinates, vision context
     """
     # Get or create Q&A runner for this session
     runner = manager.get_qa_runner(match_session)
@@ -268,10 +281,11 @@ async def _handle_fan_query_parallel(
             "source": "fallback_live_agent",
         }
 
-    # Use parallel runner
+    # Use parallel runner with vision context
     result = await runner.handle_fan_question(
         question=question,
         frame_b64=current_frame_b64,
+        vision_context=vision_context,
     )
 
     return result
@@ -344,6 +358,87 @@ def _format_tactical_commentary_note(analysis: dict) -> str:
     if insight:
         note += f" Commentary cue: {insight}"
     return note
+
+
+# ── Language Translation Pipeline (Story 3.4) ──────────────────────────────────
+
+async def _translate_commentary(text: str, target_language: str, source_language: str = "en") -> str:
+    """
+    Translate commentary text using LLM.
+
+    Args:
+        text: Commentary text to translate
+        target_language: Target language code (e.g., "es" for Spanish)
+        source_language: Source language code (default: "en")
+
+    Returns:
+        Translated text
+    """
+    if source_language == target_language:
+        return text
+
+    language_names = {
+        "en": "English",
+        "es": "Spanish",
+        "fr": "French",
+        "de": "German",
+        "pt": "Portuguese",
+        "it": "Italian",
+    }
+
+    target_name = language_names.get(target_language, target_language)
+    source_name = language_names.get(source_language, "English")
+
+    prompt = f"""Translate the following {source_name} sports commentary to {target_name}.
+Preserve the tone, style, and emotional intensity. Do not add or remove any information.
+Return ONLY the translation, no explanations.
+
+Original: {text}
+
+Translation:"""
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # Use the configured LLM backend for translation
+            from config import LLM_BACKEND, OLLAMA_BASE_URL, OPENAI_API_KEY, OPENAI_MODEL
+
+            if LLM_BACKEND == "ollama":
+                response = await client.post(
+                    f"{OLLAMA_BASE_URL}/v1/chat/completions",
+                    json={
+                        "model": "qwen2.5:3b",
+                        "messages": [{"role": "user", "content": prompt}],
+                        "temperature": 0.3,
+                        "max_tokens": 500,
+                    },
+                )
+            elif LLM_BACKEND == "openai":
+                response = await client.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    json={
+                        "model": OPENAI_MODEL or "gpt-4o-mini",
+                        "messages": [{"role": "user", "content": prompt}],
+                        "temperature": 0.3,
+                        "max_tokens": 500,
+                    },
+                    headers={"Authorization": f"Bearer {OPENAI_API_KEY}"} if OPENAI_API_KEY else {},
+                )
+            else:
+                # Default: return original text if no translation backend available
+                logger.warning("translation_unavailable", backend=LLM_BACKEND)
+                return text
+
+            if response.status_code == 200:
+                result = response.json()
+                translated = result.get("choices", [{}])[0].get("message", {}).get("content", text)
+                return translated.strip() or text
+            else:
+                logger.warning("translation_failed", status=response.status_code)
+                return text
+
+    except Exception as exc:
+        logger.error("translation_error", error=str(exc))
+        return text
 
 
 async def _periodic_commentary(
@@ -1029,6 +1124,15 @@ async def live_audio_ws(websocket: WebSocket):
                     note_text = _format_tactical_commentary_note(analysis)
                     timestamp = datetime.now(timezone.utc).isoformat()
 
+                    # Fix: Translate tactical note if language is not English
+                    current_language = manager.get_language(match_session)
+                    if current_language != "en":
+                        note_text = await _translate_commentary(
+                            note_text,
+                            target_language=current_language,
+                            source_language="en"
+                        )
+
                     await write_event(
                         "tactical_analyst_note",
                         note_text,
@@ -1094,11 +1198,21 @@ async def live_audio_ws(websocket: WebSocket):
                             settings=settings,  # Inject user settings
                         )
 
+                        # Fix: Translate commentary if language is not English
+                        commentary_text = result.get("commentary", "")
+                        current_language = manager.get_language(match_session)
+                        if current_language != "en":
+                            commentary_text = await _translate_commentary(
+                                commentary_text,
+                                target_language=current_language,
+                                source_language="en"
+                            )
+
                         # Broadcast enhanced commentary with beat indices for teleprompter highlighting
                         beat_indices = result.get("beat_indices", [])
                         broadcast_msg = {
                             "type": "commentary",
-                            "text": result.get("commentary", ""),
+                            "text": commentary_text,
                             "source": result.get("source", "analysis"),
                             "label": tactical_label,
                             "confidence": analysis.get("confidence"),
@@ -1203,15 +1317,19 @@ async def live_audio_ws(websocket: WebSocket):
                     if not query_text:
                         continue
 
-                    # Story 2.2 + 2.4: Parallel Q&A with Player ID
+                    # Story 2.2 + 2.4: Parallel Q&A with Player ID + Live Vision
                     # Get current frame from game state (in prod, from streaming bridge)
                     current_frame_b64 = None  # Would come from StreamingVisionBridge
+
+                    # Get latest vision tactical context from streaming bridge
+                    vision_context = manager.get_vision_context(match_session)
 
                     result = await _handle_fan_query_parallel(
                         question=query_text,
                         game_state=game_state,
                         match_session=match_session,
                         current_frame_b64=current_frame_b64,
+                        vision_context=vision_context,
                     )
 
                     # Build answer payload with Story 2.2 + 2.4 enhancements
@@ -1530,16 +1648,24 @@ async def streaming_video_ws(websocket: WebSocket):
         config_data = init_data.get("config", {})
         streaming_config = StreamingVideoConfig(**config_data)
 
-        # Initialize StreamingVisionBridge
+        # Initialize StreamingVisionBridge with fallback chain
         bridge_config = StreamingBridgeConfig(
-            backend=streaming_config.backend,
+            backend=streaming_config.backend,  # "auto" | "vllm" | "sglang" | "streaming_vlm"
             sport=streaming_config.sport,
             target_fps=streaming_config.target_fps,
             chunk_interval_seconds=streaming_config.chunk_interval_seconds,
             max_chunk_frames=streaming_config.max_chunk_frames,
+            sglang_base_url=os.environ.get("SGLANG_BASE_URL", "http://localhost:30000"),
+            sglang_model=os.environ.get("VISION_MODEL", "Qwen/Qwen2.5-VL-3B-Instruct"),
+            use_fallback_chain=True,  # Enable auto-fallback (Level 1→2→3→4)
         )
         bridge = StreamingVisionBridge(bridge_config)
         await bridge.initialize()
+
+        # Get actual backend level from fallback
+        backend_stats = bridge._backend.get_stats() if bridge._backend else {}
+        fallback_level = backend_stats.get("fallback_level", "unknown")
+        actual_backend = backend_stats.get("backend", streaming_config.backend)
 
         # Start research workflow
         context = WorkflowContext(
@@ -1555,11 +1681,13 @@ async def streaming_video_ws(websocket: WebSocket):
 
         await manager.send(websocket, {
             "type": "ready",
-            "message": f"Streaming vision active ({streaming_config.backend} backend). "
+            "message": f"Streaming vision active (Fallback Level {fallback_level}: {actual_backend}). "
                        f"Chunk interval: {streaming_config.chunk_interval_seconds}s, "
                        f"Target FPS: {streaming_config.target_fps}",
             "match_session": match_session,
             "config": streaming_config.model_dump(),
+            "fallback_level": fallback_level,
+            "actual_backend": actual_backend,
         })
 
         # Start periodic stats broadcast
@@ -1603,6 +1731,17 @@ async def streaming_video_ws(websocket: WebSocket):
                     )
 
                     if result is not None:
+                        # Store vision tactical context for Q&A queries
+                        from agents.qa_agent import VisionTacticalContext
+                        vision_ctx = VisionTacticalContext(
+                            tactical_label=result.get("tactical_label", ""),
+                            key_observation=result.get("key_observation", ""),
+                            actionable_insight=result.get("actionable_insight", ""),
+                            confidence=float(result.get("confidence", 0.0)),
+                            timestamp_ms=result.get("end_timestamp_ms"),
+                        )
+                        manager.store_vision_context(match_session, vision_ctx)
+
                         # Bridge formed a chunk and returned commentary
                         await _broadcast_streaming_result(
                             websocket, workflow_id, result,
@@ -1622,6 +1761,17 @@ async def streaming_video_ws(websocket: WebSocket):
                             continue
                         result = await bridge.process_frame(frame_bytes, ts)
                         if result is not None:
+                            # Store vision tactical context for Q&A queries
+                            from agents.qa_agent import VisionTacticalContext
+                            vision_ctx = VisionTacticalContext(
+                                tactical_label=result.get("tactical_label", ""),
+                                key_observation=result.get("key_observation", ""),
+                                actionable_insight=result.get("actionable_insight", ""),
+                                confidence=float(result.get("confidence", 0.0)),
+                                timestamp_ms=result.get("end_timestamp_ms"),
+                            )
+                            manager.store_vision_context(match_session, vision_ctx)
+
                             await _broadcast_streaming_result(
                                 websocket, workflow_id, result,
                                 game_state, live_agent, match_session=match_session,
@@ -1885,6 +2035,40 @@ async def prepare_commentary_notes(req: CommentaryNotesRequest, request: Request
             yield f"data: {_json.dumps({'phase': 'error', 'message': error_msg, 'done': True})}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@app.get("/api/notes/{match_session}")
+async def get_commentary_notes(match_session: str):
+    """
+    Poll endpoint for NotesGenerationHub to check if commentary notes are ready.
+    Returns notes status and data if available.
+    """
+    notes_store = manager.get_notes(match_session)
+
+    if notes_store is None:
+        # Notes not generated yet
+        raise HTTPException(status_code=404, detail="Notes not ready")
+
+    # Convert NotesStore to dict for frontend
+    notes_data = {
+        "status": "ready",
+        "notes": {
+            "beats": [
+                {
+                    "beat_id": beat.beat_id,
+                    "title": beat.title,
+                    "narrative": beat.narrative,
+                    "stats": beat.stats,
+                    "tags": beat.tags,
+                }
+                for beat in notes_store.beats
+            ] if notes_store.beats else [],
+            "lookup": dict(notes_store.lookup) if notes_store.lookup else {},
+        },
+        "beat_count": len(notes_store.beats) if notes_store.beats else 0,
+    }
+
+    return notes_data
 
 
 # ── Error Handlers ─────────────────────────────────────────────────────────────

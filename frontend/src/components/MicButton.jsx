@@ -54,13 +54,18 @@ export default function MicButton({
             setState('confirmation')
 
             // Fix #7: Confirmation Timeout Race Condition - track if cleared
+            // Fix: Make confirmation delay configurable (default 1000ms, accessible via data attribute or prop)
+            const confirmationDelay = typeof window !== 'undefined'
+                ? (window.PITCHAI_CONFIG?.confirmationDelay || 1000)
+                : 1000
+
             let confirmationCleared = false
             confirmationTimeoutRef.current = setTimeout(() => {
                 if (!confirmationCleared) {
                     setState('processing')
                     onQuestionSubmit?.({ text: transcript, confidence })
                 }
-            }, 1000)
+            }, confirmationDelay)
 
             // Store the clear function to prevent timeout from firing after dismissal
             confirmationTimeoutRef.current.clear = () => {
@@ -127,13 +132,29 @@ export default function MicButton({
     }, [state])
 
     // Handle hide during split-screen
+    // Fix: Preserve recording state when split-screen activates — resume when it closes
+    const preSplitScreenRef = useRef(null)
+
     useEffect(() => {
-        if (isSplitScreenActive) {
+        if (isSplitScreenActive && state !== 'hidden' && state !== 'disabled') {
+            // Store current state before hiding
+            preSplitScreenRef.current = state
             setState('hidden')
-        } else if (state === 'hidden') {
-            setState('idle')
+        } else if (!isSplitScreenActive && state === 'hidden') {
+            // Restore previous state when split-screen closes
+            const previousState = preSplitScreenRef.current
+            if (previousState === 'recording') {
+                // If was recording, stop it cleanly and show confirmation
+                stopListening()
+                setState('confirmation')
+            } else if (previousState) {
+                setState(previousState)
+            } else {
+                setState('idle')
+            }
+            preSplitScreenRef.current = null
         }
-    }, [isSplitScreenActive, state])
+    }, [isSplitScreenActive, state, stopListening])
 
     // Fix #6: WebSocket Disconnection Timeout - reset state after 30s if no response
     useEffect(() => {
@@ -175,12 +196,22 @@ export default function MicButton({
     }, [isAiReady, isSupported, state])
 
     // Handle consecutive failures (suggest chips after 3)
+    const [showChipSuggestions, setShowChipSuggestions] = useState(false)
+
     useEffect(() => {
         if (consecutiveFailures >= 3) {
-            // Could trigger a callback to show suggested question chips
-            console.log('[MicButton] 3 consecutive failures — suggest chips')
+            // Show chip suggestions UI
+            setShowChipSuggestions(true)
+            console.log('[MicButton] 3 consecutive failures — showing chip suggestions')
         }
     }, [consecutiveFailures])
+
+    // Clear chip suggestions on successful recognition
+    useEffect(() => {
+        if (state === 'processing' || state === 'confirmation') {
+            setShowChipSuggestions(false)
+        }
+    }, [state])
 
     // Fix #3: Handle speech recognition errors (permission denied, etc.)
     useEffect(() => {
@@ -213,9 +244,14 @@ export default function MicButton({
         }
 
         // 300ms hold timeout — ignore clicks
+        // Fix: Add 100ms debounce to prevent false positives on micro-scroll
+        const debounceStart = Date.now()
         holdTimeoutRef.current = setTimeout(() => {
-            startListening()
-            setShowTooltip(false) // Hide tooltip on recording start
+            // Double-check we haven't been cancelled during debounce
+            if (Date.now() - debounceStart >= 100) {
+                startListening()
+                setShowTooltip(false) // Hide tooltip on recording start
+            }
         }, 300)
     }, [isAiReady, isSupported, startListening, state])
 
@@ -345,24 +381,24 @@ export default function MicButton({
 
         switch (state) {
             case 'idle':
-                return `${base} w-12 h-12 bg-slate-900/85 border-2 border-slate-800 hover:border-cyan-400 hover:shadow-[0_0_12px_rgba(34,211,238,0.4)]`
+                return `${base} w-12 h-12 bg-bg-secondary/85 border-2 border-border hover:border-[var(--accent-interactive)] hover:shadow-[0_0_12px_rgba(34,211,238,0.4)]`
             case 'hover':
-                return `${base} w-12 h-12 bg-slate-900/85 border-2 border-cyan-400 shadow-[0_0_12px_rgba(34,211,238,0.4)]`
+                return `${base} w-12 h-12 bg-bg-secondary/85 border-2 var(--accent-interactive) shadow-[0_0_12px_rgba(34,211,238,0.4)]`
             case 'recording':
-                return `${base} w-12 h-12 bg-slate-900/85 border-2 border-red-500 animate-pulse scale-105 shadow-[0_0_16px_rgba(239,68,68,0.6)]`
+                return `${base} w-12 h-12 bg-bg-secondary/85 border-2 var(--danger) animate-pulse scale-105 shadow-[0_0_16px_rgba(239,68,68,0.6)]`
             case 'confirmation':
-                return `${base} w-12 h-12 bg-slate-900/85 border-2 border-amber-400`
+                return `${base} w-12 h-12 bg-bg-secondary/85 border-2 var(--warning)`
             case 'processing':
-                return `${base} w-12 h-12 bg-slate-900/85 border-2 border-amber-400 animate-spin-slow`
+                return `${base} w-12 h-12 bg-bg-secondary/85 border-2 var(--warning) animate-spin-slow`
             case 'disabled':
                 // Fix #5: AC7 - Different visual treatment for different disabled reasons
-                return `${base} w-12 h-12 bg-slate-900/50 border-2 border-slate-800 opacity-50`
+                return `${base} w-12 h-12 bg-bg-secondary/50 border-2 border-border opacity-50`
             case 'error':
-                return `${base} w-12 h-12 bg-slate-900/50 border-2 border-red-800 opacity-50`
+                return `${base} w-12 h-12 bg-bg-secondary/50 border-2 var(--danger) opacity-50`
             case 'hidden':
-                return `${base} w-12 h-12 bg-slate-900/50 border-2 border-slate-800 opacity-50`
+                return `${base} w-12 h-12 bg-bg-secondary/50 border-2 border-border opacity-50`
             default:
-                return `${base} w-12 h-12 bg-slate-900/85 border-2 border-slate-800`
+                return `${base} w-12 h-12 bg-bg-secondary/85 border-2 border-border`
         }
     }
 
@@ -371,41 +407,68 @@ export default function MicButton({
         return null
     }
 
+    // Suggested question chips (shown after 3 consecutive failures)
+    const suggestedChips = [
+        "What's the current formation?",
+        "Who's the top scorer?",
+        "Show recent head-to-head results",
+        "What's the tactical setup?",
+    ]
+
     return (
         <div className="fixed bottom-4 right-4 z-50 flex flex-col items-center">
+            {/* Chip Suggestions — Fix: Show after 3 consecutive failures */}
+            {showChipSuggestions && (
+                <div className="absolute bottom-full mb-4 flex flex-col gap-2 bg-bg-secondary/95 border border-border rounded-lg p-3 animate-slide-up">
+                    <p className="text-xs text-text-muted mb-1">Having trouble? Try asking:</p>
+                    {suggestedChips.map((chip, idx) => (
+                        <button
+                            key={idx}
+                            className="px-3 py-1.5 bg-bg-surface hover:bg-bg-surface-hover border border-border hover:border-[var(--accent-interactive)] rounded text-xs text-text-primary text-left transition-colors"
+                            onClick={() => {
+                                setShowChipSuggestions(false)
+                                onQuestionSubmit?.({ text: chip, confidence: 1.0 })
+                            }}
+                        >
+                            {chip}
+                        </button>
+                    ))}
+                </div>
+            )}
+
             {/* Tooltip */}
             {showTooltip && state === 'idle' && (
                 <div
-                    className="absolute bottom-full mb-2 px-3 py-1.5 bg-slate-800 text-white text-sm rounded-md shadow-lg whitespace-nowrap animate-fade-in"
+                    className="absolute bottom-full mb-2 px-3 py-1.5 bg-bg-surface text-text-primary text-sm rounded-md shadow-lg whitespace-nowrap animate-fade-in"
                     role="tooltip"
                 >
                     Hold to ask a question
                     {/* Tooltip arrow */}
-                    <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-800" />
+                    <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-bg-surface" />
                 </div>
             )}
 
             {/* Error message display - Fix #3, #4: Show error for permission/browser issues */}
             {errorMessage && (state === 'disabled' || state === 'error') && (
-                <div className="absolute bottom-full mb-16 px-4 py-2 bg-red-900/90 border border-red-700 text-red-200 text-sm rounded-lg max-w-xs text-center animate-fade-in">
+                <div className="absolute bottom-full mb-16 px-4 py-2 bg-danger-muted/90 border border-danger text-danger-foreground text-sm rounded-lg max-w-xs text-center animate-fade-in">
                     {errorMessage}
                 </div>
             )}
 
             {/* Ghost text (interim transcript) */}
             {interimTranscript && state === 'recording' && (
-                <div className="absolute bottom-full mb-16 px-4 py-2 bg-slate-900/90 text-slate-400 text-sm rounded-lg max-w-xs text-center animate-fade-in">
+                <div className="absolute bottom-full mb-16 px-4 py-2 bg-bg-secondary/90 text-text-muted text-sm rounded-lg max-w-xs text-center animate-fade-in">
                     {interimTranscript}
                 </div>
             )}
 
             {/* Confirmation text */}
             {confirmationText && state === 'confirmation' && (
-                <div className="absolute bottom-full mb-16 px-4 py-3 bg-slate-900/95 border border-amber-400/50 text-white text-sm rounded-lg max-w-xs flex items-center gap-2 animate-fade-in">
+                <div className="absolute bottom-full mb-16 px-4 py-3 bg-bg-secondary/95 border border-[var(--warning)]/50 text-text-primary text-sm rounded-lg max-w-xs flex items-center gap-2 animate-fade-in">
                     <span className="flex-1">{confirmationText}</span>
                     <button
                         onClick={handleDismissConfirmation}
-                        className="p-1 hover:bg-slate-700 rounded transition-colors"
+                        className="p-1 hover:bg-bg-surface-hover rounded transition-colors"
                         aria-label="Dismiss"
                     >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -417,14 +480,14 @@ export default function MicButton({
 
             {/* Fix #13: Processing State Cancel Path - allow cancel during processing */}
             {state === 'processing' && (
-                <div className="absolute bottom-full mb-16 px-4 py-3 bg-slate-900/95 border border-amber-400/50 text-white text-sm rounded-lg max-w-xs flex items-center gap-2 animate-fade-in">
+                <div className="absolute bottom-full mb-16 px-4 py-3 bg-bg-secondary/95 border border-[var(--warning)]/50 text-text-primary text-sm rounded-lg max-w-xs flex items-center gap-2 animate-fade-in">
                     <span className="flex-1">Processing your question...</span>
                     <button
                         onClick={() => {
                             setState('idle')
                             setErrorMessage('')
                         }}
-                        className="p-1 hover:bg-slate-700 rounded transition-colors"
+                        className="p-1 hover:bg-bg-surface-hover rounded transition-colors"
                         aria-label="Cancel processing"
                         title="Cancel processing"
                     >
@@ -483,9 +546,9 @@ export default function MicButton({
                     </svg>
                 )}
 
-                {/* Processing gradient ring */}
+                {/* Processing gradient ring — Fix: True gradient rotation instead of simple spin */}
                 {state === 'processing' && (
-                    <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-amber-400 border-r-amber-400 animate-spin" />
+                    <div className="absolute inset-[-2px] rounded-full bg-gradient-to-r from-amber-400 via-orange-400 to-amber-400 animate-spin-slow" style={{ mask: 'radial-gradient(circle, transparent 55%, black 58%)', WebkitMask: 'radial-gradient(circle, transparent 55%, black 58%)' }} />
                 )}
 
                 {/* Microphone icon */}

@@ -18,7 +18,7 @@ from agents.vision_agent import VisionAgent
 from agents.commentary_agent import CommentaryAgent
 from agents.live_agent import LiveAgent
 from agents.coordinator import AgentCoordinator, CoordinationContext
-from agents.qa_agent import QAAgent, QAPair
+from agents.qa_agent import QAAgent, QAPair, VisionTacticalContext
 from agents.player_id_agent import PlayerIDAgent, PlayerIdentification
 
 __all__ = [
@@ -31,6 +31,7 @@ __all__ = [
     "CoordinationContext",
     "QAAgent",
     "QAPair",
+    "VisionTacticalContext",
     "PlayerIDAgent",
     "PlayerIdentification",
 ]

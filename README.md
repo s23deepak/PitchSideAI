@@ -132,6 +132,7 @@ Set `LLM_BACKEND` in `.env` to switch providers:
 | `vllm` | Self-hosted | Qwen2.5-VL-7B-AWQ | GPU cost |
 | `ollama` | Local dev | qwen2.5:3b, qwen2.5vl:3b | Free |
 | `openai` | Cloud fallback | gpt-4o-mini | Pay-per-token |
+| `sglang` | Streaming vision | Qwen2.5-VL-3B | GPU cost |
 
 ### Recommended Configurations
 
@@ -157,6 +158,27 @@ VLLM_BASE_URL=http://localhost:8000
 VLLM_VISION_MODEL=Qwen/Qwen2.5-VL-7B-Instruct-AWQ
 ```
 
+**Streaming Vision (SGLang + StreamingVLM):**
+```bash
+# Clone StreamingVLM (already in repo)
+# git clone https://github.com/mit-han-lab/streaming-vlm.git
+
+# Install dependencies (requires ffmpeg 7)
+sudo apt install ffmpeg
+cd streaming-vlm && pip install -r infer_requirements.txt
+
+# Start SGLang server
+python -m sglang.launch_server \
+  --model-path Qwen/Qwen2.5-VL-3B-Instruct \
+  --port 30000 \
+  --mem-fraction-static 0.8
+```
+```env
+STREAMING_BACKEND=sglang
+SGLANG_BASE_URL=http://localhost:30000
+VISION_MODEL=Qwen/Qwen2.5-VL-3B-Instruct
+```
+
 **Local Dev (Ollama):**
 ```bash
 ollama pull qwen2.5:3b
@@ -167,6 +189,40 @@ LLM_BACKEND=ollama
 OLLAMA_MODEL=qwen2.5:3b
 OLLAMA_VISION_MODEL=qwen2.5vl:3b
 ```
+
+---
+
+## 🎬 Streaming Vision Pipeline
+
+PitchAI implements a **4-level fallback chain** for streaming video understanding:
+
+| Level | Backend | Capabilities | Status |
+|-------|---------|--------------|--------|
+| 1 | SGLang + StreamingVLM | Full: temporal continuity, RadixAttention, compact KV-cache | ✅ Code ready |
+| 2 | SGLang + Custom KV | Temporal continuity, RadixAttention | ✅ Implemented |
+| 3 | Pre-computed Embeddings | No temporal scrub | ⏳ Deferred |
+| 4 | vLLM Frame-by-Frame | Basic VQA, no continuity | ✅ **Tested on RTX 5060** |
+
+**Tested on NVIDIA RTX 5060 8GB (2026-05-05):**
+- Model: `Qwen/Qwen2.5-VL-3B-Instruct-AWQ`
+- Latency: ~2.5s per 5-second chunk
+- VRAM Usage: 6.2GB / 8GB
+- Fallback: Auto-detects and uses Level 4 (vLLM)
+
+**Auto-fallback wrapper:**
+```python
+from streaming.factory import FallbackStreamingBackend
+
+backend = FallbackStreamingBackend(start_level=1)
+await backend.initialize()  # Tries 1→2→3→4, settles at available level
+result = await backend.process_chunk(chunk)
+```
+
+**Files:**
+- `streaming/sglang_backend.py` — SGLang backend with RadixAttention
+- `streaming/factory.py` — 4-level fallback chain
+- `streaming-vlm/` — MIT HAN Lab StreamingVLM (cloned)
+- `AMD_MI300X_CONFIG.md` — Configuration guide for AMD MI300X
 
 ---
 
@@ -375,3 +431,56 @@ MIT License — see [LICENSE](LICENSE) for details.
 ---
 
 **Built with ❤️ for football fans everywhere**
+
+---
+
+## 🤖 AI Development Agents
+
+PitchAI uses specialized AI agents for development tasks. These agents live in `.claude/agents/` and work alongside BMad skills.
+
+### Custom Development Agents
+
+| Agent | Purpose | When to Use |
+|-------|---------|-------------|
+| `backend-engineer` | FastAPI, WebSocket, multi-agent workflows, LangGraph/CrewAI, data sources, streaming | API endpoints, agent logic, database operations, backend architecture |
+| `frontend-engineer` | React, Vite, component architecture, state management, CSS/styling | New components, page layouts, styling, frontend feature development |
+| `fullstack-engineer` | End-to-end features spanning frontend + backend | WebSocket schemas, SSE streams, UI components, backend handlers, SGLang/StreamingVLM integration |
+| `frontend-test-agent` | Playwright testing specialist | UI validation, design compliance, end-to-end testing |
+| `code-review-specialist` | Adversarial code reviewer | Blind spot detection, edge case hunting, security analysis, pattern compliance |
+| `integrator-qa` | Backend-frontend integrator | End-to-end verification, API contract compliance, cross-component testing |
+| `ui-design-auditor` | UI design compliance | Verify UI changes against design principles in `.bmad/screens` |
+| `ui-generator` | HTML/CSS UI generation | Generate all HTML/CSS UI (call first for new UI work) |
+| `ui-evaluator` | UI code evaluation | Score UI code against 5 criteria after ui-generator runs |
+
+### BMad Skills (Agentic Workflows)
+
+BMad skills live in `.claude/skills/` and provide structured workflows:
+
+| Skill | Purpose | Trigger |
+|-------|---------|---------|
+| `bmad-product-brief` | Create/update product briefs | "create a product brief", "define the problem" |
+| `bmad-create-prd` | Product requirements documents | "lets create a PRD" |
+| `bmad-create-epics-and-stories` | Break requirements into epics/stories | "create the epics and stories" |
+| `bmad-create-story` | Dedicated story file for implementation | "create a story for X" |
+| `bmad-create-architecture` | Architecture solution design | "design the architecture" |
+| `bmad-create-ux-design` | UX patterns and design specs | "lets create UX design" |
+| `bmad-agent-dev` | Story implementation | "implement this story", "build this feature" |
+| `bmad-code-review` | Adversarial code review | "review this PR", "check the code" |
+| `bmad-technical-research` | Technical research | "research X", "how does Y work" |
+| `bmad-market-research` | Market/competition analysis | "analyze the competition" |
+| `bmad-sprint-planning` | Sprint status tracking | "run sprint planning" |
+| `bmad-sprint-status` | Summarize sprint status | "check sprint status" |
+| `bmad-correct-course` | Manage sprint changes | "correct course", "we need to pivot" |
+| `bmad-retrospective` | Post-epic review | "run a retrospective" |
+
+### Usage Guidelines
+
+1. **For new features**: Start with `bmad-create-story` → `bmad-agent-dev`
+2. **For bug fixes**: Use `backend-engineer` or `frontend-engineer` agents directly
+3. **Before merging**: Run `bmad-code-review` or `code-review-specialist`
+4. **For UI work**: `ui-generator` → `ui-evaluator` → `ui-design-auditor`
+5. **For fullstack features**: `fullstack-engineer` or `integrator-qa`
+
+### Agent Configuration
+
+Agents are configured in `.claude/settings.local.json`. Current permissions allow full agentic execution with safety guards on destructive commands.

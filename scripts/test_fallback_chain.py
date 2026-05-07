@@ -20,7 +20,7 @@ import sys
 import os
 from dataclasses import dataclass
 from typing import Dict, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -91,7 +91,7 @@ class FallbackChainTester:
                 activation_time_ms=0,
                 passed=False,
                 errors=[f"Invalid fallback level: {level}. Expected 1-4."],
-                timestamp=datetime.utcnow().isoformat()
+                timestamp=datetime.now(timezone.utc).isoformat()
             )
 
         expected = self.EXPECTED_CAPABILITIES[level]
@@ -130,7 +130,7 @@ class FallbackChainTester:
             activation_time_ms=activation_time_ms,
             passed=passed,
             errors=errors,
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=datetime.now(timezone.utc).isoformat()
         )
 
     async def _test_capabilities(self, level: int) -> Dict[str, bool]:
@@ -292,7 +292,12 @@ class FallbackChainTester:
 
     def save_results(self, output_path: str = "VALIDATION_REPORT.md", append: bool = True):
         """Save results to a markdown report."""
-        timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+        # Ensure parent directory exists
+        output_dir = os.path.dirname(output_path)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
         section = f"""## Fallback Chain Results
 

@@ -37,6 +37,27 @@ class TemporalContext:
     is_limited: bool = False  # True if > 120s ago or fallback level 3-4
 
 
+@dataclass
+class VisionTacticalContext:
+    """Live vision-based tactical context from StreamingVisionBridge."""
+    tactical_label: str = ""  # e.g., "Counter Attack", "Set Piece", "Pressing"
+    key_observation: str = ""  # What the vision model observed
+    actionable_insight: str = ""  # What to watch for next
+    confidence: float = 0.0  # Vision model confidence 0.0-1.0
+    timestamp_ms: Optional[int] = None  # When this observation was made
+
+    def to_prompt_hint(self) -> str:
+        """Convert to natural language hint for the LLM."""
+        if not self.tactical_label or self.confidence < 0.4:
+            return ""
+        parts = [f"Live vision detects: {self.tactical_label}"]
+        if self.key_observation:
+            parts.append(f"Observation: {self.key_observation}")
+        if self.actionable_insight:
+            parts.append(f"Watch for: {self.actionable_insight}")
+        return " | ".join(parts)
+
+
 class QAAgent(BaseLiveAgent):
     """
     Story 2.2: Q&A Backend Answer Generation
@@ -199,14 +220,16 @@ class QAAgent(BaseLiveAgent):
         question: str,
         game_state: Optional[GameState],
         temporal_context: Optional[TemporalContext],
+        vision_context: Optional[VisionTacticalContext] = None,
     ) -> str:
         """
-        Build prompt with game state, settings, and temporal context.
+        Build prompt with game state, settings, temporal context, and live vision data.
 
         Args:
             question: Fan question
             game_state: Current match game state
             temporal_context: KV cache temporal context
+            vision_context: Live vision-based tactical context from StreamingVisionBridge
 
         Returns:
             Formatted prompt string
@@ -229,6 +252,11 @@ class QAAgent(BaseLiveAgent):
             mins, secs = divmod(ts_sec, 60)
             temporal_hint = f"Relevant footage at {mins:02d}:{secs:02d}: {temporal_context.frame_caption}"
 
+        # Vision tactical context (highest priority for tactical questions)
+        vision_hint = ""
+        if vision_context and vision_context.confidence >= 0.4:
+            vision_hint = vision_context.to_prompt_hint()
+
         prompt = f"""{game_ctx}
 
 Commentary Settings:
@@ -241,6 +269,7 @@ Match: {self.home_team} vs {self.away_team}
 Question: {question}
 
 {temporal_hint if temporal_hint else ""}
+{" — " + vision_hint if vision_hint else ""}
 
 Answer in the style of Peter Drury commentary — poetic, insightful, emotionally resonant.
 Reference specific visual moments if temporal context is available.
@@ -255,14 +284,15 @@ Answer:"""
         question: str,
         game_state: Optional[GameState] = None,
         retained_frames: Optional[List[Dict[str, Any]]] = None,
+        vision_context: Optional[VisionTacticalContext] = None,
     ) -> Dict[str, Any]:
         """
-        Handle fan Q&A question with full Story 2.2 pipeline.
+        Handle fan Q&A question with full Story 2.2 pipeline including live vision context.
 
         Pipeline:
         1. Check pre-computed Q&A cache (tap path < 1s)
         2. Search KV cache for temporal context
-        3. Build prompt with game state + settings
+        3. Build prompt with game state + settings + live vision data
         4. Call LLM (Priority 1 GPU scheduling)
         5. Return answer with metadata
 
@@ -270,6 +300,7 @@ Answer:"""
             question: Fan question text
             game_state: Current match game state
             retained_frames: Retained KV cache frames for temporal search
+            vision_context: Live vision-based tactical context from StreamingVisionBridge
 
         Returns:
             Dict with answer text, game state, temporal_context flag, overlay coordinates
@@ -277,6 +308,7 @@ Answer:"""
         self.log_event("qa_query_received", {
             "question": question[:100],
             "has_game_state": game_state is not None,
+            "has_vision_context": vision_context is not None,
         })
 
         # Step 1: Check pre-computed Q&A cache (tap path)
@@ -300,8 +332,8 @@ Answer:"""
         if retained_frames:
             temporal_ctx = self._search_kv_cache_temporal_context(question, retained_frames)
 
-        # Step 3: Build prompt with game state + settings
-        prompt = self._build_qa_prompt(question, game_state, temporal_ctx)
+        # Step 3: Build prompt with game state + settings + live vision data
+        prompt = self._build_qa_prompt(question, game_state, temporal_ctx, vision_context)
 
         # Step 4: Call LLM (Priority 1 GPU scheduling)
         answer_text = await self.call_bedrock(
@@ -338,6 +370,10 @@ Answer:"""
             "timestamp_ms": temporal_ctx.timestamp_ms if temporal_ctx and not temporal_ctx.is_limited else None,
             "overlay_coordinates": None,  # Would come from player ID if referencing a player
             "source": "llm_generate",
+            "vision_context": {
+                "tactical_label": vision_context.tactical_label,
+                "confidence": vision_context.confidence,
+            } if vision_context and vision_context.confidence >= 0.4 else None,
         }
 
     def _is_non_football_question(self, question: str, answer: str) -> bool:
@@ -354,9 +390,10 @@ Answer:"""
         question: str,
         game_state: Optional[GameState] = None,
         retained_frames: Optional[List[Dict[str, Any]]] = None,
+        vision_context: Optional[VisionTacticalContext] = None,
     ) -> Dict[str, Any]:
         """
-        Handle query with recent events fetched from DynamoDB.
+        Handle query with recent events fetched from DynamoDB and live vision context.
 
         Convenience wrapper that fetches recent events and passes to handle_query.
         """
@@ -372,7 +409,7 @@ Answer:"""
         except Exception:
             pass  # Continue without recent events
 
-        return await self.handle_query(question, game_state, retained_frames)
+        return await self.handle_query(question, game_state, retained_frames, vision_context)
 
     def load_qa_cache_from_notes(self, notes_store: NotesStore) -> None:
         """

@@ -1,9 +1,9 @@
 ---
-stepsCompleted: [1, 2, 3, 4]
+stepsCompleted: ["step-01-validate-prerequisites"]
 inputDocuments:
   - "_bmad-output/planning-artifacts/prd.md"
   - "_bmad-output/planning-artifacts/architecture.md"
-  - "_bmad-output/planning-artifacts/ux-design-specification.md"
+  - "_bmad-output/planning-artifacts/ux-design-specification-midnight-stadium.md"
 ---
 
 # PitchAI - Epic Breakdown
@@ -52,7 +52,7 @@ FR17: **Commentary Settings** — The system shall expose three live-configurabl
 
 FR18: **HF Space Deployment** — The system shall deploy as a Docker container on Hugging Face Spaces with the React frontend served as static files and FastAPI handling WebSocket connections. The GPU inference endpoint URL shall be configurable via a single Space secret (`VLLM_BASE_URL`) without requiring a Space rebuild.
 
-FR19: **README YAML Frontmatter** — The Space README.md shall include YAML frontmatter with `sdk: docker`, `tags: [amd, amd-hackathon-2026, vllm, gradio]`, and clear setup instructions for Space secrets.
+FR19: **README YAML Frontmatter** — The Space README.md shall include YAML frontmatter with `sdk: docker`, `tags: [amd, amd-hackathon-2026, sglang, vllm]`, and clear setup instructions for Space secrets.
 
 FR20: **Self-Guided Demo Mode** — The Space shall include a self-guided experience for community visitors who arrive outside the live demo window. This includes a sample match video, pre-generated commentary notes, and a "Try It" button that triggers the full demo flow with pre-seeded settings.
 
@@ -74,7 +74,7 @@ NFR7: **MI300X VRAM Budget** — Total GPU memory consumption on MI300X shall no
 
 NFR8: **KV Cache Temporal Retention** — The system shall retain a minimum of 120 seconds of visual context in the KV cache, supporting temporal navigation for split-screen Q&A.
 
-NFR9: **Fallback Chain Activation** — When the primary streaming path (SGLang + StreamingVLM) fails to initialize, the system shall activate the next fallback level within 30 seconds. Each fallback level shall document which capabilities are degraded: Level 2 (custom KV window — retains temporal continuity), Level 3 (pre-computed embeddings + vLLM — loses temporal scrub), Level 4 (frame-by-frame — no temporal continuity).
+NFR9: **Fallback Chain Activation** — When the primary streaming path (SGLang + StreamingVLM) fails to initialize, the system shall activate the next fallback level within 30 seconds. Each fallback level shall document which capabilities are degraded: Level 2 (SGLang + Custom KV Window — loses StreamingVLM optimizations but retains temporal continuity), Level 3 (Pre-computed embeddings + vLLM — loses temporal scrub, Q&A degrades to static context), Level 4 (vLLM Frame-by-Frame — no temporal continuity).
 
 NFR10: **Configuration Agility** — The GPU inference endpoint URL shall be changeable via a single environment variable (`VLLM_BASE_URL`) without requiring a Space rebuild or code change. The system shall reconnect to the new endpoint within 10 seconds of variable change and Space restart.
 
@@ -100,11 +100,11 @@ NFR12: **Single Command Deployment** — The Space shall be deployable with a si
 
 - **GPU Workload Scheduling (Single MI300X):** Three priority levels sharing one GPU — Priority 1 (Highest): Q&A Decode (fan question, < 3.5s E2E), Priority 2: Streaming Prefill (continuous video frames, 5 FPS min), Priority 3 (Background): Commentary Generation (60s timer + event triggers, < 500ms TTFT). SGLang's disaggregated prefill/decode handles priority 1 vs 2 naturally.
 
-- **4-Level Fallback Chain:** Level 1: SGLang + StreamingVLM 7B (full capability). Level 2: SGLang + Custom KV Sliding Window (loses StreamingVLM optimizations, retains temporal continuity). Level 3: Pre-computed Vision Embeddings + vLLM (loses temporal scrub, Q&A degrades to static context). Level 4: vLLM Frame-by-Frame (no temporal continuity). Architecture supports all levels without code change.
+- **4-Level Fallback Chain:** Level 1: SGLang + StreamingVLM 7B (full capability — primary path). Level 2: SGLang + Custom KV Sliding Window (loses StreamingVLM optimizations, retains temporal continuity). Level 3: Pre-computed Vision Embeddings + vLLM (loses temporal scrub, Q&A degrades to static context). Level 4: vLLM Frame-by-Frame (no temporal continuity). Architecture supports all levels without code change.
 
 - **Docker Multi-Stage Build:** Stage 1: Frontend build (node, npm build → static dist/). Stage 2: Backend (python:3.11-slim, FastAPI + uvicorn, copies dist/, agents/, config/, data_sources/, models/, api/). HEALTHCHECK at /health. Single container → HF Space (Docker SDK).
 
-- **HF Space Configuration:** `sdk: docker`, `tags: [amd, amd-hackathon-2026, vllm, gradio]`, README YAML frontmatter with setup instructions, Space secret `VLLM_BASE_URL` for GPU endpoint.
+- **HF Space Configuration:** `sdk: docker`, `tags: [amd, amd-hackathon-2026, sglang, vllm]`, README YAML frontmatter with setup instructions, Space secret `VLLM_BASE_URL` for GPU endpoint.
 
 - **Integration Order (from Architecture):** 1. Add `NarrativeBeat` + `NotesStore` in `models/`. 2. Modify `NoteOrganizer` to return `NotesStore` (backwards compatible via `raw_markdown`). 3. Wire lookup table into `LiveAgent.generate_live_commentary()`. 4. Add numpy cosine similarity fallback if Day 5 has slack.
 
@@ -1075,3 +1075,1040 @@ So that the 5-minute judge demo runs without a single visible failure.
 **And** WebSocket drop mid-Q&A → answer completes from cached context if possible, reconnects silently
 **And** compound failure (vision + stats both degraded) → single calm fallback message, no error cascade
 **And** GPU endpoint unreachable → fallback chain activates within 30s, Space continues serving frontend.
+
+### Story 4.5: Local StreamingVLM Testing on RTX 5060 8GB
+
+As a developer testing locally before deploying to the AMD MI300X,
+I want to load StreamingVLM from HuggingFace (with Qwen2.5-VL 3B/7B fallback) and run inference on my RTX 5060 8GB,
+So that I can validate the streaming vision pipeline works on consumer hardware before cloud deployment.
+
+**Acceptance Criteria:**
+
+**Given** the test script `scripts/test_streamingvlm_rtx5060.py` is executed
+**When** the script starts
+**Then** it detects the RTX 5060 8GB GPU via CUDA
+**And** reports VRAM (free/total) and compute capability
+**And** sets a memory budget of 6.0 GB (leaving 2GB headroom for system).
+
+**Given** the model loading sequence
+**When** loading models from HuggingFace
+**Then** it tries in order: (1) `mit-han-lab/StreamingVLM-3B`, (2) `Qwen/Qwen2.5-VL-3B-Instruct`, (3) `Qwen/Qwen2.5-VL-7B-Instruct`
+**And** uses the first successfully loaded model
+**And** loads with `torch_dtype=torch.float16` for 8GB VRAM efficiency
+**And** uses Flash Attention 2 if available, otherwise SDPA fallback.
+
+**Given** a successfully loaded model
+**When** the image QA test runs
+**Then** it loads a test image (sports-related or dummy fallback)
+**And** processes with the model's chat template
+**And** generates a response with max 100 tokens
+**And** decodes and displays the result.
+
+**Given** a successfully loaded model
+**When** the video chunk test runs
+**Then** it creates 8 dummy frames (simulating ~1 second at 8 FPS)
+**And** processes all frames through the model
+**And** generates a response with max 50 tokens
+**And** reports input shape and decoded response.
+
+**Given** the test completes
+**When** the summary is displayed
+**Then** it shows: model name, Image QA result (PASS/FAIL), Video Chunk result (PASS/FAIL)
+**And** provides next-step commands for SGLang serving and PitchAI integration.
+
+**Given** model loading fails for all candidates
+**When** all three model attempts fail
+**Then** the script exits with helpful suggestions: check internet, run `huggingface-cli login`, download manually first.
+
+**Given** memory constraints on 8GB card
+**When** any test runs
+**Then** `torch.cuda.empty_cache()` is called between tests
+**And** VRAM usage is reported after model load and after each test
+**And** tests use `torch.cuda.amp.autocast(dtype=torch.float16)` for memory efficiency.
+
+---
+
+## MCP Server for Recursive Testing
+
+**Configuration:** As each story is completed, an MCP server should be configured to run recursive tests automatically.
+
+### Test Categories by Story
+
+**Story 1.1 (Narrative Data Models):**
+- Unit tests for `NarrativeBeat` dataclass field defaults and type hints
+- Unit tests for `NotesStore` lookup table construction (O(1) verification)
+- Unit tests for `tag_resolver` 3-tier resolution (exact → synonym → substring → None)
+- Unit tests for goal safety gate (score change verification)
+
+**Story 1.2 (Streaming Vision Pipeline):**
+- Integration tests for `streaming/factory.py` backend selection
+- Mock HTTP tests for `sglang_client.py` connection and fallback triggering
+- Unit tests for `frame_sampler.py` 5 FPS throttling and diversity scoring
+- Unit tests for `kv_cache.py` 120s retention and eviction policy
+
+**Story 1.3 (Notes Pipeline):**
+- Integration tests for 7-agent 3-phase execution order
+- Tests for 3-layer stats fallback chain (StatsBomb → Firecrawl → FBref)
+- WebSocket message format validation for `progress` callbacks
+- Tests for `notes_ready` message structure (beat_count, sections, timestamp)
+- Backwards compatibility tests for `.raw_markdown` accessor
+
+**Story 1.4 (Vision-Triggered Commentary):**
+- Integration tests for tag resolution → lookup → commentary injection chain
+- Latency tests for commentary TTFT (< 500ms from event detection)
+- WebSocket message format validation for `commentary` broadcasts
+- Tests for `game_state.to_context_string()` injection in every prompt
+
+**Story 1.5 (VideoCanvas):**
+- Component tests for video autoplay within 20s
+- Tests for `useWebSocket` hook reconnection with exponential backoff
+- Canvas draw loop tests (5 FPS throttling, dimension guard)
+- Status dot state tests (emerald/amber/red transitions)
+
+**Story 1.6 (Trivia Cards):**
+- Component tests for card fade in/out timing (400ms, 5s display)
+- Priority queue tests (goal/red card bypass, substitution priority, oldest drop)
+- Tests for minimum 8s gap between non-priority cards
+- Accessibility tests (`role="status"`, `aria-live="polite"`)
+
+**Story 2.1 (MicButton & STT):**
+- Component state tests (7 states: Idle, Hover, Recording, Processing, Disabled-ModelWarming, Disabled-NoMic, Hidden)
+- Tests for 15s max recording timeout auto-submit/cancel
+- Tests for hold ≥ 300ms (clicks ignored)
+- STT confidence gate tests (> 90% proceed, 70-90% confirm, < 70% reject)
+- Tests for 3x consecutive STT failure → suggested chips offer
+
+**Story 2.2 (Q&A Backend):**
+- WebSocket handler tests for `query` message processing
+- Tests for `game_state` and settings injection in Q&A prompts
+- Latency tests for Q&A end-to-end (< 3.5s P95)
+- Tests for pre-computed Q&A pair cache hits (< 1s)
+- Tests for KV cache miss graceful degradation ("Based on available footage")
+
+**Story 2.3 (SplitScreen):**
+- Component tests for 60/40 split animation (300ms ease-out/in)
+- SVG overlay rendering tests (stroke-dasharray draw-on, 200ms per element)
+- Tests for content-ready timeout (500ms → loading skeleton)
+- Tests for Escape dismissal and auto-resolve (5-8s)
+- Accessibility tests (`role="region"`, `aria-label`)
+
+**Story 2.4 (Player Identification):**
+- Vision agent tests for player ID confidence scoring
+- Tests for confidence > 90% (no qualifier), 70-90% (qualifier), < 70% (ambiguity)
+- Accuracy tests on demo video (> 90% on known players)
+- Tests for SVG overlay precision (circle vs zone based on confidence)
+
+**Story 3.1 (Teleprompter Static):**
+- Component tests for empty/generating/ready/degraded states
+- Tests for Tabbed Mode (5 sections) vs Long-Sheet Mode toggle
+- Progress callback parsing tests (agent status, items processed)
+- Accessibility tests (`role="complementary"`)
+
+**Story 3.2 (Teleprompter Auto-Highlight):**
+- Tests for amber highlighting (15% bg, 3px border, ▶ marker)
+- Auto-scroll tests (300ms, current beat at ~30% from top)
+- Hold Mode tests (manual scroll cancels auto, "Back to live"/"Catch up" buttons)
+- Tests for confidence threshold (don't highlight below threshold)
+- Tests for surprise event handling (gap acknowledgement)
+
+**Story 3.3 (Commentary Settings):**
+- Component tests for 3 sliders with gradient tracks
+- WebSocket `settings_update` message format tests
+- Tests for immediate application (no "apply" button)
+- Tests for Bias effect on goal commentary (Team A joy vs Team B subdued)
+- Tests for ControlsTray auto-hide (3s idle, desktop only)
+
+**Story 3.4 (Language Toggle):**
+- Component tests for EN|ES toggle state
+- Tests for audio mute crossfade (< 3s total, < 500ms silence)
+- Translation quality tests (semantic meaning + poetic register preserved)
+- Tests for high-intensity moment deferral (never interrupt goal celebration)
+- Tests for trivia card translation on switch
+
+**Story 4.1 (Docker & HF Space):**
+- Docker build tests (multi-stage, frontend build, backend copy)
+- Container memory tests (< 12GB RAM before model loading)
+- Tests for `VLLM_BASE_URL` secret reconnection (< 10s)
+- Deployment script tests (single `git push` validation)
+
+**Story 4.2 (Self-Guided Demo):**
+- Landing page component tests (hero, feature pills, CTA)
+- First-visit overlay tests (4s auto-fade, localStorage skip)
+- Tests for suggested question chips on first trivia card
+- README scannability tests (layout, links, attribution)
+
+**Story 4.3 (Design Tokens & Accessibility):**
+- Visual regression tests for all components (Midnight Stadium tokens)
+- Keyboard navigation tests (Tab order, Space/Enter, Arrows, Escape)
+- Screen reader tests (ARIA labels on all interactive elements)
+- Tests for `prefers-reduced-motion` (0ms transitions, instant animations)
+- Tests for confidence-gated UI consistency across 5 components
+
+**Story 4.4 (Latency & Fallback Validation):**
+- End-to-end latency benchmarks (Q&A < 3.5s, language switch < 3s, cold start < 20s)
+- Fallback chain activation tests (Level 1→2→3→4, < 30s per level)
+- Memory budget tests (Space < 12GB, MI300X < 60GB, KV cache ≥ 120s)
+- Cross-browser tests (Chrome, Firefox, Edge: video autoplay, Web Speech API, WebSocket, canvas/SVG)
+- Chaos tests: 10-event flood, browser resize during draw, STT timeout, WebSocket drop mid-Q&A, compound failure, GPU unreachable
+
+**Story 4.5 (Local StreamingVLM Testing):**
+- GPU detection tests (CUDA available, device name, VRAM reporting)
+- Model loading tests (StreamingVLM → Qwen2.5-VL 3B → Qwen2.5-VL 7B fallback chain)
+- Memory budget tests (6GB limit on 8GB card, `torch.cuda.empty_cache()` between tests)
+- Image QA inference tests (load image, process, generate ≤100 tokens, decode)
+- Video chunk tests (8 dummy frames, process, generate ≤50 tokens, report input shape)
+- Flash Attention 2 availability detection (fallback to SDPA if unavailable)
+- Test summary output (model name, Image QA PASS/FAIL, Video Chunk PASS/FAIL)
+- Next-step commands display (SGLang serving, PitchAI integration, StreamingVLM inference)
+
+### MCP Server Configuration
+
+The MCP server should:
+1. Watch for story completion markers in the task list
+2. Trigger the relevant test suite automatically
+3. Report pass/fail status back to the task list
+4. Block story marking as "complete" until tests pass
+5. Maintain a test results log in `_bmad-output/test-results/`
+
+---
+
+## Epic 5: UI/UX Revamp — Midnight Stadium Redesign
+
+**Status:** in-progress  
+**Priority:** Critical  
+**Target:** Hackathon Demo Visual Excellence
+
+Epic 5 represents a complete visual and interaction redesign of PitchAI, transforming the interface from a functional sports app into a premium "Midnight Stadium" experience. This epic implements the full design token system, component library, and responsive layouts that make PitchAI feel like a professional broadcast product.
+
+### HTML Screen References
+
+All Epic 5 stories are based on the HTML prototypes in `.bmad/screens/`. Each story maps to a reference screen:
+
+| Story | Screen File | Description |
+|-------|-------------|-------------|
+| 5.1 | `midnight-stadium-design.md` | Design system documentation (tokens, typography, spacing) |
+| 5.2 | N/A — Component library | shadcn/ui integration (no single screen) |
+| 5.3 | `pitchai-landing-page.html` | Landing page with hero, feature pills, CTA |
+| 5.4 | `fan-lens-broadcast.html` | Fan Lens view (video, trivia card, controls, mic button) |
+| 5.5 | `commentator-dashboard.html` | Commentator Dashboard (60/40 split with teleprompter) |
+| 5.6 | `commentator-dashboard.html` | Teleprompter component (static + auto-highlight modes) |
+| 5.7 | `fan-lens-broadcast.html` | MicButton component (hold-to-record, 7 states) |
+| 5.8 | `fan-ai-temporal-replay.html` | SplitScreen Q&A temporal navigation |
+| 5.9 | `fan-lens-broadcast.html` | ControlsTray component (5 controls) |
+| 5.10 | `fan-lens-broadcast.html` | TriviaCard component (priority queue, animations) |
+| 5.11 | `fan-lens-broadcast.html` | VideoCanvas component (connection state, canvas overlays) |
+| 5.12 | All screens | Responsive layout (desktop → tablet → mobile) |
+
+**Playwright Testing Requirement:** Each story includes MCP server-based Playwright UI tests that validate the implemented component against the HTML reference screen. Tests verify visual regression, accessibility (ARIA, keyboard navigation), animation timing, and responsive behavior.
+
+### Design Vision
+
+**Theme:** "Midnight Stadium" — Dark, immersive, broadcast-quality UI that feels like being in a stadium at night under the lights.
+
+**Design Principles:**
+1. **Immersion First** — Match video is always the hero; UI elements are ephemeral guests
+2. **Confidence Through Clarity** — Every stat, badge, and overlay communicates certainty levels
+3. **Accessible Excellence** — WCAG 2.1 AA is the floor, not the ceiling
+4. **Motion With Meaning** — Every animation serves a functional purpose, not decoration
+
+---
+
+### Story 5.1: Design System Foundation — Midnight Stadium Tokens
+
+As a UI developer,
+I want a complete design token system with semantic colors, typography, and spacing,
+So that all components share a consistent visual language.
+
+**Reference:** `.bmad/midnight-stadium-design.md` — Design system documentation
+
+**Acceptance Criteria:**
+
+**Given** the `frontend/src/design-tokens/` directory
+**When** design tokens are defined
+**Then** the following token categories exist:
+
+**Color Tokens:**
+- Background: `bg-primary` (#020617 Slate 950), `bg-surface` (#0F172A Slate 900), `bg-elevated` (#1E293B Slate 800)
+- Narrative Accent: `accent-narrative` (#FBBF24 Amber 400) — teleprompter beats, recording state
+- Interactive Accent: `accent-interactive` (#22D3EE Cyan 400) — focus rings, hover, selected
+- Semantic: `success` (#10B981), `warning` (#F59E0B), `danger` (#EF4444)
+- Text: `text-primary` (#F1F5F9), `text-secondary` (#94A3B8), `text-muted` (#64748B)
+
+**Typography Tokens:**
+- Fonts: `font-display` (Inter), `font-body` (Inter), `font-mono` (JetBrains Mono)
+- Scale: `xs` (12px), `sm` (14px), `base` (16px), `lg` (18px), `xl` (20px), `2xl` (24px), `3xl` (30px)
+- Weights: `regular` (400), `medium` (500), `semibold` (600), `bold` (700)
+
+**Spacing Tokens:**
+- Base unit: 4px
+- Scale: `space-1` (4px) through `space-12` (48px) in Tailwind convention
+
+**Motion Tokens:**
+- Durations: `fast` (150ms), `normal` (300ms), `slow` (500ms)
+- Easing: `ease-in-out`, `ease-out`, `linear`
+- Reduced motion: `prefers-reduced-motion` media query support
+
+**And** tokens are organized as CSS custom properties in `frontend/src/design-tokens/tokens.css`
+**And** Tailwind config extends with token references in `tailwind.config.ts`
+**And** A documentation file exists at `_bmad-output/design-system/color-tokens.md`
+
+**Playwright UI Tests (MCP Server):**
+- [ ] [AI-Test] Token snapshot test: Verify all CSS custom properties exist in computed styles
+- [ ] [AI-Test] Color contrast audit: Verify all text combinations meet WCAG 2.1 AA (4.5:1 minimum, 7:1+ for AAA)
+- [ ] [AI-Test] Typography scale visual regression: Capture all 7 type sizes at 3 weights
+- [ ] [AI-Test] Reduced motion test: Verify `prefers-reduced-motion` media query is respected
+
+---
+
+### Story 5.2: Component Library — shadcn/ui Integration
+
+As a UI developer,
+I want a reusable component library themed to Midnight Stadium tokens,
+So that building new features is fast and consistent.
+
+**Reference:** `.bmad/midnight-stadium-design.md` — Component quick specs (MicButton, ControlsTray, Teleprompter, TriviaCard)
+
+**Acceptance Criteria:**
+
+**Given** the `frontend/src/components/ui/` directory
+**When** shadcn/ui components are installed and themed
+**Then** the following 10 components are available:
+
+| Component | Usage | Themed Variants |
+|-----------|-------|-----------------|
+| Button | Mic base, language toggle, CTAs | default, narrative, ghost, outline, danger |
+| Slider | Bias/excitement/knowledge sliders | with tooltip, discrete steps |
+| Card | Trivia container, teleprompter panel | elevated, flat, bordered |
+| Badge | Confidence, source, LIVE, agent status | default, success, warning, danger, mono |
+| Progress | Agent pipeline completion bar | gradient, animated |
+| Toggle | Fan/Commentator view switch | pressed/unpressed |
+| Tooltip | Control hover labels | auto-positioning, arrow |
+| Dialog | Notes generation progress modal | with backdrop, Escape handling |
+| Tabs | Teleprompter section tabs | underlined, pills |
+| ScrollArea | Teleprompter long-sheet | custom scrollbar, auto-hide |
+
+**And** all components support keyboard navigation (Tab, Space, Enter, Arrow keys, Escape)
+**And** all components have proper ARIA labels via Radix primitives
+**And** all components respect `prefers-reduced-motion`
+**And** components are exported from `frontend/src/components/ui/index.ts`
+
+**Playwright UI Tests (MCP Server):**
+- [ ] [AI-Test] Component snapshot: Capture all 10 components in all variants (dark surface #1A1A1A, border #353535)
+- [ ] [AI-Test] Keyboard navigation audit: Tab through all components, verify focus rings (Cyan 400, 2px)
+- [ ] [AI-Test] ARIA validation: Verify all Radix primitives expose correct aria-* attributes
+- [ ] [AI-Test] Reduced motion test: Verify animations disabled when `prefers-reduced-motion: reduce`
+
+---
+
+### Story 5.3: Landing Page — Hero Experience Redesign
+
+As a community visitor arriving at PitchAI,
+I want to immediately understand what PitchAI does and feel excited to try it,
+So that I engage with the demo within 10 seconds.
+
+**Acceptance Criteria:**
+
+**Given** the landing page at `/`
+**When** it renders
+**Then** the layout follows this structure:
+
+```
+┌─────────────────────────────────────────────┐
+│                                             │
+│           ⚽ PitchAI                        │
+│         (Inter Bold, 3xl, Amber 400)        │
+│                                             │
+│    Your AI Broadcast Companion              │
+│         (text-secondary, xl)                │
+│                                             │
+│         [ Start Watching ▶ ]                │
+│         (Amber pill CTA, narrative)         │
+│                                             │
+│    ┌──────────┐ ┌──────────┐ ┌──────────┐  │
+│    │ Live     │ │ Context- │ │ Cross-   │  │
+│    │Commentary│ │ ual Q&A  │ │Language  │  │
+│    │  Notes   │ │          │ │Translation│  │
+│    └──────────┘ └──────────┘ └──────────┘  │
+│         (Feature pills, Badge secondary)    │
+│                                             │
+│  ═══════════════════════════════════════    │
+│  (Green pitch line accent, success/30%)     │
+└─────────────────────────────────────────────┘
+```
+
+**And** the CTA button navigates to `/watch`
+**And** feature pills have subtle hover animations (scale 1.02, Cyan ring)
+**And** the green pitch line accent spans the full width at bottom
+**And** the page is responsive down to 1280px minimum viewport
+**And** first-visit overlay appears for 4 seconds (localStorage gated)
+
+**Playwright UI Tests (MCP Server):**
+- [ ] [AI-Test] Hero rendering: Verify title, tagline, CTA visible within 3s of page load
+- [ ] [AI-Test] CTA navigation: Click "Start Watching" → verify navigation to `/watch`
+- [ ] [AI-Test] Feature pills hover: Hover each pill → verify scale 1.02 + Cyan 400 ring
+- [ ] [AI-Test] First-visit overlay: Clear localStorage → verify overlay appears for 4s
+- [ ] [AI-Test] Responsive layout: Test at 1440px, 1280px, 1024px → verify no horizontal scroll
+
+---
+
+### Story 5.4: Video Page Layout — Fan Lens Redesign
+
+As a fan watching the match,
+I want the video to be immersive with trivia cards and controls that feel polished,
+So that I'm engaged in the experience without distraction.
+
+**Acceptance Criteria:**
+
+**Given** the video page at `/watch`
+**When** it renders in Fan Lens mode
+**Then** the layout is:
+
+```
+┌─────────────────────────────────────────────────────┐
+│  ● (Connection status dot, top-right)               │
+│                                                     │
+│                                                     │
+│         ┌─────────────────────────┐                 │
+│         │                         │                 │
+│         │     VIDEO CANVAS        │                 │
+│         │     (16:9, centered)    │                 │
+│         │                         │                 │
+│         └─────────────────────────┘                 │
+│                                                     │
+│  ┌─────────────────────────────────────────────┐   │
+│  │ [EN|ES] [Bias] [Excitement] [Knowledge]     │   │
+│  │                                              │   │
+│  │ [Fan Lens ▼]                                │   │
+│  └─────────────────────────────────────────────┘   │
+│         (ControlsTray, always visible)              │
+│                                                     │
+│  ┌─────────────┐                    🎤             │
+│  │ Trivia Card │                  (MicButton)      │
+│  │ Did you know?                                   │
+│  │ Osimhen has 15 goals...                         │
+│  │ StatsBomb · 2023/24                             │
+│  └─────────────┘                                   │
+│                                                     │
+│  ┌──────┐ ┌──────┐ ┌──────┐                        │
+│  │ Why   │ │ Who   │ │ What  │                     │
+│  │ red   │ │ is    │ │ forma-│                     │
+│  │ card? │ │ #10?  │ │ tion? │                     │
+│  └──────┘ └──────┘ └──────┘                        │
+│  (Suggested question chips, appear on first card)   │
+└─────────────────────────────────────────────────────┘
+```
+
+**And** trivia cards fade in 400ms, display 5s, fade out 400ms
+**And** priority queue (max depth 3) with goal/red card bypass
+**And** MicButton is 48×48px, bottom-right, 16px inset
+**And** ControlsTray auto-hides after 3s idle (Community Visitor mode)
+**And** tooltips appear on first hover for every control
+
+**Playwright UI Tests (MCP Server):**
+- [ ] [AI-Test] Fan Lens layout: Verify video 16:9 centered, trivia card bottom-left, MicButton bottom-right
+- [ ] [AI-Test] Trivia card animation: Verify fade-in 400ms, 5s display, fade-out 400ms
+- [ ] [AI-Test] Priority queue: Trigger goal event → verify immediate card display (bypass queue)
+- [ ] [AI-Test] ControlsTray auto-hide: Wait 3s idle → verify tray hidden; move mouse → verify reappear
+- [ ] [AI-Test] First-hover tooltips: Hover each control → verify tooltip appears once (localStorage gated)
+
+---
+
+### Story 5.5: Video Page Layout — Commentator Dashboard Redesign
+
+As a commentator using PitchAI,
+I want a split view with video and teleprompter that feels like a professional broadcast tool,
+So that I can deliver commentary while having my notes synced to the match.
+
+**Acceptance Criteria:**
+
+**Given** the video page at `/watch` in Commentator Dashboard mode
+**When** it renders
+**Then** the layout is:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  ● (Connection)                                                  │
+│                                                                  │
+│  ┌───────────────────────┐ ┌─────────────────────────────────┐  │
+│  │                       │ │  Commentary Notes               │  │
+│  │                       │ │  ─────────────────────          │  │
+│  │      VIDEO CANVAS     │ │  [Match Info] [Home] [Away]     │  │
+│  │      (60% width)      │ │  [Tactical] [Historical]        │  │
+│  │                       │ │                                 │  │
+│  │                       │ │  ▶ Roma have risen from their   │  │
+│  │                       │ │    ruins...                     │  │
+│  │                       │ │    (Amber 15% bg, 3px left)     │  │
+│  │                       │ │                                 │  │
+│  │                       │ │    Victor Osimhen has...        │  │
+│  │                       │ │    (Next 3 lines, slate-400)    │  │
+│  └───────────────────────┘ │                                 │  │
+│                            │    StatsBomb · 0.87             │  │
+│  [ControlsTray below       │ │    (Mono, text-xs)            │  │
+│   video, full width]       │ └─────────────────────────────────┘  │
+│                            │     (Teleprompter, 40% width)        │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**And** the 60/40 split is enforced with CSS grid
+**And** current beat highlighting: Amber 400 at 15% bg, 3px left border, ▶ marker
+**And** auto-scroll keeps current beat at ~30% from top (300ms smooth scroll)
+**And** manual scroll within 500ms of auto-scroll → Hold Mode with "Back to live" button
+**And** Tabbed Mode for pre-match (5 sections), Long-Sheet Mode for live
+**And** View Toggle button switches between Fan Lens and Commentator Dashboard
+
+**Playwright UI Tests (MCP Server):**
+- [ ] [AI-Test] 60/40 split: Verify CSS grid enforces 60% video, 40% teleprompter at 1440px
+- [ ] [AI-Test] Beat highlighting: Verify Amber 400 15% bg, 3px left border, ▶ marker on current beat
+- [ ] [AI-Test] Auto-scroll: Verify current beat positioned at ~30% from top
+- [ ] [AI-Test] Hold mode: Manual scroll → verify "Back to live" button appears
+- [ ] [AI-Test] View toggle: Click Fan Lens → verify trivia card appears; Click Commentator → verify teleprompter appears
+
+---
+
+### Story 5.6: Teleprompter Component — Static + Auto-Highlight Modes
+
+As a commentator,
+I want the teleprompter to show my notes with auto-highlighting synced to vision events,
+So that I can scan the right line in under a second during live play.
+
+**Acceptance Criteria:**
+
+**Given** the Teleprompter component
+**When** in Static Mode (pre-match or manual)
+**Then**:
+- 5 tabs: Match Info, Home Team, Away Team, Tactical, Historical
+- Each tab shows raw_markdown for that section
+- User can scroll manually through notes
+
+**When** in Long-Sheet Mode (live with vision sync)
+**Then**:
+- Continuous scroll of all narrative beats
+- Current beat highlighted: Amber 400 15% bg, 3px left border, ▶ marker
+- Next 3 lines visible below (text-sm, slate-400, fading opacity)
+- Previous line above (text-xs, slate-600)
+- Auto-scroll animation 300ms, current beat at ~30% from top
+
+**Given** user manually scrolls
+**When** scroll occurs within 500ms of auto-scroll
+**Then**:
+- Auto-scroll animation cancelled
+- Hold Mode entered
+- Contextual button appears: "Back to live" (scrolled up) or "Catch up" (scrolled past)
+- Tapping button resumes auto-scroll to current beat
+
+**And** each line shows metadata badges: source (StatsBomb/Firecrawl/FBref) + confidence (JetBrains Mono, text-xs)
+**And** beats with confidence < 0.6 are NOT highlighted (safety gate)
+
+---
+
+### Story 5.7: MicButton Component — Hold-to-Record Redesign
+
+As a fan asking questions,
+I want a microphone button that clearly communicates its state and responds to my interaction,
+So that I know when I'm recording and when my question is submitted.
+
+**Acceptance Criteria:**
+
+**Given** the MicButton component
+**When** in each of 7 states
+**Then** it renders:
+
+| State | Visual | Behavior |
+|-------|--------|----------|
+| Idle | Slate 900 85% opacity, Slate 800 ring, slate-400 mic icon | Tooltip on first hover: "Hold to ask a question" |
+| Hover | Cyan 400 ring (2px), white icon, glow effect | Tooltip appears (first hover only, localStorage gated) |
+| Recording | Red 500 ring, pulses 48→52px, Snapchat progress arc | Ghost text below (50% opacity, Web Speech API interim results) |
+| Processing | Amber 400 rotating gradient ring | Video vignette 5%, hidden during active Q&A |
+| Disabled (Model Warming) | 50% opacity | Tooltip: "AI warming up... ready in ~20s" |
+| Disabled (No Mic) | 50% opacity | Tooltip: "Microphone not available" |
+| Hidden | display: none | During active Q&A split-screen |
+
+**And** hold ≥ 300ms required (clicks ignored)
+**And** 15s max recording timeout (auto-submit if interim results, auto-cancel if empty)
+**And** Space key hold triggers same behavior (keyboard accessible)
+**And** Escape cancels recording or dismisses active Q&A
+**And** aria-label updates with state: "Hold to ask a question" → "Recording..." → "Processing your question"
+
+**Playwright UI Tests (MCP Server):**
+- [ ] [AI-Test] State transitions: Test all 7 states (Idle, Hover, Recording, Processing, Disabled-Warming, Disabled-NoMic, Hidden)
+- [ ] [AI-Test] Hold-to-record: Hold 300ms → verify Recording state; Click <300ms → verify ignored
+- [ ] [AI-Test] 15s timeout: Simulate 15s hold → verify auto-submit with interim results OR auto-cancel if empty
+- [ ] [AI-Test] Keyboard accessibility: Hold Space → verify Recording; Release → verify submit; Escape → verify cancel
+- [ ] [AI-Test] ARIA labels: Verify aria-label updates with each state transition
+
+---
+
+### Story 5.8: SplitScreen Component — Q&A Temporal Navigation
+
+As a fan receiving a Q&A answer,
+I want the screen to split and show the exact match moment with AI-drawn overlays,
+So that I see the explanation drawn on the moment I asked about.
+
+**Acceptance Criteria:**
+
+**Given** an `answer` WebSocket message with temporal context
+**When** SplitScreen activates
+**Then**:
+- Left panel: Live match at 60% width (continues playing)
+- Right panel: Frozen frame at 40% width from relevant timestamp
+- Divider: 2px Slate 800, non-draggable
+- Slide animation: 300ms ease-out in, 300ms ease-in out
+
+**Given** overlay coordinates in answer payload
+**When** SVG overlays render on frozen frame
+**Then**:
+- stroke-dasharray draw-on animation (200ms per element)
+- Elements draw in sequence: circle → arrow → line → label
+- High confidence: precise circle around player/zone
+- Medium confidence: wider zone highlight + label
+- All strokes: White 90% opacity with 1px blur dark dropshadow
+
+**Given** `prefers-reduced-motion: reduce`
+**When** SplitScreen activates
+**Then**:
+- Slide animation is instant (0ms)
+- Overlay draw-on animations are instant
+- Content still appears correctly
+
+**And** `role="region" aria-label="Question answer: showing the relevant match moment"`
+**And** Escape dismisses with 200ms ease-in
+**And** Auto-resolves after 5-8 seconds
+**And** Content-ready timeout 500ms → loading skeleton if frame not loaded
+
+**Playwright UI Tests (MCP Server):**
+- [ ] [AI-Test] Split animation: Verify 300ms slide-in (60/40 split), 300ms slide-out
+- [ ] [AI-Test] SVG overlay draw-on: Verify stroke-dasharray animation (200ms per element, sequential)
+- [ ] [AI-Test] Reduced motion: Set `prefers-reduced-motion: reduce` → verify instant split + instant overlays
+- [ ] [AI-Test] Escape dismiss: Press Escape → verify 200ms ease-out collapse
+- [ ] [AI-Test] Auto-resolve: Verify split-screen collapses after 5-8 seconds
+
+---
+
+### Story 5.9: ControlsTray Component — Settings & View Toggle
+
+As a user customizing my experience,
+I want all commentary settings in a single accessible tray,
+So that I can adjust bias, excitement, knowledge, and language quickly.
+
+**Acceptance Criteria:**
+
+**Given** the ControlsTray component
+**When** it renders
+**Then** it contains:
+
+| Control | Type | Behavior |
+|---------|------|----------|
+| Language Toggle | Toggle Button | "EN \| ES" with active language highlighted (Amber 400) |
+| Bias Slider | Slider | Team A fan [-1] → Neutral [0] → Team B fan [+1], red-neutral-blue gradient |
+| Excitement Slider | Slider | Subdued [0] → Maximum [1], amber gradient |
+| Knowledge Depth Slider | Slider | Beginner [0] → Tactical [1], cyan gradient |
+| View Toggle | Toggle | Fan Lens \| Commentator Dashboard |
+
+**And** sliders have `aria-valuemin`, `aria-valuemax`, `aria-valuenow`, descriptive `aria-label`
+**And** slider changes send WebSocket `{"type": "settings_update", ...}` immediately
+**And** no "apply" button — changes apply instantly
+**And** preview text updates with setting changes (e.g., bias at +1 shows "Strong Team B perspective")
+**And** Tab order: Language → Bias → Excitement → Knowledge → View Toggle
+**And** Arrow keys adjust sliders ±10%
+**And** Space/Enter toggles buttons
+
+**Given** Community Visitor mode
+**When** no mouse movement for 3s
+**Then** ControlsTray auto-hides
+**When** mouse moves
+**Then** ControlsTray reappears
+
+**Given** Narrated Demo mode
+**When** active
+**Then** ControlsTray is always visible (judge must see features)
+
+**Playwright UI Tests (MCP Server):**
+- [ ] [AI-Test] Control rendering: Verify all 5 controls visible (Language, Bias, Excitement, Knowledge, View Toggle)
+- [ ] [AI-Test] Slider gradients: Verify red-neutral-blue (Bias), amber (Excitement), cyan (Knowledge)
+- [ ] [AI-Test] WebSocket emission: Adjust slider → verify `{"type": "settings_update"}` sent immediately
+- [ ] [AI-Test] Auto-hide: Wait 3s idle → verify tray hidden; move mouse → verify reappear
+- [ ] [AI-Test] Keyboard navigation: Tab through controls → verify correct order; Arrow keys → verify ±10% adjustment
+
+---
+
+### Story 5.10: TriviaCard Component — Match Insights Display
+
+As a new fan watching football,
+I want trivia cards to fade in at key match moments with source attribution,
+So that I learn about the match passively without looking away from the action.
+
+**Acceptance Criteria:**
+
+**Given** a trivia-formatted commentary received over WebSocket
+**When** MatchInsight component receives the data
+**Then** the card renders:
+- Anchored bottom-left (8px from edge, max 280px wide)
+- Slate 900 at 92% opacity with 3px Amber 400 left border
+- Title ("Did you know?") + 1-2 line body (text-sm)
+- Source attribution: `StatsBomb · 2023/24 season` (JetBrains Mono, text-xs)
+
+**Given** card animation
+**When** entering/Exiting
+**Then**:
+- Fade in: 400ms ease-out (opacity 0→1, translateY 8px→0)
+- Display: 5 seconds
+- Fade out: 400ms ease-in
+- `prefers-reduced-motion`: instant appear/disappear
+
+**Given** priority queue (max depth 3)
+**When** new card arrives
+**Then**:
+- Goal and Red card bypass queue, immediately dismiss active card (200ms accelerated fade)
+- Substitution queued with priority over general trivia
+- When queue full, oldest non-priority card dropped
+- Minimum 8s gap between consecutive non-priority cards
+
+**Given** card is displayed
+**When** active
+**Then**:
+- `role="status" aria-live="polite"` for screen reader announcement
+- Dismiss X button appears on hover
+- Card avoids active play zone (ball position tracked by vision model)
+- Card never exceeds 5% of screen area
+
+**Playwright UI Tests (MCP Server):**
+- [ ] [AI-Test] Card rendering: Verify Slate 900 92% opacity, 3px Amber 400 left border, max 280px wide
+- [ ] [AI-Test] Animation timing: Verify fade-in 400ms, 5s display, fade-out 400ms
+- [ ] [AI-Test] Priority bypass: Trigger goal event → verify immediate card display (200ms accelerated dismiss of current)
+- [ ] [AI-Test] Queue management: Fill queue with 3 cards → verify 4th non-priority card drops oldest
+- [ ] [AI-Test] ARIA: Verify `role="status" aria-live="polite"` on card container
+
+---
+
+### Story 5.11: VideoCanvas Component — Connection State & Overlays
+
+As a fan opening PitchAI,
+I want the match video to play immediately with AI connection status visible,
+So that I'm immersed in the match instantly without waiting for models to load.
+
+**Acceptance Criteria:**
+
+**Given** the VideoCanvas component
+**When** page loads
+**Then**:
+- Video element begins playing within 20 seconds (NFR-3)
+- Video is 100% width, 16:9 aspect ratio, centered
+- No loading spinner, no "loading model..." message
+
+**Given** canvas overlay synced to video
+**When** draw loop runs
+**Then**:
+- 5 FPS throttled (200ms delta check between frames)
+- Dimension guard: skip frame if canvas dimensions don't match video
+- API: `drawCircle`, `drawArrow`, `drawLine`, `drawLabel`, `clear`
+
+**Given** WebSocket status dot integrated
+**When** connection state changes
+**Then**:
+- Emerald 500 at 60% opacity = connected
+- Amber 500 pulse = reconnecting
+- Red 500 = disconnected
+- Dot is 6×6px, top-right corner, 12px inset
+- After 5s disconnected: "Reconnecting..." text appears
+
+**Given** vision model warming up
+**When** status dot renders
+**Then**:
+- Amber pulse with tooltip: "AI warming up... ready in ~20s"
+- Canvas visible but empty
+- Video continues playing uninterrupted
+
+**And** `aria-label` updates with state
+**And** `role="img"` for canvas with live region for overlay data
+
+**Playwright UI Tests (MCP Server):**
+- [ ] [AI-Test] Video playback: Verify video starts within 20s, 16:9 aspect, centered
+- [ ] [AI-Test] Connection status dot: Verify 6x6px, top-right 12px inset, color changes with state
+- [ ] [AI-Test] Canvas draw loop: Verify 5 FPS throttling (200ms delta check)
+- [ ] [AI-Test] Dimension guard: Resize video → verify canvas re-syncs before drawing
+- [ ] [AI-Test] Model warming state: Verify Amber pulse + tooltip "AI warming up... ready in ~20s"
+
+---
+
+### Story 5.12: Responsive Layout — Desktop First, Mobile Graceful
+
+As a user accessing PitchAI on different devices,
+I want the layout to adapt to my screen size,
+So that I can use the product on desktop, tablet, or mobile.
+
+**Acceptance Criteria:**
+
+**Given** desktop viewport (≥ 1440px)
+**When** rendering
+**Then**:
+- Full Fan Lens layout as designed
+- Full Commentator Dashboard 60/40 split
+- All controls visible
+
+**Given** tablet viewport (1024px - 1439px)
+**When** rendering
+**Then**:
+- Video maintains 16:9, scaled down
+- ControlsTray condensed (icons only, tooltips on tap)
+- Trivia cards max 240px wide
+- Commentator Dashboard: video 100%, teleprompter below (stacked)
+
+**Given** mobile viewport (< 1024px)
+**When** rendering
+**Then**:
+- Video 100% width
+- ControlsTray becomes bottom sheet (swipe up)
+- Trivia cards full width at bottom
+- Commentator Dashboard: video only, teleprompter accessible via "Show Notes" button
+- MicButton repositioned to top-right (thumb-friendly)
+
+**And** all touch targets minimum 44×44px (WCAG 2.1 touch target size)
+**And** no horizontal scroll at any breakpoint
+**And** `prefers-reduced-motion` respected at all breakpoints
+
+**Playwright UI Tests (MCP Server):**
+- [ ] [AI-Test] Desktop viewport (1440px): Verify full Fan Lens + Commentator Dashboard layouts
+- [ ] [AI-Test] Tablet viewport (1024px): Verify condensed ControlsTray, stacked Commentator layout
+- [ ] [AI-Test] Mobile viewport (<1024px): Verify bottom sheet ControlsTray, "Show Notes" button
+- [ ] [AI-Test] Touch targets: Verify all interactive elements ≥44×44px at mobile breakpoint
+- [ ] [AI-Test] Horizontal scroll: Test all breakpoints → verify no horizontal overflow
+
+---
+
+## Epic 5 Wave Planning
+
+**Wave 1 (Foundation — Week 1):**
+- Story 5.1: Design System Foundation
+- Story 5.2: Component Library
+- Story 5.11: VideoCanvas Component
+
+**Wave 2 (Core Experience — Week 2):**
+- Story 5.3: Landing Page
+- Story 5.4: Video Page — Fan Lens
+- Story 5.5: Video Page — Commentator Dashboard
+- Story 5.10: TriviaCard Component
+
+**Wave 3 (Interaction — Week 3):**
+- Story 5.6: Teleprompter Component
+- Story 5.7: MicButton Component
+- Story 5.8: SplitScreen Component
+- Story 5.9: ControlsTray Component
+
+**Wave 4 (Polish — Week 4):**
+- Story 5.12: Responsive Layout
+- Visual regression testing
+- Accessibility audit
+- Performance optimization
+
+---
+
+## Epic 6: Production Hardening & Deployment Validation
+
+**Status:** backlog  
+**Priority:** High  
+**Target:** Hackathon Demo Readiness
+
+Epic 6 consolidates all deferred findings, deployment validation, and technical debt from Epics 1-5 into a focused production hardening sprint. This epic ensures PitchAI is deployment-ready and all NFRs are validated with real production metrics.
+
+### Retrospective-Driven Action Items
+
+**From Epic 1 Retrospective:**
+- AI-1.1: Document 3-tier confidence gating pattern (apply retroactively to Epic 1)
+- AI-1.2: Audit WebSocket message schemas for consistency (gameState inclusion, timestamp format)
+
+**From Epic 2 Retrospective:**
+- AI-2.1: Document pre-computed Q&A pair generation process
+- AI-2.2: Add calm degradation message for low-confidence player ID
+- AI-2.3: Integration test: Q&A end-to-end latency with real STT + LLM
+
+**From Epic 3 Retrospective:**
+- AI-3.1: Add localStorage persistence for commentary settings
+- AI-3.2: Make teleprompter mode switching more explicit
+- AI-3.3: Human review of Spanish translations (native speaker validation)
+
+**From Epic 4 Retrospective:**
+- AI-4.2: Create deferred findings tracker (critical vs. nice-to-have) — ✅ Done in technical-debt-tracker.md
+- AI-4.3: App-wide accessibility audit — Moved to Epic 5 Wave 4
+- AI-4.4: Deploy HF Space and run deployment-dependent validation
+- AI-4.5: ✅ Complete (Epic 1-3 retrospectives done)
+
+---
+
+### Story 6.1: HF Space Deployment & Production Validation
+
+As a hackathon judge visiting the PitchAI Space,
+I want the demo to work flawlessly within the first 5 minutes,
+So that I understand the value proposition and leave a like.
+
+**Acceptance Criteria:**
+
+**Given** the HF Space is deployed via `scripts/deploy_hf.sh`
+**When** the Space URL is opened
+**Then** video plays within 20 seconds (NFR-3)
+**And** vision model attaches within additional 30 seconds
+**And** first trivia card fades in within 60 seconds
+**And** the Space runs for 5 minutes without crash (SC-09)
+
+**Given** the deployment validation scripts
+**When** run against the deployed Space
+**Then** memory budgets verified:
+- HF Space container < 12GB RAM (NFR-6)
+- MI300X VRAM < 60GB (NFR-7)
+- KV cache retains ≥ 120 seconds (NFR-8)
+
+**And** latency NFRs pass with real measurements:
+- Audio Q&A < 3.5s P95 (NFR-1)
+- Language switch < 3s total, < 500ms silence (NFR-2)
+- Commentary TTFT < 500ms (NFR-4)
+- Vision FPS ≥ 5 on MI300X (NFR-5)
+
+**And** player ID accuracy > 90% on demo video (NFR-11)
+**And** chaos tests pass in production:
+- 10-event flood → queue managed, no crash
+- WebSocket drop mid-Q&A → completes from cache
+- Compound failure → single calm message
+
+**And** VALIDATION_REPORT.md is completed with actual production metrics
+
+---
+
+### Story 6.2: Commentary Settings Persistence
+
+As a returning user,
+I want my commentary preferences (bias, excitement, knowledge depth, language) to persist across sessions,
+So that I don't have to reconfigure them every time I visit.
+
+**Acceptance Criteria:**
+
+**Given** the user adjusts any commentary setting slider
+**When** the setting changes
+**Then** the value is saved to localStorage immediately
+**And** the value persists across page refresh
+**And** the value is loaded on app startup
+
+**Given** the user switches commentary language
+**When** the toggle is clicked
+**Then** the language preference is saved to localStorage
+**And** the language is restored on next visit
+
+**Given** localStorage is unavailable (private browsing, disabled)
+**When** the app loads
+**Then** settings default to neutral/English but don't crash
+**And** a subtle indicator suggests enabling localStorage for best experience
+
+---
+
+### Story 6.3: WebSocket Message Schema Audit
+
+As a developer maintaining the WebSocket protocol,
+I want all message schemas to be consistent across the codebase,
+So that clients can rely on uniform message structure.
+
+**Acceptance Criteria:**
+
+**Given** all WebSocket message types across Epic 1-5
+**When** audited for schema consistency
+**Then** all messages include:
+- `type` field (message type identifier)
+- `timestamp` field (ISO8601 format with timezone)
+- `gameState` field (where contextually relevant: commentary, trivia, answer)
+
+**And** the following message types are documented:
+- `progress` — Agent pipeline progress callbacks
+- `notes_ready` — Pre-match notes generation complete
+- `commentary` — Live commentary broadcast
+- `trivia` — Trivia card data
+- `query` — Fan question submitted
+- `answer` — Q&A response
+- `state_snapshot` — Reconnection state restoration
+- `settings_update` — Commentary settings change
+
+**And** a schema document exists at `_bmad-output/websocket-schema.md` with:
+- Message type
+- Required fields
+- Optional fields
+- Example payload
+
+---
+
+### Story 6.4: Pre-Computed Q&A Pair Documentation
+
+As a developer extending the Q&A system,
+I want to understand how pre-computed Q&A pairs are generated and cached,
+So that I can maintain and extend the tap path functionality.
+
+**Acceptance Criteria:**
+
+**Given** the pre-computed Q&A system from Story 2.2
+**When** documented
+**Then** the document explains:
+- When pre-computed pairs are generated (during notes pipeline? on-demand?)
+- Where they are stored (in-memory NotesStore? separate cache?)
+- How cache invalidation works (new notes → invalidate old Q&A?)
+- What the data structure is (question, answer, timestampMs, overlay coordinates)
+
+**And** the document exists at `_bmad-output/docs/precomputed-qa.md` with:
+- Architecture diagram
+- Data flow description
+- Cache key strategy
+- Invalidation triggers
+
+---
+
+### Story 6.5: Translation Quality Review (Native Speaker)
+
+As a Spanish-speaking user,
+I want the translated commentary to preserve meaning and poetic register,
+So that the experience feels authentic, not machine-translated.
+
+**Acceptance Criteria:**
+
+**Given** the Spanish translation templates from Story 3.4
+**When** reviewed by a native Spanish speaker
+**Then** semantic meaning is preserved exactly
+**And** poetic register matches the English original
+**And** emotional intensity is equivalent
+**And** no cultural stereotype substitutions
+
+**And** a review report exists at `_bmad-output/docs/translation-review-es.md` with:
+- Reviewed phrases
+- Issues found
+- Recommended corrections
+- Sign-off from native speaker
+
+---
+
+### Story 6.6: Technical Debt Cleanup — Wave 1 Items
+
+As a developer,
+I want to resolve all Critical and High severity deferred findings from Epic 4,
+So that the codebase is stable and demo-ready.
+
+**Acceptance Criteria:**
+
+**Given** the technical-debt-tracker.md
+**When** reviewing Wave 1 Critical items
+**Then** all items marked "Critical" and "High" are resolved:
+- 4.2-D4/D5: Accessibility audit (completed in Epic 5 Wave 4)
+- 4.3-D1/D2: Confidence badges + graceful degradation (completed in Epic 5)
+- 4.4-D1/D2/D4: HF Space deployment validation (Story 6.1)
+- 1-D2/6.3: WebSocket schema audit (Story 6.3)
+- 2-D3: Q&A integration test (Story 6.1)
+- 3-D3: Translation review (Story 6.5)
+
+**And** the tracker is updated with resolution dates and links to PRs
+**And** remaining Medium/Low items are scheduled for post-hackathon
+
+---
+
+## Epic 6 Wave Planning
+
+**Wave 1 (Deployment — Before Demo):**
+- Story 6.1: HF Space Deployment & Validation
+- Story 6.6: Technical Debt Cleanup
+
+**Wave 2 (Documentation — Post-Demo):**
+- Story 6.2: Commentary Settings Persistence
+- Story 6.3: WebSocket Schema Audit
+- Story 6.4: Pre-Computed Q&A Documentation
+- Story 6.5: Translation Quality Review

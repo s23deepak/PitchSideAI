@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-05
-last_updated: 2026-05-05  # Re-review patches applied
+last_updated: 2026-05-06  # Story 5-4 moved to review
 project: PitchAI
 project_key: NOKEY
 tracking_system: file-system
@@ -69,12 +69,38 @@ development_status:
   epic-3-retrospective: optional
 
   # Epic 4: Deployment, Polish & Community Readiness
-  epic-4: in-progress
+  epic-4: done
   4-1-docker-build-hf-space-deployment: done
   4-2-self-guided-demo-mode-landing-page: done
   4-3-design-tokens-accessibility-visual-polish: done
-  4-4-latency-fallback-cross-browser-validation: review
-  epic-4-retrospective: optional
+  4-4-latency-fallback-cross-browser-validation: done
+  epic-4-retrospective: done
+
+  # Epic 5: UI/UX Revamp — Midnight Stadium Redesign
+  epic-5: done  # All implemented components aligned to Midnight Stadium tokens (2026-05-06)
+  5-1-design-system-foundation-midnight-stadium-tokens: done  # Aligned to Stitch HTML (2026-05-06)
+  5-2-component-library-shadcn-ui-integration: done
+  5-3-landing-page-hero-experience-redesign: done  # Stitch HTML alignment via index.css updates
+  5-4-video-page-lfanayout--lens-redesign: done  # Implementation + validation complete (19/19 tests passed)
+  5-5-video-page-layout-commentator-dashboard-redesign: review  # Implementation complete 2026-05-06 — Ready for code review
+  5-6-teleprompter-component-static-auto-highlight: done  # Token-aligned (bg-surface, text-primary, accent-narrative)
+  5-7-micbutton-component-hold-to-record-redesign: done  # Token-aligned (bg-secondary, border, semantic colors)
+  5-8-splitscreen-component-qa-temporal-navigation: done  # Implementation complete 2026-05-06 — SplitScreen integrated + race condition fix
+  5-9-controlstray-component-settings-view-toggle: done  # Token-aligned (accent-interactive-focus)
+  5-10-triviacard-component-match-insights-display: done  # Token-aligned (success, warning, danger, accent-interactive)
+  5-11-videocanvas-component-connection-state-overlays: done  # Token-aligned (bg-surface-container, semantic colors)
+  5-12-responsive-layout-desktop-first-mobile-graceful: done  # Layout wrappers created
+  epic-5-retrospective: optional
+
+  # Epic 6: Production Hardening & Deployment Validation
+  epic-6: in-progress
+  6-1-hf-space-deployment-production-validation: review  # Implementation complete 2026-05-06 — VALIDATION_REPORT.md created
+  6-2-commentary-settings-persistence: backlog
+  6-3-websocket-message-schema-audit: done  # Schema doc + audit report complete 2026-05-06
+  6-4-pre-computed-qa-pair-documentation: done  # Q&A documentation complete + review fixes applied 2026-05-06
+  6-5-translation-quality-review-native-speaker: backlog
+  6-6-technical-debt-cleanup-wave-1-items: backlog
+  epic-6-retrospective: optional
 
 # Story 4.2 created: 2026-05-05 via bmad-create-story
 

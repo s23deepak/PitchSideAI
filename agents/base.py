@@ -5,6 +5,7 @@ Provides common functionality and interface for all agents.
 import base64
 import json
 import logging
+import unicodedata
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 from datetime import datetime
@@ -115,7 +116,7 @@ class BaseAgent(ABC):
             "Only use facts explicitly provided in the prompt context. If data is unavailable, "
             "state that it is unavailable instead of guessing."
         )
-        prompt = prompt + guardrail
+        prompt = unicodedata.normalize('NFKC', prompt) + guardrail
 
         if self.backend != "bedrock":
             return await self._call_openai_compatible(
