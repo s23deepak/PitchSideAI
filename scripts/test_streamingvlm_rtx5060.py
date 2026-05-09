@@ -4,7 +4,7 @@ Test StreamingVLM Locally on RTX 5060 8GB
 
 This script:
 1. Tries to load StreamingVLM from HuggingFace
-2. Falls back to Qwen2.5-VL 3B or 7B if StreamingVLM is not available
+2. Uses Qwen3-VL-2B-Instruct optimized for 8GB VRAM
 3. Runs a simple video inference test
 
 Usage:
@@ -15,9 +15,9 @@ import sys
 import torch
 from pathlib import Path
 
-# Add project root and streaming-vlm to path
+# Add project root and streaming-vlm-qwen3-rocm to path
 PROJECT_ROOT = Path(__file__).parent.parent
-STREAMING_VLM_PATH = PROJECT_ROOT / "streaming-vlm"
+STREAMING_VLM_PATH = PROJECT_ROOT / "streaming-vlm-qwen3-rocm"
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(STREAMING_VLM_PATH))
 
@@ -54,9 +54,8 @@ print(f"  Using memory budget: {MAX_MEMORY_GB} GB (to avoid OOM on 8GB card)")
 print("\n[2] Loading Model...")
 
 MODEL_CHOICES = [
-    ("mit-han-lab/StreamingVLM-3B", "StreamingVLM 3B (primary)"),
-    ("Qwen/Qwen2.5-VL-3B-Instruct", "Qwen2.5-VL 3B Instruct (fallback 1)"),
-    ("Qwen/Qwen2.5-VL-7B-Instruct", "Qwen2.5-VL 7B Instruct (fallback 2)"),
+    ("Qwen/Qwen3-VL-2B-Instruct", "Qwen3-VL 2B Instruct (primary - fits 8GB)"),
+    ("Qwen/Qwen3-VL-4B-Instruct", "Qwen3-VL 4B Instruct (fallback 1 - needs 12GB)"),
 ]
 
 def try_load_model(model_name: str, model_type: str):
@@ -88,7 +87,7 @@ def try_load_model(model_name: str, model_type: str):
             device_map="cuda",
             torch_dtype=torch.float16,  # Use FP16 for 8GB VRAM
             trust_remote_code=True,
-            attn_implementation="flash_attention_2" if is_flash_attn_available() else "sdpa",
+            attn_implementation="sdpa",
         )
         print(f"    ✓ Model loaded successfully")
 
@@ -102,10 +101,10 @@ def is_flash_attn_available():
     """Check if Flash Attention 2 is available."""
     try:
         import flash_attn
-        print(f"    Flash Attention 2: Available ({flash_attn.__version__})")
+        print(f"    SDPA: Using PyTorch built-in attention (no flash_attn needed)")
         return True
     except ImportError:
-        print(f"    Flash Attention 2: Not available (using SDPA fallback)")
+        print(f"    Using SDPA attention (built into PyTorch 2.0+)")
         return False
 
 # Try each model in order
@@ -328,7 +327,7 @@ print("Next Steps:")
 print("=" * 70)
 print("1. To use with SGLang serving:")
 print("   python -m sglang.launch_server \\")
-print(f"       --model-path {selected_model_name} \\")
+print(f"       --model-path Qwen/Qwen3-VL-2B-Instruct \\")
 print("       --port 30000 \\")
 print("       --mem-fraction-static 0.7")
 print("")

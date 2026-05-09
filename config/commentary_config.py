@@ -9,7 +9,7 @@ from typing import Dict, Optional, List
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from config import LLM_BACKEND, OLLAMA_MODEL, OPENAI_MODEL, VLLM_MODEL
+from config import LLM_BACKEND, OPENAI_MODEL, VLLM_MODEL
 
 # ===== API Key Configuration =====
 
@@ -27,9 +27,7 @@ EXTERNAL_API_KEYS: Dict[str, Optional[str]] = {
 
 def _get_commentary_model_ids() -> Dict[str, str]:
     """Return model IDs for commentary agents based on active backend."""
-    if LLM_BACKEND == "ollama":
-        m = OLLAMA_MODEL
-    elif LLM_BACKEND == "openai":
+    if LLM_BACKEND == "openai":
         m = OPENAI_MODEL
     elif LLM_BACKEND == "vllm":
         m = VLLM_MODEL

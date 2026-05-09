@@ -24,6 +24,7 @@ export default function MicButton({
     onQuestionSubmit, // Callback with { text, confidence }
     isAiReady = true, // False while vision model warming up
     isSplitScreenActive = false, // Hide during active Q&A
+    inline = false, // When true, renders in normal flow instead of fixed bottom-right
 }) {
     // Component state
     const [state, setState] = useState('idle') // idle | hover | recording | confirmation | processing | disabled | error
@@ -416,7 +417,7 @@ export default function MicButton({
     ]
 
     return (
-        <div className="fixed bottom-4 right-4 z-50 flex flex-col items-center">
+        <div className={inline ? 'relative flex flex-col items-center' : 'fixed bottom-4 right-4 z-50 flex flex-col items-center'}>
             {/* Chip Suggestions — Fix: Show after 3 consecutive failures */}
             {showChipSuggestions && (
                 <div className="absolute bottom-full mb-4 flex flex-col gap-2 bg-bg-secondary/95 border border-border rounded-lg p-3 animate-slide-up">

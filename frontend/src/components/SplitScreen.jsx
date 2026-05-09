@@ -39,8 +39,10 @@ export default function SplitScreen({
     isActive,
     onDismiss,
     children,
-    videoPreview = null,   // Object URL for uploaded video clip
+    videoPreview = null,   // Object URL for uploaded video clip (from useVideoQA)
+    liveVideoUrl = null,   // Object URL of the video currently playing in VideoCanvas
     isAnalyzing = false,   // True while video Q&A backend is processing
+    clipQuestion = '',     // The question the user typed before uploading
 }) {
     const [state, setState] = useState(SplitScreenState.HIDDEN)
     const [contentReady, setContentReady] = useState(false)
@@ -62,7 +64,7 @@ export default function SplitScreen({
         return () => mediaQuery.removeEventListener('change', handleChange)
     }, [])
 
-    // Handle activation
+    // Handle activation — slide in and mark content ready. No auto-dismiss here.
     useEffect(() => {
         if (isActive && answer) {
             // Start content timeout
@@ -77,12 +79,6 @@ export default function SplitScreen({
                 clearTimeout(contentTimeoutRef.current)
             }
 
-            // Longer auto-dismiss for video Q&A (more text to read)
-            const timeout = isVideoQA ? VIDEO_AUTO_DISMISS_TIMEOUT : AUTO_DISMISS_TIMEOUT
-            autoDismissRef.current = setTimeout(() => {
-                handleDismiss()
-            }, timeout)
-
             // Start slide-in animation
             setState(SplitScreenState.SLIDING_IN)
 
@@ -95,7 +91,6 @@ export default function SplitScreen({
 
         return () => {
             if (contentTimeoutRef.current) clearTimeout(contentTimeoutRef.current)
-            if (autoDismissRef.current) clearTimeout(autoDismissRef.current)
         }
     }, [isActive, answer])
 
@@ -117,6 +112,23 @@ export default function SplitScreen({
             autoDismissRef.current = null
         }
     }, [onDismiss])
+
+    // Auto-dismiss — only starts AFTER model finishes (isAnalyzing → false)
+    useEffect(() => {
+        if (autoDismissRef.current) {
+            clearTimeout(autoDismissRef.current)
+            autoDismissRef.current = null
+        }
+        if (!isActive || isAnalyzing) return   // wait until done
+        const isVideoQA = answer?.source === 'video_qa'
+        const timeout = isVideoQA ? VIDEO_AUTO_DISMISS_TIMEOUT : AUTO_DISMISS_TIMEOUT
+        autoDismissRef.current = setTimeout(() => {
+            handleDismiss()
+        }, timeout)
+        return () => {
+            if (autoDismissRef.current) clearTimeout(autoDismissRef.current)
+        }
+    }, [isActive, isAnalyzing, handleDismiss])
 
     // Keyboard dismissal (Escape key)
     useEffect(() => {
@@ -181,9 +193,18 @@ export default function SplitScreen({
             aria-label="Question answer: showing the relevant match moment"
             aria-live="polite"
         >
-            {/* Left Panel - Live Match (60%) */}
+            {/* Left Panel - Live Match Video (60%) */}
             <div className="split-screen-left">
-                {children}
+                {liveVideoUrl ? (
+                    <video
+                        src={liveVideoUrl}
+                        autoPlay
+                        loop
+                        muted
+                        playsInline
+                        style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000' }}
+                    />
+                ) : children}
             </div>
 
             {/* Divider - 2px Slate 800 */}
@@ -236,6 +257,12 @@ export default function SplitScreen({
                             <span className="material-symbols-outlined" style={{ fontSize: '16px', color: '#c3f400' }}>smart_toy</span>
                             <span style={{ fontFamily: "'Space Grotesk', monospace", fontSize: '11px', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#c3c9ae' }}>AI CLIP ANALYSIS</span>
                         </div>
+                        {clipQuestion && (
+                            <div style={{ marginBottom: '10px', padding: '7px 10px', borderRadius: '6px', background: 'rgba(195,244,0,0.06)', border: '1px solid rgba(195,244,0,0.15)' }}>
+                                <span style={{ color: '#c3f400', fontFamily: "'Space Grotesk', monospace", fontSize: '11px', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', display: 'block', marginBottom: '2px' }}>Q</span>
+                                <span style={{ color: '#e5e2e1', fontFamily: "'Inter', sans-serif", fontSize: '13px', lineHeight: 1.5 }}>{clipQuestion}</span>
+                            </div>
+                        )}
 
                         {/* Streaming answer text */}
                         <div style={{ flex: 1, overflow: 'auto', paddingRight: '4px' }}>
@@ -287,7 +314,10 @@ export default function SplitScreen({
                     display: flex;
                     width: 100%;
                     height: 100%;
-                    position: relative;
+                    position: absolute;
+                    top: 0;
+                    left: 0;
+                    z-index: 50;
                     overflow: hidden;
                 }
 

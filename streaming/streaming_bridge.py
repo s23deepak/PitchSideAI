@@ -20,8 +20,9 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-# Add streaming-vlm to Python path
-_STREAMING_VLM_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'streaming-vlm')
+# streaming-vlm-qwen3-rocm is installed as a package (pip install -e).
+# Fallback: add the directory to sys.path for editable installs that aren't on PATH yet.
+_STREAMING_VLM_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'streaming-vlm-qwen3-rocm')
 if os.path.isdir(_STREAMING_VLM_PATH) and _STREAMING_VLM_PATH not in sys.path:
     sys.path.insert(0, _STREAMING_VLM_PATH)
 
@@ -89,7 +90,7 @@ class StreamingBackend(ABC):
 
 class VLLMStreamingBackend(StreamingBackend):
     """
-    Streaming backend using PitchAI's existing vLLM + Qwen2.5-VL-3B-AWQ.
+    Streaming backend using vLLM + Qwen3-VL-2B-Instruct (fits 8GB VRAM).
 
     Simulates streaming by:
     - Accumulating frames into chunks
@@ -97,11 +98,11 @@ class VLLMStreamingBackend(StreamingBackend):
     - Maintaining conversation context across chunks via prompt history
     - NOT using KV-cache persistence (vLLM manages its own cache)
 
-    This works on RTX 5060 (8GB) with AWQ-quantized 3B model.
+    This works on RTX 5060 (8GB) with the 2B model.
     """
 
     def __init__(self, vllm_base_url: str = "http://localhost:8001",
-                 model_name: str = "Qwen/Qwen2.5-VL-3B-Instruct-AWQ",
+                 model_name: str = "Qwen/Qwen3-VL-2B-Instruct",
                  sport: str = "football"):
         self.vllm_base_url = vllm_base_url.rstrip("/")
         self.model_name = model_name
@@ -274,27 +275,26 @@ Commentary Rules:
 
 class StreamingVLMBackend(StreamingBackend):
     """
-    Full StreamingVLM backend using patched Qwen2.5-VL with compact KV-cache.
+    StreamingVLM backend using the local streaming-vlm-qwen3-rocm package.
 
-    Implements the exact StreamingVLM algorithm from MIT HAN Lab:
+    Uses Qwen3-VL with compact KV-cache patches for real-time video understanding:
     - Attention sinks + sliding window for vision and text
     - KV-cache pruning between chunks
-    - Position embedding management (shrink mode)
+    - SDPA attention (ROCm-compatible, no flash-attn dependency)
 
-    Requires MI300X (192GB) or H100 (80GB) — will NOT fit on 8GB.
+    Package: /home/deepu/PitchAI/streaming-vlm-qwen3-rocm
+    Model: Qwen/Qwen3-VL-4B-Instruct (override via STREAMING_VLM_MODEL env var)
     """
 
-    def __init__(self, model_path: str = "mit-han-lab/StreamingVLM",
-                 model_base: str = "Qwen2_5",
+    def __init__(self, model_path: str = "Qwen/Qwen3-VL-4B-Instruct",
                  sport: str = "football",
                  window_size: int = 16,
                  chunk_duration: int = 1,
                  text_round: int = 16,
                  text_sink: int = 512,
                  text_sliding_window: int = 512,
-                 device: str = "cuda"):
+                 device: str = "auto"):
         self.model_path = model_path
-        self.model_base = model_base
         self.sport = sport
         self.window_size = window_size
         self.chunk_duration = chunk_duration
@@ -311,32 +311,33 @@ class StreamingVLMBackend(StreamingBackend):
         self._input_video_path: Optional[str] = None
 
     async def initialize(self):
-        """Load model and processor. Call once per session."""
+        """Load model and processor using local streaming-vlm-qwen3-rocm package."""
         import torch
-        from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
+        from streaming_vlm.inference.inference import StreamingConfig, load_model_and_processor
 
-        logger.info(f"Loading {self.model_path} on {self.device}...")
+        logger.info(f"Loading {self.model_path} via streaming-vlm-qwen3-rocm...")
         loop = asyncio.get_event_loop()
 
         def _load():
-            # Use sdpa (scaled dot-product attention) - works without flash_attn
-            # FlashAttention2 requires flash_attn package which needs custom CUDA build
-            attn_impl = "sdpa"  # Available in PyTorch 2.0+, no extra deps
-            model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-                self.model_path,
-                torch_dtype=torch.bfloat16,
-                device_map=self.device,
-                attn_implementation=attn_impl,
+            config = StreamingConfig(
+                model_path=self.model_path,
+                window_size=self.window_size,
+                text_sink=self.text_sink,
+                text_sliding_window=self.text_sliding_window,
+                chunk_duration=float(self.chunk_duration),
+                attn_implementation="sdpa",
+                device="auto",
+                dtype="bfloat16",
             )
-            # Apply StreamingVLM patches
-            from streaming_vlm.inference.qwen2_5.patch_model import convert_qwen2_5_to_streaming
-            model = convert_qwen2_5_to_streaming(model)
-            processor = AutoProcessor.from_pretrained(self.model_path, use_fast=False)
-            return model, processor
+            return load_model_and_processor(config)
 
         self._model, self._processor = await loop.run_in_executor(None, _load)
         self._initialized = True
-        logger.info(f"StreamingVLM loaded. Memory: {torch.cuda.memory_allocated() / 1e9:.1f}GB")
+        try:
+            import torch
+            logger.info(f"StreamingVLM loaded. VRAM: {torch.cuda.memory_allocated() / 1e9:.1f}GB")
+        except Exception:
+            logger.info("StreamingVLM loaded.")
 
     async def process_chunk(self, chunk: VideoChunk,
                             previous_text: str = "",
@@ -387,51 +388,44 @@ class StreamingVLMBackend(StreamingBackend):
             )
 
     def _run_streaming_inference(self, chunk: VideoChunk, query: str, previous_text: str) -> str:
-        """Run one step of StreamingVLM inference (blocking)."""
-        # This mirrors streaming_vlm/inference/inference.py but adapted for our chunk pipeline
+        """Run VLM inference over sampled frames (blocking)."""
+        import base64
         import torch
-        from streaming_vlm.inference.streaming_args import StreamingArgs
-        from qwen_vl_utils.vision_process import FPS
-        from transformers import set_seed
+        from PIL import Image
+        import io
 
-        set_seed(42)
-        streaming_args = StreamingArgs(pos_mode="shrink", all_text=False)
+        # Build image content list
+        image_content = []
+        for frame in chunk.frames:
+            b64 = base64.b64encode(frame.data).decode("utf-8")
+            image_content.append({"type": "image", "image": f"data:image/jpeg;base64,{b64}"})
 
-        # Build the conversation for this chunk
-        start_time = chunk.start_timestamp_ms / 1000.0
-        chunk_dur = max(chunk.duration_seconds, 0.5)
+        user_content = image_content + [{"type": "text", "text": query}]
 
-        if self._chunk_count == 0:
-            full_history = [
-                {"role": "previous text", "content": previous_text},
-                {"role": "user", "content": [
-                    {"type": "text", "text": f"Time={start_time:.1f}-{start_time + chunk_dur:.1f}s"},
-                    {"type": "text", "text": query},
-                ]}
-            ]
-        else:
-            full_history = [
-                {"role": "user", "content": [
-                    {"type": "text", "text": f"Time={start_time:.1f}-{start_time + chunk_dur:.1f}s"},
-                ]}
-            ]
+        full_history = [
+            {"role": "system", "content": "You are an expert sports analyst. Answer questions about the video frames concisely and accurately in 2-3 sentences."},
+            {"role": "user", "content": user_content},
+        ]
 
         text = self._processor.apply_chat_template(full_history, tokenize=False, add_generation_prompt=True)
-        inputs = self._processor(text=[text], padding=True, return_tensors="pt").to(self.device)
 
-        if streaming_args.pos_mode == "shrink":
-            streaming_args.input_ids = inputs['input_ids']
+        # Resolve actual device from model (device_map='auto' spans CPU/GPU)
+        try:
+            _device = next(self._model.parameters()).device
+        except StopIteration:
+            _device = torch.device('cpu')
+
+        pil_images = [Image.open(io.BytesIO(f.data)) for f in chunk.frames]
+        inputs = self._processor(text=[text], images=pil_images, padding=True, return_tensors="pt").to(_device)
 
         with torch.no_grad():
             outputs = self._model.generate(
                 **inputs,
-                max_new_tokens=50 if self.sport == "football" else 30,
+                max_new_tokens=60,
                 use_cache=True,
                 return_dict_in_generate=True,
-                do_sample=True,
-                temperature=0.9,
-                repetition_penalty=1.05,
-                streaming_args=streaming_args,
+                do_sample=False,
+                repetition_penalty=1.1,
                 pad_token_id=151645,
             )
 
@@ -445,8 +439,10 @@ class StreamingVLMBackend(StreamingBackend):
         self._chunk_count = 0
         self._total_latency_ms = 0.0
         self._input_video_path = None
-        if self._model and torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        if self._model:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     def get_stats(self) -> Dict[str, Any]:
         avg_latency = self._total_latency_ms / max(self._chunk_count, 1)
@@ -501,12 +497,12 @@ class StreamingVLMBackend(StreamingBackend):
 @dataclass
 class StreamingBridgeConfig:
     """Top-level configuration for the streaming vision bridge."""
-    backend: str = "auto"                # "auto" | "vllm" | "sglang" | "streaming_vlm"
+    backend: str = "streaming_vlm"     # "auto" | "vllm" | "sglang" | "streaming_vlm"
     vllm_base_url: str = "http://localhost:8001"
-    vllm_model: str = "Qwen/Qwen2.5-VL-3B-Instruct-AWQ"
+    vllm_model: str = "Qwen/Qwen3-VL-2B-Instruct"
     sglang_base_url: str = "http://localhost:30000"
-    sglang_model: str = "Qwen/Qwen2.5-VL-3B-Instruct"
-    streaming_vlm_model: str = "mit-han-lab/StreamingVLM"
+    sglang_model: str = "Qwen/Qwen3-VL-2B-Instruct"
+    streaming_vlm_model: str = "Qwen/Qwen3-VL-2B-Instruct"
     sport: str = "football"
     # Frame buffer config
     target_fps: float = 8.0
@@ -517,7 +513,7 @@ class StreamingBridgeConfig:
     text_sink: int = 512
     text_sliding_window: int = 512
     # Fallback
-    use_fallback_chain: bool = True      # Use FallbackStreamingBackend for auto-failover
+    use_fallback_chain: bool = False     # True only when backend="auto"; explicit backends never fallback
 
 
 class StreamingVisionBridge:
@@ -562,8 +558,10 @@ class StreamingVisionBridge:
         """Initialize the appropriate backend."""
         from streaming.factory import get_streaming_backend, FallbackStreamingBackend
 
-        if self.config.use_fallback_chain:
-            # Use automatic fallback chain (recommended)
+        # "auto" uses the fallback chain (Level 1→2→3→4).
+        # Any explicit backend ("streaming_vlm", "sglang", "vllm") is used as-is —
+        # no cascade to another backend on failure.
+        if self.config.backend == "auto" or self.config.use_fallback_chain:
             logger.info("Initializing with fallback chain (Level 1→2→3→4)")
             self._backend = FallbackStreamingBackend(start_level=1)
             await self._backend.initialize()

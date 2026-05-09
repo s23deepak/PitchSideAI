@@ -40,10 +40,10 @@ def test_imports():
         return False
 
     try:
-        # Test StreamingVLM imports (requires streaming-vlm in path)
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'streaming-vlm'))
+        # Test StreamingVLM imports (streaming-vlm-qwen3-rocm installed via pip install -e)
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'streaming-vlm-qwen3-rocm'))
         from streaming_vlm.inference.streaming_args import StreamingArgs
-        print("  ✓ StreamingVLM (streaming-vlm in path)")
+        print("  ✓ StreamingVLM qwen3-rocm (installed)")
     except ImportError as e:
         print(f"  ⚠ StreamingVLM: {e} (install dependencies for Level 1)")
 
@@ -58,7 +58,7 @@ def test_sglang_backend():
 
     backend = SGLangStreamingBackend(
         sglang_base_url="http://localhost:30000",
-        model_name="Qwen/Qwen2.5-VL-3B-Instruct",
+        model_name="Qwen/Qwen3-VL-2B-Instruct",
         sport="football",
     )
 
@@ -105,7 +105,7 @@ def test_bridge_config():
     config = StreamingBridgeConfig(
         backend="sglang",
         sglang_base_url="http://localhost:30000",
-        sglang_model="Qwen/Qwen2.5-VL-3B-Instruct",
+        sglang_model="Qwen/Qwen3-VL-2B-Instruct",
         use_fallback_chain=False,
     )
     print(f"  ✓ SGLang config: {config.sglang_base_url}")
@@ -126,7 +126,7 @@ def test_environment_vars():
 
     # Set test env vars
     os.environ["SGLANG_BASE_URL"] = "http://localhost:30000"
-    os.environ["VISION_MODEL"] = "Qwen/Qwen2.5-VL-3B-Instruct"
+    os.environ["VISION_MODEL"] = "Qwen/Qwen3-VL-2B-Instruct"
     os.environ["STREAMING_BACKEND"] = "sglang"
 
     from streaming.factory import get_streaming_backend
@@ -174,8 +174,8 @@ def main():
         print("\n✓ All tests passed!")
         print("\nNext steps:")
         print("1. Install ffmpeg 7: sudo apt install ffmpeg")
-        print("2. Install StreamingVLM deps: cd streaming-vlm && pip install -r infer_requirements.txt")
-        print("3. Start SGLang server: python -m sglang.launch_server --model-path Qwen/Qwen2.5-VL-3B-Instruct --port 30000")
+        print("2. Install StreamingVLM: pip install -e streaming-vlm-qwen3-rocm/")
+        print("3. Start SGLang server: python -m sglang.launch_server --model-path Qwen/Qwen3-VL-2B-Instruct --port 30000")
         print("4. Run: python -m uvicorn api.server:app --reload --port 8080")
         return 0
     else:

@@ -12,7 +12,7 @@
  */
 import { useState, useCallback, useRef } from 'react'
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8080'
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
 /**
  * @typedef {Object} VideoQAState

@@ -83,6 +83,7 @@ export default function FanLensBroadcast() {
   const [bias, setBias] = useState(50)
   const [excitement, setExcitement] = useState(90)
   const [knowledge, setKnowledge] = useState(65)
+  const [broadcastOpen, setBroadcastOpen] = useState(true)
 
   // Language
   const [language, setLanguage] = useState('en')
@@ -96,6 +97,16 @@ export default function FanLensBroadcast() {
   const [splitActive, setSplitActive] = useState(false)
   const [qaAnswer, setQaAnswer] = useState(null)
   const [isDismissing, setIsDismissing] = useState(false)
+
+  // Text input Q&A state
+  const [textInputOpen, setTextInputOpen] = useState(false)
+  const [textQuery, setTextQuery] = useState('')
+
+  // Clip Q&A question
+  const [clipQuestion, setClipQuestion] = useState('')
+
+  // Current video URL playing in VideoCanvas (for SplitScreen left panel)
+  const [canvasVideoUrl, setCanvasVideoUrl] = useState(null)
 
   // Video Q&A hook — hides all backend complexity
   const { isAnalyzing, answer: videoAnswer, error: videoError, videoPreview, analyzeClip, reset: resetVideoQA } = useVideoQA()
@@ -134,12 +145,11 @@ export default function FanLensBroadcast() {
     return () => window.removeEventListener('pitchai:qa_answer', handle)
   }, [isDismissing])
 
-  // When videoAnswer arrives from clip upload, also open split screen
+  // Sync streaming videoAnswer tokens into qaAnswer for SplitScreen
   useEffect(() => {
-    if (videoAnswer && !splitActive) {
-      setQaAnswer({ text: videoAnswer, source: 'video_qa' })
-      setSplitActive(true)
-    }
+    if (!videoAnswer) return
+    setQaAnswer({ text: videoAnswer, source: 'video_qa' })
+    if (!splitActive) setSplitActive(true)
   }, [videoAnswer])
 
   const handleDismiss = useCallback(() => {
@@ -151,10 +161,18 @@ export default function FanLensBroadcast() {
     setTimeout(() => setIsDismissing(false), 300)
   }, [resetVideoQA])
 
+  const handleTextQuerySubmit = useCallback(() => {
+    const q = textQuery.trim()
+    if (!q || !isConnected) return
+    sendQuery(q)
+    setTextQuery('')
+    setTextInputOpen(false)
+  }, [textQuery, sendQuery, isConnected])
+
   const handleFileChange = (e) => {
     const file = e.target.files?.[0]
     if (!file) return
-    analyzeClip(file, '', sport)
+    analyzeClip(file, clipQuestion.trim(), sport)
     // Preview opens split screen while analyzing
     setSplitActive(true)
     setQaAnswer({ text: '', source: 'video_qa', analyzing: true })
@@ -171,7 +189,9 @@ export default function FanLensBroadcast() {
           isActive={splitActive}
           onDismiss={handleDismiss}
           videoPreview={videoPreview}
+          liveVideoUrl={canvasVideoUrl}
           isAnalyzing={isAnalyzing}
+          clipQuestion={clipQuestion}
         />
       }
       videoOverlays={
@@ -290,12 +310,17 @@ export default function FanLensBroadcast() {
             <div style={{ position: 'absolute', inset: 0, border: `1px solid rgba(195,244,0,0.08)`, borderRadius: '12px', pointerEvents: 'none' }} />
 
             {/* Header */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: T.onSurfaceVar, borderBottom: `1px solid ${T.borderDim}`, paddingBottom: '10px' }}>
+            <div
+              onClick={() => setBroadcastOpen(o => !o)}
+              style={{ display: 'flex', alignItems: 'center', gap: '8px', color: T.onSurfaceVar, borderBottom: broadcastOpen ? `1px solid ${T.borderDim}` : 'none', paddingBottom: broadcastOpen ? '10px' : '0', cursor: 'pointer', userSelect: 'none' }}
+            >
               <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>tune</span>
-              <span style={{ fontFamily: T.fontMono, fontSize: '12px', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase' }}>BROADCAST ENGINE</span>
+              <span style={{ fontFamily: T.fontMono, fontSize: '12px', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', flex: 1 }}>BROADCAST ENGINE</span>
+              <span className="material-symbols-outlined" style={{ fontSize: '16px', transition: 'transform 0.2s', transform: broadcastOpen ? 'rotate(0deg)' : 'rotate(-90deg)' }}>expand_more</span>
             </div>
 
             {/* Sliders */}
+            {broadcastOpen && <>
             <SliderRow
               label="Bias" value={bias}
               valueLabel={bias > 60 ? 'Home' : bias < 40 ? 'Away' : 'Neutral'}
@@ -318,6 +343,22 @@ export default function FanLensBroadcast() {
             {/* Video Q&A Upload */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
               <span style={{ fontFamily: T.fontMono, fontSize: '11px', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: T.onSurfaceVar }}>ASK AI ABOUT A CLIP</span>
+              <input
+                type="text"
+                value={clipQuestion}
+                onChange={e => setClipQuestion(e.target.value)}
+                placeholder="What do you want to know? (optional)"
+                disabled={isAnalyzing}
+                style={{
+                  width: '100%', boxSizing: 'border-box',
+                  background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)',
+                  borderRadius: '6px', padding: '7px 10px',
+                  color: '#e5e2e1', fontFamily: "'Inter', sans-serif", fontSize: '12px',
+                  outline: 'none', transition: 'border-color 0.2s',
+                }}
+                onFocus={e => { e.target.style.borderColor = 'rgba(195,244,0,0.5)' }}
+                onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)' }}
+              />
               <label
                 style={{
                   display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
@@ -349,10 +390,11 @@ export default function FanLensBroadcast() {
                 </p>
               )}
             </div>
+            </>}
           </div>
 
-          {/* ── Mic button row — "Hold to Ask AI" pill + mic ── */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '16px', justifyContent: 'flex-end' }}>
+          {/* ── Mic/text button row ── */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
             {/* Pill label */}
             <div style={{
               ...glass, borderRadius: '999px',
@@ -361,14 +403,89 @@ export default function FanLensBroadcast() {
               textTransform: 'uppercase', whiteSpace: 'nowrap',
               boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
             }}>
-              Hold to Ask AI
+              Ask AI
             </div>
 
-            {/* Mic button */}
+            {/* Text input — shown when toggle is open */}
+            {textInputOpen && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', pointerEvents: 'auto' }}>
+                <input
+                  data-testid="text-query-input"
+                  type="text"
+                  value={textQuery}
+                  onChange={e => setTextQuery(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') handleTextQuerySubmit() }}
+                  placeholder="Ask about the match…"
+                  autoFocus
+                  aria-label="Type your question"
+                  style={{
+                    width: '200px',
+                    background: 'rgba(255,255,255,0.07)',
+                    border: `1px solid ${T.primaryContainer}`,
+                    borderRadius: '8px',
+                    color: T.onSurface,
+                    fontFamily: T.fontUI,
+                    fontSize: '13px',
+                    padding: '8px 12px',
+                    outline: 'none',
+                    pointerEvents: 'auto',
+                  }}
+                />
+                <button
+                  data-testid="text-query-submit"
+                  onClick={handleTextQuerySubmit}
+                  aria-label="Send question"
+                  disabled={!textQuery.trim() || !isConnected}
+                  style={{
+                    width: '36px', height: '36px',
+                    background: textQuery.trim() ? T.primaryContainer : 'rgba(255,255,255,0.07)',
+                    border: 'none', borderRadius: '8px',
+                    color: textQuery.trim() ? T.onPrimary : T.onSurfaceVar,
+                    cursor: textQuery.trim() ? 'pointer' : 'default',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    transition: 'background 0.15s, color 0.15s',
+                    pointerEvents: 'auto',
+                  }}
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>send</span>
+                </button>
+              </div>
+            )}
+
+            {/* Keyboard icon toggle */}
+            <button
+              data-testid="text-query-toggle"
+              onClick={() => setTextInputOpen(v => {
+                if (v) setTextQuery('')  // clear draft only when closing
+                return !v
+              })}
+              aria-label="Ask AI by text"
+              aria-pressed={textInputOpen}
+              style={{
+                width: '48px', height: '48px',
+                borderRadius: '50%',
+                background: textInputOpen ? T.primaryContainer : 'rgba(255,255,255,0.08)',
+                border: `1px solid ${textInputOpen ? T.primaryContainer : T.border}`,
+                cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                transition: 'background 0.15s, border-color 0.15s',
+                pointerEvents: 'auto',
+              }}
+            >
+              <span className="material-symbols-outlined" style={{
+                fontSize: '22px',
+                color: textInputOpen ? T.onPrimary : T.onSurface,
+              }}>
+                keyboard
+              </span>
+            </button>
+
+            {/* Mic button — inline in the flex row */}
             <MicButton
               onQuestionSubmit={({ text }) => sendQuery(text)}
               isAiReady={isConnected}
               isSplitScreenActive={splitActive}
+              inline
             />
           </div>
         </>
@@ -380,6 +497,7 @@ export default function FanLensBroadcast() {
         homeTeam={homeTeam}
         awayTeam={awayTeam}
         sport={sport}
+        onVideoReady={(url) => setCanvasVideoUrl(url)}
         onTacticalDetection={(analysis) => {
           updateDetection(analysis)
           sendTacticalDetection(analysis)

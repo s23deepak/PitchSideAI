@@ -108,8 +108,8 @@ temp/
 postgres_data/
 redis_data/
 .mcp.json
-streaming-vlm/
 test_images/*.mp4
 test_images
 tests
 to remove
+Attached Element Context from Integrated

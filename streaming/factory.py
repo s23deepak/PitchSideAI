@@ -96,16 +96,16 @@ def _create_sglang_backend() -> StreamingBackend:
 
 
 def _create_streaming_vlm_backend() -> StreamingBackend:
-    """Create StreamingVLM backend (Level 1 capability)."""
+    """Create StreamingVLM backend using local streaming-vlm-qwen3-rocm package."""
     from streaming.streaming_bridge import StreamingVLMBackend
 
     model_path = os.environ.get(
         "STREAMING_VLM_MODEL",
-        "mit-han-lab/StreamingVLM"
+        "Qwen/Qwen3-VL-4B-Instruct"  # Default for local package (Qwen3-VL, not 2.5)
     )
     sport = os.environ.get("SPORT", "football")
 
-    logger.info(f"Creating StreamingVLM backend: {model_path}")
+    logger.info(f"Creating StreamingVLM backend (local ROCm package): {model_path}")
     return StreamingVLMBackend(
         model_path=model_path,
         sport=sport,

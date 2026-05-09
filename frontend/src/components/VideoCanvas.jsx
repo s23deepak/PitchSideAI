@@ -21,6 +21,7 @@ export default function VideoCanvas({
     sport = 'soccer',
     onTacticalDetection,
     onCommentary,
+    onVideoReady, // (objectUrl: string | null) => void — notifies parent when video loads/clears
 }) {
     // Streaming state
     const [isStreaming, setIsStreaming] = useState(false)
@@ -216,6 +217,7 @@ export default function VideoCanvas({
             videoRef.current.src = url
             videoRef.current.load()
         }
+        onVideoReady?.(url) // notify parent so SplitScreen can mirror the video
     }
 
     const startStreaming = () => {
@@ -236,6 +238,7 @@ export default function VideoCanvas({
         setIsPaused(false)
         setWsReady(false)
         setVideoReady(false)
+        setVideoFile(null)
         setConnectionState('disconnected')
 
         if (captureInterval.current) {
@@ -243,9 +246,13 @@ export default function VideoCanvas({
             captureInterval.current = null
         }
         if (overlayTimeout.current) clearTimeout(overlayTimeout.current)
-        if (videoRef.current) videoRef.current.pause()
+        if (videoRef.current) {
+            videoRef.current.pause()
+            videoRef.current.src = ''
+        }
         wsRef.current?.close()
         wsRef.current = null
+        onVideoReady?.(null) // notify parent video was cleared
     }
 
     const togglePause = () => {
@@ -419,6 +426,8 @@ export default function VideoCanvas({
     return (
         <div className="video-canvas" style={{
             position: 'relative',
+            width: '100%',
+            height: '100%',
             background: 'var(--bg-secondary)',
             borderRadius: 12,
             overflow: 'hidden',
@@ -461,8 +470,8 @@ export default function VideoCanvas({
             {/* Connection indicator */}
             {renderConnectionIndicator()}
 
-            {/* Video + Canvas layer */}
-            <div style={{ position: 'relative', width: '100%', aspectRatio: '16/9', background: 'var(--bg-primary)' }}>
+            {/* Video + Canvas layer — fills full canvas height */}
+            <div style={{ position: 'absolute', inset: 0, background: 'var(--bg-primary)' }}>
                 <video
                     ref={videoRef}
                     onTimeUpdate={() => videoRef.current && setCurrentTime(videoRef.current.currentTime)}
@@ -470,6 +479,8 @@ export default function VideoCanvas({
                     onLoadedData={() => {
                         setVideoReady(true)
                         if (videoRef.current) setDuration(videoRef.current.duration || 0)
+                        // Auto-play as soon as video data is ready
+                        videoRef.current?.play().catch(() => {})
                     }}
                     style={{
                         position: 'absolute',
@@ -544,16 +555,17 @@ export default function VideoCanvas({
             )}
 
             {/* Controls */}
-            {!isStreaming ? (
-                <div style={{ padding: 16 }}>
+            {!videoFile ? (
+                /* No video loaded — show centred drop zone */
+                <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 5 }}>
                     <label style={{
-                        display: 'block',
                         border: '2px dashed var(--border)',
                         borderRadius: 10,
-                        padding: 24,
+                        padding: '32px 48px',
                         textAlign: 'center',
                         cursor: 'pointer',
                         transition: 'border-color 200ms',
+                        background: 'rgba(0,0,0,0.6)',
                     }}
                     onMouseOver={(e) => e.currentTarget.style.borderColor = 'var(--accent-interactive)'}
                     onMouseOut={(e) => e.currentTarget.style.borderColor = 'var(--border)'}
@@ -564,28 +576,48 @@ export default function VideoCanvas({
                             onChange={handleVideoSelect}
                             style={{ display: 'none' }}
                         />
-                        <span style={{ fontSize: 32 }}>📹</span>
-                        <div style={{ marginTop: 8, color: 'var(--text-muted)' }}>
-                            {videoFile ? videoFile.name : 'Upload match footage'}
-                        </div>
+                        <span style={{ fontSize: 40 }}>📹</span>
+                        <div style={{ marginTop: 8, color: 'var(--text-muted)', fontSize: 14 }}>Upload match footage</div>
                     </label>
-                    {videoFile && (
-                        <button
-                            className="btn btn-primary"
-                            onClick={startStreaming}
-                            disabled={!videoReady}
-                            style={{
-                                marginTop: 12,
-                                width: '100%',
-                                padding: '10px 0',
-                            }}
-                        >
-                            {videoReady ? 'Start Streaming' : 'Loading video...'}
-                        </button>
-                    )}
                 </div>
-            ) : (
-                <div style={{ padding: 12, background: 'var(--bg-surface)' }}>
+            ) : videoReady && !isStreaming ? (
+                /* Video playing — overlay controls at bottom */
+                <div style={{
+                    position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 5,
+                    padding: '16px',
+                    background: 'linear-gradient(to top, rgba(0,0,0,0.75) 0%, transparent 100%)',
+                    display: 'flex', alignItems: 'center', gap: 8,
+                }}>
+                    <span style={{ flex: 1, fontSize: 12, color: 'rgba(255,255,255,0.7)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {videoFile?.name}
+                    </span>
+                    <button
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => {
+                            setVideoFile(null)
+                            setVideoReady(false)
+                            if (videoRef.current) videoRef.current.src = ''
+                            onVideoReady?.(null)
+                        }}
+                        style={{ padding: '4px 10px', fontSize: 12 }}
+                    >
+                        Change
+                    </button>
+                    <button
+                        className="btn btn-primary btn-sm"
+                        onClick={startStreaming}
+                        style={{ padding: '4px 10px', fontSize: 12 }}
+                    >
+                        Start AI Analysis
+                    </button>
+                </div>
+            ) : isStreaming ? (
+                /* Streaming — show playback controls overlay at bottom */
+                <div style={{
+                    position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 5,
+                    padding: '12px 16px',
+                    background: 'linear-gradient(to top, rgba(0,0,0,0.75) 0%, transparent 100%)',
+                }}>
                     {/* Progress bar */}
                     <div style={{
                         display: 'flex',
@@ -627,7 +659,7 @@ export default function VideoCanvas({
                         </button>
                     </div>
                 </div>
-            )}
+            ) : null}
 
             {/* Backend config (only when not streaming) */}
             {!isStreaming && (

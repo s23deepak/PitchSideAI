@@ -39,20 +39,15 @@ COMMENTARY_NOTES_LLM_BACKEND = os.getenv(
     "COMMENTARY_NOTES_LLM_BACKEND",
     _d.COMMENTARY_NOTES_LLM_BACKEND,
 )
+STREAMING_BACKEND = os.getenv("STREAMING_BACKEND", _d.STREAMING_BACKEND)
 PORT           = int(os.getenv("PORT",        _d.PORT))
 HOST           = os.getenv("HOST",            _d.HOST)
 LOG_LEVEL      = os.getenv("LOG_LEVEL",       _d.LOG_LEVEL)
 USE_JSON_LOGS  = os.getenv("USE_JSON_LOGS",   str(_d.USE_JSON_LOGS)).lower() == "true"
 LOG_FILE       = os.getenv("LOG_FILE",        _d.LOG_FILE)
 
-OLLAMA_BASE_URL    = os.getenv("OLLAMA_BASE_URL",    _d.OLLAMA_BASE_URL)
-OLLAMA_MODEL       = os.getenv("OLLAMA_MODEL",       _d.OLLAMA_MODEL)
-OLLAMA_VISION_MODEL = os.getenv("OLLAMA_VISION_MODEL", _d.OLLAMA_VISION_MODEL)
-OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", _d.OLLAMA_EMBED_MODEL)
-
 OPENAI_MODEL       = os.getenv("OPENAI_MODEL",       _d.OPENAI_MODEL)
 OPENAI_EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", _d.OPENAI_EMBED_MODEL)
-
 VLLM_BASE_URL    = os.getenv("VLLM_BASE_URL",    _d.VLLM_BASE_URL)
 VLLM_MODEL       = os.getenv("VLLM_MODEL",       _d.VLLM_MODEL)
 VLLM_VISION_MODEL = os.getenv("VLLM_VISION_MODEL", VLLM_MODEL or _d.VLLM_VISION_MODEL)

@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
-STREAMING_VLM_PATH = "/home/deepu/streaming-vlm"
+STREAMING_VLM_PATH = "/home/deepu/PitchAI/streaming-vlm-qwen3-rocm"
 PITCHAI_PATH = "/home/deepu/PitchAI"
 SFT_SCRIPT_TEMPLATE = """#!/bin/bash
 # SFT Training Script for StreamingVLM on AMD MI300X

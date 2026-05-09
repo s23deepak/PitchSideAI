@@ -13,7 +13,7 @@ from datetime import datetime
 import httpx
 from core import get_logger
 from config import (
-    COMMENTARY_NOTES_LLM_BACKEND, LLM_BACKEND, OLLAMA_BASE_URL, OLLAMA_MODEL, OLLAMA_VISION_MODEL,
+    COMMENTARY_NOTES_LLM_BACKEND, LLM_BACKEND,
     OPENAI_API_KEY, OPENAI_MODEL,
     VISION_LLM_BACKEND, VLLM_BASE_URL, VLLM_MODEL, VLLM_VISION_MODEL,
 )
@@ -78,17 +78,16 @@ class BaseAgent(ABC):
         self.backend = _resolve_backend(agent_type)
         self.model_id = model_id
 
-        if self.backend == "ollama":
-            if self.agent_type == "vision":
-                self.model_id = OLLAMA_VISION_MODEL
-            else:
-                self.model_id = OLLAMA_MODEL
-        elif self.backend == "openai":
+        if self.backend == "openai":
             self.model_id = OPENAI_MODEL
         elif self.backend == "vllm":
             self.model_id = VLLM_VISION_MODEL if self.agent_type == "vision" else VLLM_MODEL
         else:
-            raise ValueError(f"Unknown LLM_BACKEND: {self.backend}")
+            raise ValueError(
+                f"Unknown LLM_BACKEND: '{self.backend}'. "
+                "Supported backends: 'vllm', 'openai'. "
+                "Set LLM_BACKEND in your .env file."
+            )
 
     async def call_llm(
         self,
@@ -124,9 +123,7 @@ class BaseAgent(ABC):
 
     def _get_openai_config(self) -> tuple:
         """Return (base_url, api_key) for the active backend."""
-        if self.backend == "ollama":
-            return OLLAMA_BASE_URL, None
-        elif self.backend == "openai":
+        if self.backend == "openai":
             return "https://api.openai.com", OPENAI_API_KEY
         elif self.backend == "vllm":
             return VLLM_BASE_URL, None
@@ -156,7 +153,7 @@ class BaseAgent(ABC):
         video_format: Optional[str] = None,
         response_format: str = "text"
     ) -> str:
-        """Call any OpenAI-compatible API (Ollama, OpenAI, vLLM)."""
+        """Call any OpenAI-compatible API (vLLM or OpenAI)."""
         start_time = datetime.utcnow()
         base_url, api_key = self._get_openai_config()
 

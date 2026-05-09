@@ -27,23 +27,19 @@ USE_JSON_LOGS = True
 LOG_FILE = "logs/pitchside.log"
 
 # ── LLM Backend ───────────────────────────────────────────────────────────────
-# Options: "bedrock", "ollama", "openai", "vllm"
-LLM_BACKEND = "ollama"
-VISION_LLM_BACKEND = "ollama"
-COMMENTARY_NOTES_LLM_BACKEND = "ollama"
-
-# ── Ollama (Local) ────────────────────────────────────────────────────────────
-OLLAMA_BASE_URL = "http://localhost:11434"
-OLLAMA_MODEL = "gemma2:9b"
-OLLAMA_VISION_MODEL = "llama3.2-vision:latest"
-OLLAMA_EMBED_MODEL = "nomic-embed-text"
-
+# Options: "openai", "vllm"
+# Streaming/video pipeline uses: "streaming_vlm", "sglang", "vllm", "auto"
+LLM_BACKEND = "vllm"
+VISION_LLM_BACKEND = "vllm"
+COMMENTARY_NOTES_LLM_BACKEND = "vllm"
+STREAMING_BACKEND = "streaming_vlm"  # Default video/streaming inference backend
 # ── OpenAI ────────────────────────────────────────────────────────────────────
 OPENAI_MODEL = "gpt-4o-mini"
 OPENAI_EMBED_MODEL = "text-embedding-3-small"
 
-# ── vLLM (Self-Hosted) ────────────────────────────────────────────────────────
-VLLM_BASE_URL = "http://localhost:8000"
+# ── vLLM (Self-Hosted, OpenAI-compatible) ────────────────────────────────────
+# Point VLLM_BASE_URL at your running vLLM / SGLang server
+VLLM_BASE_URL = "http://localhost:8001"
 VLLM_MODEL = ""
 VLLM_VISION_MODEL = ""
 VLLM_EMBED_MODEL = ""

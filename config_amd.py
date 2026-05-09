@@ -21,7 +21,7 @@ AMD_DEV_CLOUD = os.environ.get("AMD_DEV_CLOUD", "false").lower() == "true"
 STREAMING_BACKEND = "streaming_vlm"  # Use full StreamingVLM backend on MI300X
 STREAMING_VLM_MODEL_PATH = os.environ.get(
     "STREAMING_VLM_MODEL_PATH",
-    "mit-han-lab/StreamingVLM"
+    "Qwen/Qwen3-VL-2B-Instruct"
 )
 STREAMING_WINDOW_SIZE = int(os.environ.get("STREAMING_WINDOW_SIZE", "16"))
 STREAMING_CHUNK_DURATION = int(os.environ.get("STREAMING_CHUNK_DURATION", "1"))
@@ -42,14 +42,14 @@ LLM_BACKEND = "vllm"
 VISION_LLM_BACKEND = "vllm"
 COMMENTARY_NOTES_LLM_BACKEND = "vllm"
 
-# For MI300X, use unquantized Qwen2.5-VL-7B (fits easily in 192GB)
+# For MI300X/RTX 5060, use Qwen3-VL-2B-Instruct
 VLLM_VISION_MODEL = os.environ.get(
     "VLLM_VISION_MODEL",
-    "Qwen/Qwen2.5-VL-7B-Instruct"
+    "Qwen/Qwen3-VL-2B-Instruct"
 )
 VLLM_MODEL = os.environ.get(
     "VLLM_MODEL",
-    "Qwen/Qwen2.5-7B-Instruct"
+    "Qwen/Qwen3-VL-2B-Instruct"
 )
 VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://localhost:8001")
 
@@ -69,9 +69,9 @@ STREAMING_MAX_CHUNK_FRAMES = int(os.environ.get("STREAMING_MAX_CHUNK_FRAMES", "4
 STREAMING_CHUNK_INTERVAL = int(os.environ.get("STREAMING_CHUNK_INTERVAL", "5"))
 
 # ── SFT Configuration (Track 2) ───────────────────────────────────────────────
-SFT_MODEL_PATH = os.environ.get("SFT_MODEL_PATH", "mit-han-lab/StreamingVLM")
+SFT_MODEL_PATH = os.environ.get("SFT_MODEL_PATH", "Qwen/Qwen3-VL-2B-Instruct")
 SFT_DATASET_PATH = os.environ.get("SFT_DATASET_PATH", "/mnt/data/sft/commentary_sft.jsonl")
-SFT_OUTPUT_DIR = os.environ.get("SFT_OUTPUT_DIR", "/mnt/data/checkpoints/pitchai-streaming-vlm")
+SFT_OUTPUT_DIR = os.environ.get("SFT_OUTPUT_DIR", "/mnt/data/checkpoints/pitchai-qwen3-rocm")
 SFT_WINDOW_SIZE = 16
 SFT_CHUNK_DURATION = 1
 SFT_NUM_EPOCHS = 3

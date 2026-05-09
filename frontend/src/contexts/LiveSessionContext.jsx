@@ -45,6 +45,7 @@ export function LiveSessionProvider({
     const sessionPromiseRef = useRef(null)
     const activeSessionKeyRef = useRef(null)
     const abortControllerRef = useRef(null)
+    const reconnectTimerRef = useRef(null)
 
     // Pending settings/language queue (for when WS isn't ready)
     const pendingSettingsRef = useRef(null)
@@ -175,6 +176,13 @@ export function LiveSessionProvider({
                 sessionPromiseRef.current = null
                 setIsConnected(false)
                 setLiveSessionReady(false)
+                // Schedule reconnect so the mic/AI-ready state recovers automatically
+                if (reconnectTimerRef.current === null) {
+                    reconnectTimerRef.current = setTimeout(() => {
+                        reconnectTimerRef.current = null
+                        ensureLiveSession().catch(() => {})
+                    }, 5000)
+                }
             }
         }).finally(() => {
             sessionPromiseRef.current = null
@@ -183,10 +191,33 @@ export function LiveSessionProvider({
         return sessionPromiseRef.current
     }, [homeTeam, awayTeam, sport, matchSession])
 
-    // Initialize live session when matchSession is ready
+    // Initialize live session when matchSession is ready, with auto-reconnect on failure
     useEffect(() => {
-        if (matchSession) {
-            ensureLiveSession().catch((err) => console.warn('[LiveSession] Init failed:', err))
+        if (!matchSession) return
+
+        let cancelled = false
+
+        const connect = () => {
+            if (cancelled) return
+            ensureLiveSession().catch((err) => {
+                console.warn('[LiveSession] Init failed:', err)
+                // Retry after 5 s if not already connected and not cancelled
+                if (!cancelled) {
+                    reconnectTimerRef.current = setTimeout(() => {
+                        if (!cancelled) connect()
+                    }, 5000)
+                }
+            })
+        }
+
+        connect()
+
+        return () => {
+            cancelled = true
+            if (reconnectTimerRef.current) {
+                clearTimeout(reconnectTimerRef.current)
+                reconnectTimerRef.current = null
+            }
         }
     }, [matchSession, ensureLiveSession])
 

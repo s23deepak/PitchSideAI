@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 import os
 import structlog
 
-from config import AWS_REGION, PORT, LOG_LEVEL
+from config import AWS_REGION, PORT, LOG_LEVEL, STREAMING_BACKEND
 from config.sports import SportType
 from core import setup_logging, get_logger, get_rate_limiter, RateLimitConfig
 from core.exceptions import RateLimitError, WorkflowExecutionError
@@ -133,6 +133,30 @@ async def rate_limit_check(client_id: str = "anonymous") -> None:
 
 # ── Application Lifespan ───────────────────────────────────────────────────────
 
+# Singleton streaming backend — loaded once, reused across all /api/v1/video/qa requests
+_streaming_vlm_singleton: Optional[Any] = None
+_streaming_vlm_lock = asyncio.Lock()
+
+
+async def get_or_init_streaming_backend(backend: str):
+    """Return a cached backend, initializing it on first call."""
+    global _streaming_vlm_singleton
+    if _streaming_vlm_singleton is not None:
+        return _streaming_vlm_singleton
+    async with _streaming_vlm_lock:
+        # Double-check after acquiring lock
+        if _streaming_vlm_singleton is not None:
+            return _streaming_vlm_singleton
+        from streaming.factory import FallbackStreamingBackend, get_streaming_backend as _gsb
+        if backend == "auto":
+            _b = FallbackStreamingBackend(start_level=1)
+        else:
+            _b = _gsb(backend=backend)
+        await _b.initialize()
+        _streaming_vlm_singleton = _b
+        return _b
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application startup and shutdown."""
@@ -143,6 +167,15 @@ async def lifespan(app: FastAPI):
 
     # Start task queue processor
     task_processor = asyncio.create_task(orchestrator.process_task_queue())
+
+    # Pre-warm the streaming VLM backend so first video Q&A request is fast
+    if STREAMING_BACKEND == "streaming_vlm" or STREAMING_BACKEND == "auto":
+        try:
+            logger.info("Pre-warming StreamingVLM backend...")
+            await get_or_init_streaming_backend(STREAMING_BACKEND)
+            logger.info("StreamingVLM backend warmed up and ready.")
+        except Exception as exc:
+            logger.warning(f"StreamingVLM pre-warm failed (will init on first request): {exc}")
 
     yield
 
@@ -400,19 +433,9 @@ Translation:"""
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             # Use the configured LLM backend for translation
-            from config import LLM_BACKEND, OLLAMA_BASE_URL, OPENAI_API_KEY, OPENAI_MODEL
+            from config import LLM_BACKEND, OPENAI_API_KEY, OPENAI_MODEL, VLLM_BASE_URL, VLLM_MODEL
 
-            if LLM_BACKEND == "ollama":
-                response = await client.post(
-                    f"{OLLAMA_BASE_URL}/v1/chat/completions",
-                    json={
-                        "model": "qwen2.5:3b",
-                        "messages": [{"role": "user", "content": prompt}],
-                        "temperature": 0.3,
-                        "max_tokens": 500,
-                    },
-                )
-            elif LLM_BACKEND == "openai":
+            if LLM_BACKEND == "openai":
                 response = await client.post(
                     "https://api.openai.com/v1/chat/completions",
                     json={
@@ -423,8 +446,18 @@ Translation:"""
                     },
                     headers={"Authorization": f"Bearer {OPENAI_API_KEY}"} if OPENAI_API_KEY else {},
                 )
+            elif LLM_BACKEND == "vllm":
+                response = await client.post(
+                    f"{VLLM_BASE_URL}/v1/chat/completions",
+                    json={
+                        "model": VLLM_MODEL or "",
+                        "messages": [{"role": "user", "content": prompt}],
+                        "temperature": 0.3,
+                        "max_completion_tokens": 500,
+                    },
+                )
             else:
-                # Default: return original text if no translation backend available
+                # Unknown backend
                 logger.warning("translation_unavailable", backend=LLM_BACKEND)
                 return text
 
@@ -840,6 +873,7 @@ async def video_qa(
     video: UploadFile = File(...),
     query: str = Form(default=""),
     sport: str = Form(default="soccer"),
+    backend: str = Form(default=STREAMING_BACKEND),  # "streaming_vlm" | "sglang" | "vllm" | "auto"
 ) -> StreamingResponse:
     """
     Upload a video clip and ask an AI question about it.
@@ -856,7 +890,6 @@ async def video_qa(
       Level 4: vLLM frame-by-frame (always available)
     """
     import json as _json
-    from streaming.factory import FallbackStreamingBackend
 
     video_bytes = await video.read()
     default_query = (
@@ -866,15 +899,14 @@ async def video_qa(
     question = query.strip() or default_query
 
     async def event_stream():
-        backend = FallbackStreamingBackend(start_level=1)
         try:
-            await backend.initialize()
+            _backend = await get_or_init_streaming_backend(backend)
         except Exception as e:
             yield f"data: {_json.dumps({'type': 'error', 'message': str(e)})}\n\n"
             return
 
-        level = getattr(backend, 'current_level', 4)
-        model = os.environ.get("VISION_MODEL", "Qwen/Qwen2.5-VL-3B-Instruct-AWQ")
+        level = getattr(_backend, 'current_level', backend)
+        model = os.environ.get("STREAMING_VLM_MODEL", "Qwen/Qwen3-VL-4B-Instruct")
         yield f"data: {_json.dumps({'type': 'meta', 'backend_level': level, 'model': model})}\n\n"
 
         try:
@@ -893,14 +925,21 @@ async def video_qa(
                     cap = cv2.VideoCapture(tmp_path)
                     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
                     fps_v = cap.get(cv2.CAP_PROP_FPS) or 25.0
-                    # Sample at most 8 evenly-spaced frames
-                    indices = [int(i * total / min(8, total)) for i in range(min(8, total))]
+                    # Sample 2 evenly-spaced frames (fewer visual tokens = faster)
+                    n_frames = min(2, total)
+                    indices = [int(i * total / n_frames) for i in range(n_frames)]
                     for idx in indices:
                         cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
                         ok, frame = cap.read()
                         if not ok:
                             continue
-                        _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                        # Resize to 280px on longest side — 280/14=20 patches/dim → 400 patches/frame
+                        # vs 448px which gives 1024 patches/frame (2.5x more VRAM pressure)
+                        h, w = frame.shape[:2]
+                        scale = 280 / max(h, w)
+                        if scale < 1.0:
+                            frame = cv2.resize(frame, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+                        _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
                         frames.append(FrameSample(
                             data=jpeg.tobytes(),
                             timestamp_ms=int((idx / fps_v) * 1000),
@@ -928,8 +967,12 @@ async def video_qa(
                 duration_seconds=(frames[-1].timestamp_ms - frames[0].timestamp_ms) / 1000.0,
                 chunk_index=0,
             )
-            result = await backend.process_chunk(chunk, query_hint=question)
-            text = result.get("analysis") or result.get("text") or str(result)
+            result = await _backend.process_chunk(chunk, query_hint=question)
+            # StreamingResult is a dataclass; dicts also supported
+            if isinstance(result, dict):
+                text = result.get("analysis") or result.get("text") or str(result)
+            else:
+                text = getattr(result, 'commentary', None) or getattr(result, 'analysis', None) or str(result)
 
             # Stream as tokens (sentence-level for smooth UI)
             import re as _re
@@ -942,7 +985,7 @@ async def video_qa(
             logger.error("video_qa_stream_failed", error=str(e))
             yield f"data: {_json.dumps({'type': 'error', 'message': str(e)})}\n\n"
         finally:
-            await backend.reset()
+            # Don't reset the singleton — keep model warm for next request
             yield "data: [DONE]\n\n"
 
     return StreamingResponse(
@@ -1116,35 +1159,16 @@ async def live_audio_ws(websocket: WebSocket):
 
         await manager.connect(workflow_id, websocket)
 
-        await manager.send(websocket, {
-            "type": "status",
-            "message": f"Researching {home_team} vs {away_team}...",
-            "workflow_id": workflow_id,
-            "match_session": match_session,
-        })
-
         # Load NotesStore if available from pre-match generation
         notes_store = manager.get_notes(match_session)
-        await agent.start_session(
-            home_team, away_team, sport,
-            match_session=match_session,
-            notes_store=notes_store,
-        )
 
         # Story 2.2 + 2.4: Initialize parallel Q&A runner
         from agents.qa_runner import QARunner
         qa_runner = QARunner(sport=sport)
-        await qa_runner.initialize_session(
-            home_team=home_team,
-            away_team=away_team,
-            notes_store=notes_store,
-        )
         manager.store_qa_runner(match_session, qa_runner)
 
-        # Load lineup data for player ID (from notes or pre-match data)
-        if notes_store and hasattr(notes_store, 'lineup_data'):
-            qa_runner.player_id_agent.set_lineup_data(notes_store.lineup_data)
-
+        # Send ready immediately — session init runs in the background so the
+        # frontend connects without waiting for the LLM to warm up.
         await manager.send(websocket, {
             "type": "ready",
             "message": "Session ready. Commentary will fire on events, frame detections, and every 60 s. Q&A available with player identification.",
@@ -1152,6 +1176,42 @@ async def live_audio_ws(websocket: WebSocket):
             "has_notes_store": notes_store is not None,
             "qa_enhanced": True,  # Story 2.2 + 2.4 flag
         })
+
+        # Background: build match brief + initialize Q&A (may be slow on first load)
+        async def _init_session():
+            try:
+                await asyncio.wait_for(
+                    agent.start_session(
+                        home_team, away_team, sport,
+                        match_session=match_session,
+                        notes_store=notes_store,
+                    ),
+                    timeout=30.0,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("start_session timed out — continuing without match brief")
+            except Exception as exc:
+                logger.warning("start_session failed: %s", exc)
+
+            try:
+                await asyncio.wait_for(
+                    qa_runner.initialize_session(
+                        home_team=home_team,
+                        away_team=away_team,
+                        notes_store=notes_store,
+                    ),
+                    timeout=30.0,
+                )
+                if notes_store and hasattr(notes_store, 'lineup_data'):
+                    qa_runner.player_id_agent.set_lineup_data(notes_store.lineup_data)
+                await manager.send(websocket, {
+                    "type": "status",
+                    "message": f"Match brief ready for {home_team} vs {away_team}.",
+                })
+            except Exception as exc:
+                logger.warning("qa_runner.initialize_session failed: %s", exc)
+
+        asyncio.create_task(_init_session())
 
         # Start periodic commentary background task
         periodic_task = asyncio.create_task(
@@ -1443,11 +1503,9 @@ async def live_audio_ws(websocket: WebSocket):
                         continue
 
                     # Story 2.2 + 2.4: Parallel Q&A with Player ID + Live Vision
-                    # Get current frame from game state (in prod, from streaming bridge)
-                    current_frame_b64 = None  # Would come from StreamingVisionBridge
-
                     # Get latest vision tactical context from streaming bridge
                     vision_context = manager.get_vision_context(match_session)
+                    current_frame_b64 = vision_context.get("current_frame_b64") if vision_context else None
 
                     result = await _handle_fan_query_parallel(
                         question=query_text,
@@ -1486,6 +1544,9 @@ async def live_audio_ws(websocket: WebSocket):
                     # Add Story 2.4: Overlay coordinates for SVG rendering
                     if result.get("overlay_coordinates"):
                         answer_payload["overlay_coordinates"] = result["overlay_coordinates"]
+
+                    # Add backend level for UI debugging / transparency
+                    answer_payload["backend_level"] = result.get("backend_level", 4)
 
                     await manager.send(websocket, answer_payload)
 
@@ -1716,7 +1777,7 @@ async def _process_video_chunk(
 
 class StreamingVideoConfig(BaseModel):
     """Configuration for StreamingVisionBridge video streaming."""
-    backend: str = Field(default="vllm", pattern="^(vllm|streaming_vlm)$")
+    backend: str = Field(default=STREAMING_BACKEND, pattern="^(auto|vllm|sglang|streaming_vlm)$")
     chunk_interval_seconds: int = Field(default=5, ge=1, le=30)
     max_chunk_frames: int = Field(default=24, ge=4, le=48)
     target_fps: float = Field(default=8.0, ge=1.0, le=30.0)
@@ -1773,7 +1834,10 @@ async def streaming_video_ws(websocket: WebSocket):
         config_data = init_data.get("config", {})
         streaming_config = StreamingVideoConfig(**config_data)
 
-        # Initialize StreamingVisionBridge with fallback chain
+        # Initialize StreamingVisionBridge.
+        # Explicit backend ("streaming_vlm", "sglang", "vllm") → no fallback cascade.
+        # "auto" → fallback chain (Level 1→2→3→4).
+        explicit_backend = streaming_config.backend != "auto"
         bridge_config = StreamingBridgeConfig(
             backend=streaming_config.backend,  # "auto" | "vllm" | "sglang" | "streaming_vlm"
             sport=streaming_config.sport,
@@ -1782,7 +1846,7 @@ async def streaming_video_ws(websocket: WebSocket):
             max_chunk_frames=streaming_config.max_chunk_frames,
             sglang_base_url=os.environ.get("SGLANG_BASE_URL", "http://localhost:30000"),
             sglang_model=os.environ.get("VISION_MODEL", "Qwen/Qwen2.5-VL-3B-Instruct"),
-            use_fallback_chain=True,  # Enable auto-fallback (Level 1→2→3→4)
+            use_fallback_chain=not explicit_backend,  # fallback only for "auto"
         )
         bridge = StreamingVisionBridge(bridge_config)
         await bridge.initialize()
@@ -1802,7 +1866,10 @@ async def streaming_video_ws(websocket: WebSocket):
         )
         workflow_id = await orchestrator.start_workflow(context)
         await manager.connect(workflow_id, websocket)
-        await live_agent.start_session(home_team, away_team, sport, match_session=match_session)
+        asyncio.create_task(asyncio.wait_for(
+            live_agent.start_session(home_team, away_team, sport, match_session=match_session),
+            timeout=30.0,
+        ))
 
         await manager.send(websocket, {
             "type": "ready",
