@@ -288,6 +288,9 @@ Keep to 2-3 sentences."""
 
     def _infer_vulnerabilities(self, lineup: List[Dict[str, Any]]) -> List[str]:
         """Infer structural vulnerabilities from the verified lineup composition."""
+        if not lineup:
+            return []
+
         summary = self._summarize_lineup(lineup)
         vulnerabilities = []
         if summary["defense"]["players"] < 3:
@@ -332,4 +335,3 @@ Provide expected tactical adjustments and key battles to watch."""
     async def close(self):
         """Clean up resources."""
         pass
-

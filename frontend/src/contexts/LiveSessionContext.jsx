@@ -249,6 +249,12 @@ export function LiveSessionProvider({
         // Create new abort controller
         abortControllerRef.current = new AbortController()
 
+        const addLog = (message, type = 'info') => {
+            const now = new Date()
+            const time = now.toLocaleTimeString('en-GB', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
+            setLiveLogs(prev => [...prev, { time, message, type }])
+        }
+
         try {
             const res = await fetch(`${BACKEND}/api/v1/commentary/prepare-notes`, {
                 method: 'POST',
@@ -268,13 +274,6 @@ export function LiveSessionProvider({
             const reader = res.body.getReader()
             const decoder = new TextDecoder()
             let buffer = ''
-
-            // Helper to add log entry
-            const addLog = (message, type = 'info') => {
-                const now = new Date()
-                const time = now.toLocaleTimeString('en-GB', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
-                setLiveLogs(prev => [...prev, { time, message, type }])
-            }
 
             while (true) {
                 const { done, value } = await reader.read()

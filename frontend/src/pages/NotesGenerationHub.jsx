@@ -110,7 +110,8 @@ export default function NotesGenerationHub() {
     // Derive agent states from buildProgress
     // buildProgress is a float 0-1 representing overall completion
     const progressValue = parseFloat(buildProgress) || 0
-    const progressPercent = Math.round(progressValue * 100)
+    const progressPercent = Math.max(0, Math.min(100, progressValue * 100))
+    const progressPercentLabel = `${progressPercent.toFixed(1)}%`
 
     // Agent completion thresholds based on overall progress
     const getAgentStatus = (agentId, threshold) => {
@@ -206,9 +207,9 @@ export default function NotesGenerationHub() {
                 {/* Header */}
                 <header className="notes-hub-header">
                     <div>
-                        <h1 className="notes-hub-title">Generation Pipeline</h1>
+                        <h1 className="notes-hub-title">Full Notes Pipeline</h1>
                         <p className="notes-hub-subtitle">
-                            Pre-match analysis sequence {buildStatus === 'ready' ? 'complete' : 'in progress'}.
+                            Research, audit, and organize the complete commentary-notes artifact for {homeTeam} vs {awayTeam}.
                         </p>
                     </div>
                     <div className="notes-hub-status-badge">
@@ -227,7 +228,7 @@ export default function NotesGenerationHub() {
                                 <span className="material-icons">hub</span>
                             </div>
                             <div>
-                                <h2>Agent Swarm Progress</h2>
+                                <h2>Research Agent Progress</h2>
                                 <p>
                                     {buildStatus === 'ready'
                                         ? 'All agents completed successfully'
@@ -249,7 +250,7 @@ export default function NotesGenerationHub() {
                         <div className="notes-hub-progress-container">
                             <div className="notes-hub-progress-label">
                                 <span>Overall Completion</span>
-                                <span>{progressPercent}%</span>
+                                <span>{progressPercentLabel}</span>
                             </div>
                             <div className="notes-hub-progress-bar">
                                 <div
@@ -269,7 +270,7 @@ export default function NotesGenerationHub() {
                         disabled={buildingNotes}
                     >
                         <span className="material-icons">{buildingNotes ? 'sync' : 'play_arrow'}</span>
-                        {buildingNotes ? 'Generating...' : 'Generate Commentary Notes'}
+                        {buildingNotes ? 'Generating Full Notes...' : 'Generate Full Commentary Notes'}
                     </button>
                 )}
 

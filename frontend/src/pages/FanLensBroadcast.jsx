@@ -73,8 +73,10 @@ function SliderRow({ label, valueLabel, value, onChange }) {
 export default function FanLensBroadcast() {
   const {
     homeTeam, awayTeam, sport, matchSession,
+    commentaryData, buildingNotes, buildStatus, buildProgress,
     liveCommentary, isConnected,
-    sendTacticalDetection, sendQuery,
+    sendTacticalDetection,
+    prepareNotes,
     updateSettings, updateLanguage,
     addCommentaryItem, updateDetection,
   } = useLiveSession()
@@ -188,16 +190,13 @@ export default function FanLensBroadcast() {
       window.dispatchEvent(new CustomEvent('pitchai:streaming_query', { detail: { text } }))
       return
     }
-    if (isConnected) {
-      sendQuery(text)
-      return
-    }
     setQaAnswer({
-      text: 'Start the video stream first so I can answer from the live video.',
+      text: 'Upload your own match footage first so Fan Lens can answer from the video. Team context and broadcast notes can be prepared before upload.',
       source: 'system',
+      question: text,
     })
     setSplitActive(true)
-  }, [streamingStatus.hasVideo, streamingStatus.videoReady, streamingStatus.wsReady, isConnected, sendQuery])
+  }, [streamingStatus.hasVideo, streamingStatus.videoReady, streamingStatus.wsReady])
 
   const handleTextQuerySubmit = useCallback(() => {
     const q = textQuery.trim()
@@ -208,6 +207,19 @@ export default function FanLensBroadcast() {
   }, [textQuery, submitFanQuestion])
 
   const shortName = (t, n) => (t || n).slice(0, 3).toUpperCase()
+  const hasPreparedNotes = buildStatus === 'ready' && Boolean(commentaryData)
+  const hasUsableTeams = homeTeam !== 'Home Team' && awayTeam !== 'Away Team'
+  const noteProgressValue = Number.parseFloat(buildProgress)
+  const noteProgress =
+    Number.isFinite(noteProgressValue)
+      ? `${(Math.max(0, Math.min(100, noteProgressValue * 100))).toFixed(1)}%`
+      : buildProgress || 'Preparing...'
+
+  const handlePrepareNotes = () => {
+    if (!buildingNotes && hasUsableTeams) {
+      prepareNotes(homeTeam, awayTeam)
+    }
+  }
 
   return (
     <FanLensLayout
@@ -316,9 +328,52 @@ export default function FanLensBroadcast() {
               </div>
             </>
           ) : (
-            <p style={{ color: T.onSurfaceVar, fontFamily: T.fontUI, fontSize: '14px', lineHeight: '20px', margin: 0 }}>
-              Waiting for match events…
-            </p>
+            <>
+              <h3 style={{ color: T.onSurface, fontFamily: T.fontUI, fontSize: '16px', lineHeight: '22px', fontWeight: 700, margin: 0 }}>
+                {hasUsableTeams ? `${homeTeam} vs ${awayTeam}` : 'Match context not set'}
+              </h3>
+              <p style={{ color: T.onSurfaceVar, fontFamily: T.fontUI, fontSize: '13px', lineHeight: '19px', margin: 0 }}>
+                {streamingStatus.hasVideo
+                  ? 'Footage is loaded. Start commentary to analyze the clip.'
+                  : 'Upload footage you have the right to use for video-aware commentary and Q&A.'}
+              </p>
+              <div style={{ display: 'grid', gap: '6px', marginTop: '4px' }}>
+                {[
+                  { label: 'Team context', value: hasUsableTeams ? 'Ready' : 'Sample' },
+                  { label: 'Broadcast notes', value: hasPreparedNotes ? 'Ready' : buildingNotes ? noteProgress : 'Not generated' },
+                  { label: 'Video analysis', value: streamingStatus.hasVideo ? 'Footage loaded' : 'Upload required' },
+                ].map((row) => (
+                  <div key={row.label} style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', color: T.onSurfaceVar, fontFamily: T.fontMono, fontSize: '11px' }}>
+                    <span>{row.label}</span>
+                    <span style={{ color: row.value === 'Ready' || row.value === 'Footage loaded' ? T.primaryContainer : T.onSurfaceVar }}>{row.value}</span>
+                  </div>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={handlePrepareNotes}
+                disabled={!hasUsableTeams || buildingNotes || hasPreparedNotes}
+                style={{
+                  marginTop: '6px',
+                  width: '100%',
+                  minHeight: '34px',
+                  borderRadius: '6px',
+                  border: `1px solid ${hasPreparedNotes ? 'rgba(195,244,0,0.35)' : T.border}`,
+                  background: hasPreparedNotes ? 'rgba(195,244,0,0.08)' : 'rgba(255,255,255,0.06)',
+                  color: hasPreparedNotes ? T.primaryContainer : T.onSurface,
+                  fontFamily: T.fontMono,
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  letterSpacing: '0.08em',
+                  textTransform: 'uppercase',
+                  cursor: !hasUsableTeams || buildingNotes || hasPreparedNotes ? 'default' : 'pointer',
+                  opacity: !hasUsableTeams ? 0.5 : 1,
+                  pointerEvents: 'auto',
+                }}
+              >
+                {hasPreparedNotes ? 'Notes Ready' : buildingNotes ? 'Generating Notes' : 'Generate Notes'}
+              </button>
+            </>
           )}
         </div>
       }

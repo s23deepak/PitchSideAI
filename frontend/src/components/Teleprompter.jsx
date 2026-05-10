@@ -21,6 +21,11 @@ export default function Teleprompter({
     onGenerateNotes,
     liveDetection,
     onBeatChange, // Used for beat change notifications to parent
+    emptyKicker = 'Broadcast Notes',
+    emptyTitle = 'Prepare the narrative sheet',
+    emptyDescription = 'Generate notes before analysis starts. The agent pipeline will collect team form, player context, historical beats, and tactical talking points.',
+    generateLabel = 'Generate Notes',
+    progressTitle = 'Generating Broadcast Notes',
 }) {
     const [activeTab, setActiveTab] = useState('match_info')
     const [isLongSheetMode, setIsLongSheetMode] = useState(false)
@@ -32,6 +37,18 @@ export default function Teleprompter({
     const userScrollTimeoutRef = useRef(null)
     const autoScrollAnimationRef = useRef(null)
     const isMountedRef = useRef(true) // Fix #4: Prevent setState on unmounted component
+
+    const numericProgress = Number.parseFloat(buildProgress)
+    const hasNumericProgress = Number.isFinite(numericProgress)
+    const progressPercent = hasNumericProgress
+        ? Math.max(0, Math.min(100, numericProgress * 100))
+        : null
+    const progressLabel = progressPercent !== null
+        ? `${progressPercent.toFixed(1)}%`
+        : buildProgress || 'Processing agents...'
+    const progressWidth = progressPercent !== null
+        ? `${progressPercent}%`
+        : buildStatus === 'loading' ? '60%' : '90%'
 
     // Switch to long-sheet mode when match is live
     useEffect(() => {
@@ -229,71 +246,143 @@ export default function Teleprompter({
         if (!notesData?.markdown_notes) return []
 
         const markdown = notesData.markdown_notes
-        const sectionMarkers = [
-            { id: 'match_info', label: 'Match Info', regex: /^##\s+Match\s+Info/im },
-            { id: 'home_team', label: 'Home Team', regex: /^##\s+Home\s+Team/im },
-            { id: 'away_team', label: 'Away Team', regex: /^##\s+Away\s+Team/im },
-            { id: 'tactical', label: 'Tactical', regex: /^##\s+Tactical/im },
-            { id: 'historical', label: 'Historical', regex: /^##\s+Historical/im },
-        ]
+        const matches = [...markdown.matchAll(/^##\s+(.+)$/gim)]
 
-        const sections = []
-        let lastIndex = 0
+        if (matches.length === 0) {
+            return [{ id: 'full', label: 'Full Notes', content: markdown }]
+        }
 
-        sectionMarkers.forEach((marker, idx) => {
-            const match = marker.regex.exec(markdown)
-            if (match) {
-                const startIdx = match.index
-                const nextMarker = sectionMarkers[idx + 1]
-                const nextMatch = nextMarker ? nextMarker.regex.exec(markdown) : null
-                const endIdx = nextMatch ? nextMatch.index : markdown.length
+        return matches.map((match, idx) => {
+            const startIdx = match.index
+            const nextMatch = matches[idx + 1]
+            const endIdx = nextMatch ? nextMatch.index : markdown.length
+            const rawTitle = match[1].replace(/[:*]/g, '').trim()
+            const label = rawTitle
+                .replace(/^PAGES?\s*\d+(?:\s*[-–]\s*\d+)?\s*/i, '')
+                .trim() || `Section ${idx + 1}`
 
-                sections.push({
-                    id: marker.id,
-                    label: marker.label,
-                    content: markdown.slice(startIdx, endIdx).trim(),
-                })
+            return {
+                id: label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || `section_${idx + 1}`,
+                label,
+                content: markdown.slice(startIdx, endIdx).trim(),
             }
         })
-
-        return sections.length > 0 ? sections : [{ id: 'full', label: 'Full Notes', content: markdown }]
     }
 
     const sections = parseSections()
+    const selectedSection = sections.find((section) => section.id === activeTab) || sections[0]
 
     // Render markdown with basic formatting
     const renderMarkdown = (text) => {
         if (!text) return null
 
         const lines = text.split('\n')
-        return lines.map((line, idx) => {
+        const elements = []
+
+        for (let idx = 0; idx < lines.length; idx += 1) {
+            const line = lines[idx]
             const trimmed = line.trim()
-            if (!trimmed) return <br key={idx} />
+            if (!trimmed) {
+                elements.push(<br key={idx} />)
+                continue
+            }
+
+            if (trimmed === '---') {
+                elements.push(<hr key={idx} className="teleprompter-hr" />)
+                continue
+            }
+
+            if (trimmed.startsWith('|')) {
+                const tableLines = []
+                let tableIdx = idx
+                while (tableIdx < lines.length && lines[tableIdx].trim().startsWith('|')) {
+                    tableLines.push(lines[tableIdx].trim())
+                    tableIdx += 1
+                }
+                const table = renderMarkdownTable(tableLines, idx)
+                if (table) elements.push(table)
+                idx = tableIdx - 1
+                continue
+            }
 
             // Headers
+            if (trimmed.startsWith('# ')) {
+                elements.push(<h3 key={idx} className="teleprompter-h3">{trimmed.slice(2)}</h3>)
+                continue
+            }
             if (trimmed.startsWith('## ')) {
-                return <h3 key={idx} className="teleprompter-h3">{trimmed.slice(3)}</h3>
+                elements.push(<h3 key={idx} className="teleprompter-h3">{trimmed.slice(3)}</h3>)
+                continue
             }
             if (trimmed.startsWith('### ')) {
-                return <h4 key={idx} className="teleprompter-h4">{trimmed.slice(4)}</h4>
+                elements.push(<h4 key={idx} className="teleprompter-h4">{trimmed.slice(4)}</h4>)
+                continue
+            }
+            if (trimmed.startsWith('#### ')) {
+                elements.push(<h4 key={idx} className="teleprompter-h4">{trimmed.slice(5)}</h4>)
+                continue
+            }
+            if (trimmed.startsWith('##### ')) {
+                elements.push(<p key={idx} className="teleprompter-meta-line">{trimmed.slice(6)}</p>)
+                continue
             }
 
             // List items
             if (trimmed.startsWith('- ')) {
-                return (
+                elements.push(
                     <li key={idx} className="teleprompter-li">
                         {renderInlineFormatting(trimmed.slice(2))}
                     </li>
                 )
+                continue
             }
 
             // Bold/italic inline formatting
-            return (
+            elements.push(
                 <p key={idx} className="teleprompter-p">
                     {renderInlineFormatting(trimmed)}
                 </p>
             )
-        })
+        }
+
+        return elements
+    }
+
+    const renderMarkdownTable = (tableLines, keyPrefix) => {
+        const rows = tableLines
+            .filter((line) => !/^\|\s*-+\s*(\|\s*-+\s*)+\|?$/.test(line))
+            .map((line) => line.replace(/^\||\|$/g, '').split('|').map((cell) => cell.trim()))
+            .filter((row) => row.some((cell) => cell && cell !== '-'))
+
+        if (rows.length <= 1) return null
+
+        const [headers, ...bodyRows] = rows
+        if (bodyRows.length === 0) return null
+
+        return (
+            <div key={`table-${keyPrefix}`} className="teleprompter-table-wrap">
+                <table className="teleprompter-table">
+                    <thead>
+                        <tr>
+                            {headers.map((header, idx) => (
+                                <th key={`${keyPrefix}-h-${idx}`}>{renderInlineFormatting(header)}</th>
+                            ))}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {bodyRows.map((row, rowIdx) => (
+                            <tr key={`${keyPrefix}-r-${rowIdx}`}>
+                                {headers.map((_header, cellIdx) => (
+                                    <td key={`${keyPrefix}-c-${rowIdx}-${cellIdx}`}>
+                                        {renderInlineFormatting(row[cellIdx] || '')}
+                                    </td>
+                                ))}
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+        )
     }
 
     const renderInlineFormatting = (text) => {
@@ -367,11 +456,25 @@ export default function Teleprompter({
         return (
             <div className="teleprompter teleprompter-empty" role="complementary" aria-label="Commentary teleprompter">
                 <div className="teleprompter-empty-state">
-                    <div className="empty-icon">📋</div>
-                    <h3>Commentary Notes</h3>
-                    <p>Generate commentary notes to get started.</p>
+                    <div className="empty-icon">
+                        <span className="material-icons">article</span>
+                    </div>
+                    <div className="teleprompter-empty-kicker">{emptyKicker}</div>
+                    <h3>{emptyTitle}</h3>
+                    <p>
+                        {emptyDescription}
+                    </p>
+                    <div className="teleprompter-empty-status" aria-label="Notes setup status">
+                        <span>Source</span>
+                        <strong>Team context</strong>
+                        <span>Video</span>
+                        <strong>Optional for notes</strong>
+                        <span>Output</span>
+                        <strong>Broadcast sheet</strong>
+                    </div>
                     <button className="teleprompter-generate-btn" onClick={onGenerateNotes}>
-                        <span>⚡</span> Generate Commentary Notes
+                        <span className="material-icons">bolt</span>
+                        {generateLabel}
                     </button>
                 </div>
             </div>
@@ -383,11 +486,14 @@ export default function Teleprompter({
         return (
             <div className="teleprompter teleprompter-generating" role="complementary" aria-label="Commentary teleprompter">
                 <div className="teleprompter-progress">
-                    <h3>Generating Commentary Notes...</h3>
-                    <div className="progress-bar">
-                        <div className="progress-fill" style={{ width: buildStatus === 'loading' ? '60%' : '90%' }} />
+                    <div className="empty-icon active">
+                        <span className="material-icons">sync</span>
                     </div>
-                    <p className="progress-status">{buildProgress || 'Processing agents...'}</p>
+                    <h3>{progressTitle}</h3>
+                    <div className="progress-bar">
+                        <div className="progress-fill" style={{ width: progressWidth }} />
+                    </div>
+                    <p className="progress-status">{progressLabel}</p>
                 </div>
             </div>
         )
@@ -403,7 +509,9 @@ export default function Teleprompter({
         return (
             <div className="teleprompter teleprompter-error" role="complementary" aria-label="Commentary teleprompter">
                 <div className="teleprompter-error-state">
-                    <div className="error-icon">❌</div>
+                    <div className="error-icon">
+                        <span className="material-icons">error</span>
+                    </div>
                     <h3>Couldn't generate notes</h3>
                     <p>{buildProgress || 'Generation failed'}</p>
                     <button className="btn btn-secondary" onClick={onGenerateNotes}>
@@ -428,7 +536,8 @@ export default function Teleprompter({
                                 onClick={onGenerateNotes}
                                 title="Generate commentary notes"
                             >
-                                ⚡ Generate Notes
+                                <span className="material-icons">bolt</span>
+                                Generate Notes
                             </button>
                         )}
                         {/* Regenerate Notes button - shown when notes are ready */}
@@ -438,7 +547,8 @@ export default function Teleprompter({
                                 onClick={onGenerateNotes}
                                 title="Regenerate commentary notes"
                             >
-                                🔄 Regenerate Notes
+                                <span className="material-icons">refresh</span>
+                                Regenerate Notes
                             </button>
                         )}
                         <button
@@ -446,7 +556,8 @@ export default function Teleprompter({
                             onClick={() => setIsLongSheetMode(true)}
                             title="Switch to long-sheet mode"
                         >
-                            📜 Long Sheet
+                            <span className="material-icons">article</span>
+                            Long Sheet
                         </button>
                     </div>
                 </div>
@@ -456,7 +567,7 @@ export default function Teleprompter({
                     {sections.map((section) => (
                         <button
                             key={section.id}
-                            className={`teleprompter-tab ${activeTab === section.id ? 'active' : ''}`}
+                            className={`teleprompter-tab ${selectedSection?.id === section.id ? 'active' : ''}`}
                             onClick={() => setActiveTab(section.id)}
                         >
                             {section.label}
@@ -466,13 +577,11 @@ export default function Teleprompter({
 
                 {/* Tab Content */}
                 <div className="teleprompter-content">
-                    {sections
-                        .filter((s) => s.id === activeTab)
-                        .map((section) => (
-                            <div key={section.id} className="teleprompter-section">
-                                {renderMarkdown(section.content)}
-                            </div>
-                        ))}
+                    {selectedSection && (
+                        <div key={selectedSection.id} className="teleprompter-section">
+                            {renderMarkdown(selectedSection.content)}
+                        </div>
+                    )}
                 </div>
 
                 {/* Metadata footer */}
@@ -500,9 +609,10 @@ export default function Teleprompter({
                         className="btn btn-sm btn-ghost"
                         onClick={() => setIsLongSheetMode(false)}
                         title="Switch to tabbed view"
-                    >
-                        📑 Tabbed View
-                    </button>
+                        >
+                            <span className="material-icons">view_week</span>
+                            Tabbed View
+                        </button>
                     {/* Regenerate Notes button (Story 5.5 AC) */}
                     {buildStatus === 'ready' && (
                         <button
@@ -510,7 +620,8 @@ export default function Teleprompter({
                             onClick={onGenerateNotes}
                             title="Regenerate commentary notes"
                         >
-                            🔄 Regenerate Notes
+                            <span className="material-icons">refresh</span>
+                            Regenerate Notes
                         </button>
                     )}
                     {isHoldMode && (

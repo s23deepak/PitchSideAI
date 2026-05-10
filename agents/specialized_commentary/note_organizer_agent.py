@@ -219,6 +219,7 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
         away_team = all_outputs.get("away_team", "Away")
         match_datetime = all_outputs.get("match_datetime", "TBD")
         venue = all_outputs.get("venue", "Unknown")
+        venue_label = self._format_venue_summary(venue)
         tactical_brief = self._build_tactical_brief(all_outputs)
 
         # PAGE 1: Lineups & Match Info
@@ -226,7 +227,7 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
             all_outputs.get("player_research", {}).get("home_team", {}),
             all_outputs.get("player_research", {}).get("away_team", {}),
             match_datetime,
-            venue,
+            venue_label,
             all_outputs.get("weather", {}),
         )
 
@@ -259,7 +260,7 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
         )
 
         return f"""# Commentary Notes: {home_team} vs {away_team}
-#### {match_datetime} | {venue}
+#### {match_datetime} | {venue_label}
 
 {page1}
 
@@ -282,12 +283,26 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
         home_team = home_squad.get("team_name", "Home")
         away_team = away_squad.get("team_name", "Away")
         temp = weather.get("current_conditions", {}).get("temperature_c")
-        conditions = weather.get("current_conditions", {}).get("conditions") or "unavailable"
+        conditions = weather.get("current_conditions", {}).get("conditions") or ""
         wind = weather.get("current_conditions", {}).get("wind_kmh")
         home_players = home_squad.get("players", [])[:11]
         away_players = away_squad.get("players", [])[:11]
 
         lineup_rows = self._format_lineup_rows(home_players, away_players)
+        lineup_block = (
+            f"""**Probable Starters From Available Research**
+
+| {home_team} | Pos | {away_team} |
+|-----------|-----|-----------|
+{lineup_rows}
+
+**Lineup Note**: Treat this as the working XI context for the booth. If the confirmed XI changes, pivot the same cues toward the player profile and role that replaces it."""
+            if lineup_rows
+            else f"""**Opening Shape Cues**
+- {home_team}: watch the first receiver under pressure and the fullback height in buildup.
+- {away_team}: track whether the press protects the middle or invites wide circulation.
+- First dead ball: use the marking scheme as the quickest read on defensive organisation."""
+        )
 
         from datetime import datetime
         try:
@@ -304,15 +319,9 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
 - Date: {friendly_date}
 - Venue: {venue}
 - Weather: {self._format_weather_summary(temp, conditions, wind)}
-- Referee: TBD / Unannounced
+- Referee angle: no referee-driven storyline in the collected feed
 
-**Probable Starters From Available Research**
-
-| {home_team} | Pos | {away_team} |
-|-----------|-----|-----------|
-{lineup_rows}
-
-**Lineup Note**: Derived from currently available researched squad data; official XI may differ.
+{lineup_block}
 """
 
     def _organize_team_analysis_section(
@@ -326,6 +335,7 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
         """Organize team analysis section (Pages 2-3)."""
         team_name = player_research.get("team_name", team_label)
         players = player_research.get("players", [])[:10]  # Top 10 players
+        player_heading = "Key Players (Sorted by Recent Form)" if players else "Player Watch Cues"
 
         form_text = self._clean_analysis_text(form_analysis.get("comprehensive_analysis", ""), team_name)
 
@@ -362,7 +372,7 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
 Composite Analysis:
 {form_section}
 
-#### Key Players (Sorted by Recent Form)
+#### {player_heading}
 
 {self._format_player_list(players)}
 
@@ -372,7 +382,7 @@ Composite Analysis:
 
 #### Tactical Profile
 
-- Verified tactical detail: use matchup analysis and team form sections for evidence-backed trends.
+- Booth cue: tie the first ten minutes back to the form read, the listed player roles, and the matchup notes above.
 """
 
     def _organize_tactical_section(
@@ -398,7 +408,10 @@ Composite Analysis:
 
         # Build narrative with meaningful fallback
         if not narrative:
-            narrative = f"The historical storylines between {home_team} and {away_team} will be enriched as more context becomes available."
+            narrative = (
+                f"Frame {home_team} vs {away_team} through the opening tone: which side settles first, "
+                "which midfield wins second balls, and whether the wide channels produce early pressure."
+            )
         zone_edges = tactical_brief.get("zone_edges", [])
         pressure_points = tactical_brief.get("pressure_points", [])
         commentary_angles = tactical_brief.get("commentary_angles", [])
@@ -444,7 +457,7 @@ Recent H2H Narrative:
 
 #### Weather Impact
 
-{weather_narrative or 'No verified weather edge yet; update this line when match-day conditions are confirmed.'}
+{weather_narrative or 'No weather edge is active in the collected feed; call the match through tempo, surface speed, and player footing if conditions become visible.'}
 
 #### Expected Match Dynamic
 
@@ -522,8 +535,11 @@ Recent H2H Narrative:
         if formatted:
             return "\n".join(formatted)
 
-        # Meaningful fallback when no player data is available
-        return "*Squad details are being finalized. Check official team sources for the latest roster updates.*"
+        return (
+            "- First receiver under pressure: identify who wants the ball when the press arrives.\n"
+            "- Line-breaker: watch who plays or carries through the first defensive line.\n"
+            "- Outlet player: name the wide or forward option the team uses when buildup gets squeezed."
+        )
 
     def _format_news(self, news: Dict[str, Any]) -> str:
         """Format team news for markdown."""
@@ -531,15 +547,19 @@ Recent H2H Narrative:
         synthesis = news.get("synthesis", "")
         news_items = news.get("news_items", [])[:3]
 
-        # Build meaningful summary even when no news
+        synthesis = self._clean_news_text(synthesis)
+
         if not synthesis and not news_items and not injuries:
-            return "*No major team news reported. Lineup and injury updates typically come 1 hour before kickoff.*"
+            return (
+                "No major team-news disruption surfaced. Keep the lead-in focused on form, tactical roles, "
+                "and the first visible selection surprise."
+            )
 
         output = ""
         if synthesis:
             output = f"{synthesis}\n\n"
         else:
-            output = "No major updates to report.\n\n"
+            output = "No major team-news disruption surfaced. Lead with form and tactical role clarity.\n\n"
 
         if news_items:
             output += "**Recent Headlines**:\n"
@@ -557,7 +577,7 @@ Recent H2H Narrative:
                 if player != 'Unknown':
                     output += f"- {player}: {status}\n"
 
-        return output if output.strip() else "*No major team news reported.*"
+        return output if output.strip() else "No major team-news disruption surfaced. Lead with form and tactical role clarity."
 
     def _format_lineup_rows(
         self,
@@ -565,8 +585,11 @@ Recent H2H Narrative:
         away_players: List[Dict[str, Any]],
     ) -> str:
         """Render two researched squads into a simple three-column lineup table."""
+        if not home_players and not away_players:
+            return ""
+
         rows = []
-        max_len = max(len(home_players), len(away_players), 1)
+        max_len = max(len(home_players), len(away_players))
         for idx in range(max_len):
             home = home_players[idx] if idx < len(home_players) else {}
             away = away_players[idx] if idx < len(away_players) else {}
@@ -592,8 +615,10 @@ Recent H2H Narrative:
         if formatted:
             return "\n".join(formatted)
 
-        # Meaningful fallback when no matchup data is available
-        return "*Individual matchup analysis pending official lineup announcements. Check back 1 hour before kickoff for detailed tactical matchups.*"
+        return (
+            "*No clean individual duel was returned in this run. Call the matchup by zone: central buildup versus pressure, "
+            "wide isolation versus fullback cover, and set-piece marking on the first dead ball.*"
+        )
 
     def _format_bullets(self, items: List[str]) -> str:
         """Format a list of text items as markdown bullets."""
@@ -623,7 +648,16 @@ Recent H2H Narrative:
             parts.append(conditions.replace("_", " ").title())
         if wind is not None:
             parts.append(f"{wind} km/h wind")
-        return ", ".join(parts) if parts else "Match-day weather will be updated closer to kickoff"
+        return ", ".join(parts) if parts else "No active weather angle in the collected feed"
+
+    def _format_venue_summary(self, venue: Any) -> str:
+        """Format venue without exposing placeholders as useful facts."""
+        if not isinstance(venue, str):
+            return "No stadium-specific angle in this run"
+        cleaned = venue.strip()
+        if not cleaned or cleaned.lower() in {"unknown", "unknown venue", "tbd", "unavailable", "n/a"}:
+            return "No stadium-specific angle in this run"
+        return cleaned
 
     def _format_match_dynamic(
         self,
@@ -655,13 +689,20 @@ Recent H2H Narrative:
         if bullets:
             return "\n".join(bullets)
 
-        # Meaningful fallback when no specific data is available
-        return "Match dynamics will become clearer as official lineups are announced. Expect tactical battles in midfield and set-piece opportunities to shape the flow."
+        return (
+            "1. Opening control: watch which side turns possession into territory first.\n"
+            "2. Midfield pressure: second balls and first forward pass should define the rhythm.\n"
+            "3. Set-piece cue: use the first corner or wide free kick to read marking confidence."
+        )
 
     def _format_zone_edges(self, positional_strength: Dict[str, Any]) -> List[str]:
         """Summarize zone-level advantages for tactical notes."""
         if not positional_strength:
-            return ["Zone-by-zone analysis pending official lineup confirmation."]
+            return [
+                "Defense: read the first build-out under pressure.",
+                "Midfield: track second-ball control and the first forward pass.",
+                "Attack: watch which wide channel creates the earliest isolation.",
+            ]
 
         zone_order = ["Defense", "Midfield", "Attack"]
         zone_edges = []
@@ -670,7 +711,11 @@ Recent H2H Narrative:
             verdict = zone_data.get("verdict")
             if verdict:
                 zone_edges.append(verdict)
-        return zone_edges or ["Zone-by-zone analysis pending official lineup confirmation."]
+        return zone_edges or [
+            "Defense: read the first build-out under pressure.",
+            "Midfield: track second-ball control and the first forward pass.",
+            "Attack: watch which wide channel creates the earliest isolation.",
+        ]
 
     def _extract_team_plan(self, form_analysis: Dict[str, Any], team_name: str) -> str:
         """Extract a concise tactical route from the form-analysis summary."""
@@ -689,15 +734,20 @@ Recent H2H Narrative:
         """Turn weak-point data into commentary-friendly notes."""
         pressure_points = []
         for note in weak_points.get("home_vulnerabilities", [])[:2]:
-            if note:
-                pressure_points.append(f"{home_team}: {note}")
+            cleaned = self._clean_analysis_text(note)
+            if cleaned and not self._is_unverified_lineup_weakness(cleaned):
+                pressure_points.append(f"{home_team}: {cleaned}")
         for note in weak_points.get("away_vulnerabilities", [])[:2]:
-            if note:
-                pressure_points.append(f"{away_team}: {note}")
+            cleaned = self._clean_analysis_text(note)
+            if cleaned and not self._is_unverified_lineup_weakness(cleaned):
+                pressure_points.append(f"{away_team}: {cleaned}")
         if pressure_points:
             return pressure_points
-        # Meaningful fallback
-        return [f"Key pressure points will emerge as {home_team} and {away_team} reveal their tactical approaches."]
+        return [
+            f"{home_team}: test the first buildup under pressure before naming a structural weakness.",
+            f"{away_team}: watch the wide defensive cover and counter-press reaction in the opening phase.",
+            "First set piece: use the marking and second-ball response as the earliest pressure read.",
+        ]
 
     def _build_commentary_angles(
         self,
@@ -718,7 +768,7 @@ Recent H2H Narrative:
             )
 
         historical_pattern = historical.get("h2h_history", {}).get("patterns", {}).get("pattern")
-        if historical_pattern:
+        if historical_pattern and "limited historical data" not in str(historical_pattern).lower():
             angles.append(f"Frame the rivalry as a {historical_pattern.lower()} head-to-head pattern.")
 
         weather_lever = self._first_sentence(self._clean_weather_narrative(weather.get("narrative", "")))
@@ -726,7 +776,7 @@ Recent H2H Narrative:
             angles.append(f"Weather cue: {weather_lever}")
 
         comparative_line = self._first_sentence(comparative)
-        if comparative_line:
+        if comparative_line and not self._is_low_quality_text(comparative_line):
             angles.append(f"Form cue: {comparative_line}")
 
         if not angles:
@@ -755,7 +805,7 @@ Recent H2H Narrative:
         if self._is_meaningful_form_string(form_string):
             return (
                 f"{team_name}'s recent sequence reads {form_string}. "
-                "Use that as a light form cue, then verify the real tactical tone through tempo, field tilt, and first-half chance quality."
+                "Turn that into a live read on tempo, field tilt, and first-half chance quality."
             )
 
         split = form_analysis.get("home_away_split", {}) if isinstance(form_analysis, dict) else {}
@@ -832,6 +882,12 @@ Recent H2H Narrative:
         lower = cleaned.lower()
         if any(pattern in lower for pattern in self.LOW_QUALITY_PATTERNS):
             return True
+        if "no critical battles identified" in lower:
+            return True
+        if "form favorability:" in lower:
+            return True
+        if "limited historical data" in lower:
+            return True
         if "****" in cleaned or "###" in cleaned:
             return True
         if re.search(r"defensive record of \d+\s+wins?.*\d+\s+loss", lower):
@@ -843,6 +899,10 @@ Recent H2H Narrative:
         if re.search(r"goal-scoring rate.*goals against.*goals scored", lower):
             return True
         if "they have not played any matches" in lower:
+            return True
+        if "not won any matches" in lower or "drawn no matches" in lower:
+            return True
+        if re.search(r"\b\w+'s is stable\b", lower):
             return True
         if "weather conditions remain unknown" in lower:
             return True
@@ -860,6 +920,15 @@ Recent H2H Narrative:
             if re.search(r"\b(home team|away team)\b", lower):
                 return True
         return False
+
+    def _is_unverified_lineup_weakness(self, text: str) -> bool:
+        """Reject lineup weakness labels that are unsafe when starters are missing."""
+        lower = text.lower()
+        return (
+            "verified lineup" in lower
+            or "listed starters" in lower
+            or "low attacking depth" in lower
+        )
 
     def _clean_matchup_analysis(self, text: Any) -> str:
         """Keep matchup blurbs short and remove model-generated markdown scaffolding."""
@@ -880,6 +949,22 @@ Recent H2H Narrative:
         ):
             return ""
         return self._first_two_sentences(cleaned)
+
+    def _clean_news_text(self, text: Any) -> str:
+        """Keep team-news prose useful for the booth and remove dead-end disclaimers."""
+        cleaned = self._clean_analysis_text(text)
+        if not cleaned:
+            return ""
+        lower = cleaned.lower()
+        if (
+            "no recent news available" in lower
+            or "lineup status is unavailable" in lower
+            or "no tactical adjustments are expected" in lower
+            or "check official" in lower
+            or "latest roster updates" in lower
+        ):
+            return ""
+        return cleaned
 
     def _clean_historical_narrative(self, text: Any, home_team: str, away_team: str) -> str:
         """Avoid showing fabricated or contradictory historical copy."""

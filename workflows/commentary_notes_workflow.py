@@ -103,9 +103,13 @@ class CommentaryNotesWorkflow:
         if not state.match_datetime or not state.venue:
             logger.info(f"[{state.workflow_id}] Sequentially fetching match location and schedule...")
             retriever = get_retriever(state.sport)
-            ctx = await retriever.get_match_context(state.home_team, state.sport)
-            state.match_datetime = state.match_datetime or ctx["date"]
-            state.venue = state.venue or ctx["venue"]
+            ctx = await retriever.get_match_context(state.home_team, state.sport) or {}
+            state.match_datetime = (
+                state.match_datetime
+                or ctx.get("date")
+                or datetime.utcnow().isoformat()
+            )
+            state.venue = state.venue or ctx.get("venue") or "Unknown"
 
         return state
 
