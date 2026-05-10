@@ -1,7 +1,7 @@
 # PitchSideAI — HF Space Deployment Validation Report
 
 **Generated:** 2026-05-06  
-**Space URL:** https://huggingface.co/spaces/deepu/PitchSideAI
+**Space URL:** https://huggingface.co/spaces/s23deepak/PitchSideAI
 **Deployment Script:** `scripts/deploy_hf.sh`  
 **Docker SDK:** `docker` (multi-stage build)
 

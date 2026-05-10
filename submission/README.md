@@ -13,7 +13,7 @@ Prepared for the AMD Developer Hackathon on lablab.ai.
 - Slide presentation: `pitchsideai-deck.pdf`
 - Public GitHub repository: `https://github.com/s23deepak/PitchSideAI`
 - Demo application platform: Hugging Face Spaces, Docker SDK
-- Application URL: `https://huggingface.co/spaces/deepu/PitchSideAI` or the direct Space URL shown by Hugging Face.
+- Application URL: `https://huggingface.co/spaces/s23deepak/PitchSideAI` or the direct Space URL shown by Hugging Face.
   - Confirm this Space is public before submitting, or replace it with the live Space URL.
 
 ## Files

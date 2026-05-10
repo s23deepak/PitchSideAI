@@ -43,7 +43,7 @@ Hugging Face Spaces using Docker SDK.
 
 ## Application URL
 
-https://huggingface.co/spaces/deepu/PitchSideAI
+https://huggingface.co/spaces/s23deepak/PitchSideAI
 
 If Hugging Face exposes the direct app endpoint, submit that direct endpoint as the application URL as well.
 
