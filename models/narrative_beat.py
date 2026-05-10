@@ -1,7 +1,7 @@
 """NarrativeBeat dataclass — pure data model for commentary notes."""
 
 from dataclasses import dataclass, field
-from typing import List
+from typing import Dict, List
 
 
 @dataclass
@@ -14,6 +14,8 @@ class NarrativeBeat:
         players: Player names mentioned in this beat.
         section: Which notes section this beat belongs to.
         source: Data provenance (StatsBomb, Firecrawl, FBref).
+        source_urls: URLs or document references supporting the beat.
+        source_attribution: Display-ready source labels/urls for UI transparency.
         confidence: Confidence score in range 0.0-1.0.
     """
 
@@ -22,6 +24,8 @@ class NarrativeBeat:
     players: List[str] = field(default_factory=list)
     section: str = ""
     source: str = ""
+    source_urls: List[str] = field(default_factory=list)
+    source_attribution: List[Dict[str, str]] = field(default_factory=list)
     confidence: float = 0.0
 
     def __post_init__(self) -> None:

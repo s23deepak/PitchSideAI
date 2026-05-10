@@ -24,6 +24,9 @@ class PlayerIdentification:
     source: str = ""  # e.g., "jersey_number + lineup_data"
     jersey_number: Optional[int] = None
     position: Optional[str] = None
+    team_side: Optional[str] = None
+    kit_color: Optional[str] = None
+    pitch_zone: Optional[str] = None
     visual_cues: Dict[str, Any] = field(default_factory=dict)
     qualifier: str = ""  # For medium/low confidence answers
 
@@ -53,6 +56,12 @@ CUE_WEIGHTS = {
     "position": 0.20,  # 20% weight
     "movement_pattern": 0.15,  # 15% weight
     "build": 0.15,  # 15% weight
+}
+
+CONTEXT_CUE_WEIGHTS = {
+    "kit_color": 0.08,
+    "team_side": 0.08,
+    "pitch_zone": 0.06,
 }
 
 CONTEXTUAL_BONUS = 0.10  # +10% if matches lineup + recent touch
@@ -87,6 +96,7 @@ class PlayerIDAgent(BaseVisionAgent):
         self.log_event("lineup_data_loaded", {
             "home_xi_count": len(lineup.get("home_xi", [])),
             "away_xi_count": len(lineup.get("away_xi", [])),
+            "has_kit_context": bool(lineup.get("home_kit") or lineup.get("away_kit")),
         })
 
     def _extract_active_players(self, lineup: Dict[str, Any]) -> Set[str]:
@@ -189,11 +199,16 @@ Return ONLY valid JSON:
     "movement_confidence": <0.0-1.0>,
     "build": "<tall|medium|short|stocky|lean|athletic>",
     "build_confidence": <0.0-1.0>,
-    "jersey_color": "<primary|secondary|goalkeeper>",
+    "kit_color": "<dominant shirt color or null>",
+    "team_side": "<home|away|unknown>",
+    "team_side_confidence": <0.0-1.0>,
+    "pitch_zone": "<left_defense|central_defense|right_defense|left_midfield|central_midfield|right_midfield|left_attack|central_attack|right_attack>",
+    "pitch_zone_confidence": <0.0-1.0>,
     "occlusion": "<none|partial|heavy>"
 }}
 
 If jersey number is not visible due to occlusion or angle, set it to null.
+Use kit color, attacking direction, nearby teammates, and field zone to infer team_side/pitch_zone.
 Be honest about confidence levels."""
 
         response_text = await self.call_llm(
@@ -260,6 +275,27 @@ Be honest about confidence levels."""
             "candidates": self._get_players_by_build(build) if build else [],
         }
 
+        kit_color = visual_cues.get("kit_color") or visual_cues.get("jersey_color")
+        scores["kit_color"] = {
+            "value": kit_color,
+            "score": float(visual_cues.get("kit_color_confidence", 0.6 if kit_color else 0.0)) * CONTEXT_CUE_WEIGHTS["kit_color"],
+            "candidates": self._get_players_by_kit_color(kit_color) if kit_color else [],
+        }
+
+        team_side = visual_cues.get("team_side")
+        scores["team_side"] = {
+            "value": team_side,
+            "score": float(visual_cues.get("team_side_confidence", 0.0)) * CONTEXT_CUE_WEIGHTS["team_side"],
+            "candidates": self._get_players_by_team_side(team_side) if team_side else [],
+        }
+
+        pitch_zone = visual_cues.get("pitch_zone")
+        scores["pitch_zone"] = {
+            "value": pitch_zone,
+            "score": float(visual_cues.get("pitch_zone_confidence", 0.0)) * CONTEXT_CUE_WEIGHTS["pitch_zone"],
+            "candidates": self._get_players_by_pitch_zone(pitch_zone) if pitch_zone else [],
+        }
+
         return scores
 
     def _fuse_with_lineup_context(
@@ -309,6 +345,12 @@ Be honest about confidence levels."""
             sources.append("jersey_number")
         if cue_scores.get("position", {}).get("value") is not None:
             sources.append("position_data")
+        if cue_scores.get("kit_color", {}).get("value"):
+            sources.append("kit_context")
+        if cue_scores.get("team_side", {}).get("value"):
+            sources.append("team_context")
+        if cue_scores.get("pitch_zone", {}).get("value"):
+            sources.append("positional_zone")
         if lineup_context:
             sources.append("lineup_data")
 
@@ -318,6 +360,9 @@ Be honest about confidence levels."""
             source=" + ".join(sources) if sources else "visual_analysis",
             jersey_number=cue_scores.get("jersey_number", {}).get("value"),
             position=cue_scores.get("position", {}).get("value"),
+            team_side=cue_scores.get("team_side", {}).get("value"),
+            kit_color=cue_scores.get("kit_color", {}).get("value"),
+            pitch_zone=cue_scores.get("pitch_zone", {}).get("value"),
             visual_cues={k: v.get("value") for k, v in cue_scores.items()},
         )
 
@@ -380,6 +425,17 @@ Be honest about confidence levels."""
                 candidates.append(xi.get("name", ""))
         return candidates
 
+    def _iter_players_with_side(self) -> List[Tuple[Dict[str, Any], str]]:
+        """Return lineup players annotated with home/away side."""
+        if not self.lineup_data:
+            return []
+        players: List[Tuple[Dict[str, Any], str]] = []
+        for side, key in (("home", "home_xi"), ("away", "away_xi")):
+            for player in self.lineup_data.get(key, []):
+                if isinstance(player, dict) and player.get("name"):
+                    players.append((player, side))
+        return players
+
     def _get_players_by_position(
         self,
         position: str,
@@ -389,11 +445,11 @@ Be honest about confidence levels."""
             return []
 
         candidates = []
-        for xi in self.lineup_data.get("home_xi", []) + self.lineup_data.get("away_xi", []):
-            if isinstance(xi, dict):
-                player_pos = xi.get("position", "").casefold()
-                if position.casefold() in player_pos:
-                    candidates.append(xi.get("name", ""))
+        requested = self._normalize_position(position)
+        for xi, _side in self._iter_players_with_side():
+            player_pos = self._normalize_position(xi.get("position", ""))
+            if requested and (requested in player_pos or player_pos in requested):
+                candidates.append(xi.get("name", ""))
         return candidates
 
     def _get_players_by_movement(
@@ -444,13 +500,82 @@ Be honest about confidence levels."""
         height_range = height_map.get(build.casefold(), (0, 220))
         candidates = []
 
-        for xi in self.lineup_data.get("home_xi", []) + self.lineup_data.get("away_xi", []):
-            if isinstance(xi, dict):
-                height = xi.get("height_cm")
-                if height and height_range[0] <= height <= height_range[1]:
-                    candidates.append(xi.get("name", ""))
+        for xi, _side in self._iter_players_with_side():
+            height = xi.get("height_cm")
+            if height and height_range[0] <= height <= height_range[1]:
+                candidates.append(xi.get("name", ""))
 
         return candidates
+
+    def _get_players_by_kit_color(self, kit_color: Optional[str]) -> List[str]:
+        """Get players whose team kit metadata matches the observed color."""
+        if not self.lineup_data or not kit_color:
+            return []
+        observed = str(kit_color).casefold()
+        matched_sides = []
+        for side in ("home", "away"):
+            kit = self.lineup_data.get(f"{side}_kit") or self.lineup_data.get(f"{side}_colors") or {}
+            colors = kit if isinstance(kit, list) else kit.values() if isinstance(kit, dict) else [kit]
+            if any(str(color).casefold() in observed or observed in str(color).casefold() for color in colors):
+                matched_sides.append(side)
+        return [
+            player["name"]
+            for player, side in self._iter_players_with_side()
+            if side in matched_sides
+        ]
+
+    def _get_players_by_team_side(self, team_side: Optional[str]) -> List[str]:
+        """Get active players for the inferred home/away side."""
+        if not team_side:
+            return []
+        side = str(team_side).casefold()
+        if side not in {"home", "away"}:
+            return []
+        return [player["name"] for player, player_side in self._iter_players_with_side() if player_side == side]
+
+    def _get_players_by_pitch_zone(self, pitch_zone: Optional[str]) -> List[str]:
+        """Map broad field zones to likely lineup roles."""
+        if not pitch_zone:
+            return []
+        zone = str(pitch_zone).casefold()
+        role_map = {
+            "defense": {"goalkeeper", "center_back", "fullback", "left_back", "right_back", "defender"},
+            "midfield": {"defensive_mid", "central_mid", "attacking_mid", "midfielder", "cm", "dm", "am"},
+            "attack": {"striker", "forward", "winger", "left_wing", "right_wing"},
+            "left": {"left_wing", "left_back", "fullback", "winger"},
+            "right": {"right_wing", "right_back", "fullback", "winger"},
+            "central": {"goalkeeper", "center_back", "defensive_mid", "central_mid", "attacking_mid", "striker"},
+        }
+        wanted = set()
+        for token, roles in role_map.items():
+            if token in zone:
+                wanted.update(roles)
+        candidates = []
+        for player, _side in self._iter_players_with_side():
+            normalized = self._normalize_position(player.get("position", ""))
+            if any(role in normalized or normalized in role for role in wanted):
+                candidates.append(player["name"])
+        return candidates
+
+    def _normalize_position(self, position: Optional[str]) -> str:
+        """Normalize common position labels into searchable role tokens."""
+        pos = str(position or "").casefold().replace("-", "_").replace(" ", "_")
+        aliases = {
+            "st": "striker",
+            "cf": "striker",
+            "lw": "left_wing",
+            "rw": "right_wing",
+            "lb": "left_back",
+            "rb": "right_back",
+            "cb": "center_back",
+            "gk": "goalkeeper",
+            "dm": "defensive_mid",
+            "cdm": "defensive_mid",
+            "cm": "central_mid",
+            "cam": "attacking_mid",
+            "am": "attacking_mid",
+        }
+        return aliases.get(pos, pos)
 
     async def identify_player_for_qa(
         self,
@@ -487,6 +612,10 @@ Be honest about confidence levels."""
                     "confidence": 0.95,  # High confidence from direct lookup
                     "source": "jersey_number_lookup",
                     "jersey_number": jersey_num,
+                    "position": None,
+                    "team_side": None,
+                    "kit_color": None,
+                    "pitch_zone": None,
                 }
 
         # General player identification from frame
@@ -498,6 +627,9 @@ Be honest about confidence levels."""
             "source": result.source,
             "jersey_number": result.jersey_number,
             "position": result.position,
+            "team_side": result.team_side,
+            "kit_color": result.kit_color,
+            "pitch_zone": result.pitch_zone,
             "qualifier": result.qualifier,
             "overlay_coordinates": self._generate_overlay_coordinates(result),
         }

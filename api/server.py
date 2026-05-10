@@ -43,6 +43,7 @@ from agents.qa_agent import QAAgent, QAPair
 from agents.player_id_agent import PlayerIDAgent
 from tools.dynamodb_tool import build_match_session_key, get_recent_events, write_event
 from models.game_state import GameState
+from models.session_persistence import SessionPersistence
 from streaming import StreamingVisionBridge
 from streaming.streaming_bridge import StreamingBridgeConfig, clean_model_answer
 
@@ -203,14 +204,21 @@ class ConnectionManager:
         self._settings: dict[str, dict] = {}  # match_session -> commentary settings
         self._languages: dict[str, str] = {}  # match_session -> language code
         self._vision_context: dict[str, Any] = {}  # match_session -> VisionTacticalContext
+        self._persistence = SessionPersistence()
 
     def store_notes(self, match_session: str, notes_store: Any) -> None:
         """Store NotesStore for a match session."""
         self._notes_stores[match_session] = notes_store
+        self._persistence.save_notes(match_session, notes_store)
 
     def get_notes(self, match_session: str) -> Optional[Any]:
         """Retrieve NotesStore for a match session."""
-        return self._notes_stores.get(match_session)
+        notes_store = self._notes_stores.get(match_session)
+        if notes_store is None:
+            notes_store = self._persistence.load_notes(match_session)
+            if notes_store is not None:
+                self._notes_stores[match_session] = notes_store
+        return notes_store
 
     def store_qa_runner(self, match_session: str, runner: Any) -> None:
         """Store Q&A parallel runner for a match session."""
@@ -223,30 +231,59 @@ class ConnectionManager:
     def store_settings(self, match_session: str, settings: dict) -> None:
         """Store commentary settings for a match session."""
         self._settings[match_session] = settings
+        self._persistence.save_value(match_session, "settings", settings)
 
     def get_settings(self, match_session: str) -> dict:
         """Retrieve commentary settings for a match session."""
-        return self._settings.get(match_session, {
+        default = {
             "bias": 0,
             "excitement": 0.5,
             "knowledge_depth": 0.5,
-        })
+        }
+        if match_session in self._settings:
+            return self._settings[match_session]
+        settings = self._persistence.load_value(match_session, "settings", default)
+        self._settings[match_session] = settings
+        return settings
 
     def store_language(self, match_session: str, language: str) -> None:
         """Store commentary language for a match session."""
         self._languages[match_session] = language
+        self._persistence.save_value(match_session, "language", language)
 
     def get_language(self, match_session: str) -> str:
         """Retrieve commentary language for a match session."""
-        return self._languages.get(match_session, "en")
+        if match_session in self._languages:
+            return self._languages[match_session]
+        language = self._persistence.load_value(match_session, "language", "en")
+        self._languages[match_session] = language
+        return language
 
     def store_vision_context(self, match_session: str, vision_context: Any) -> None:
         """Store latest vision tactical context for a match session."""
         self._vision_context[match_session] = vision_context
+        self._persistence.save_value(match_session, "vision_context", self._json_safe(vision_context))
 
     def get_vision_context(self, match_session: str) -> Optional[Any]:
         """Retrieve latest vision tactical context for a match session."""
-        return self._vision_context.get(match_session)
+        vision_context = self._vision_context.get(match_session)
+        if vision_context is None:
+            vision_context = self._persistence.load_value(match_session, "vision_context")
+            if vision_context is not None:
+                self._vision_context[match_session] = vision_context
+        return vision_context
+
+    def _json_safe(self, value: Any) -> Any:
+        """Convert common model objects to JSON-safe values for persistence."""
+        if hasattr(value, "to_dict"):
+            return value.to_dict()
+        if isinstance(value, dict):
+            return {str(k): self._json_safe(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [self._json_safe(v) for v in value]
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        return str(value)
 
     async def connect(self, session_id: str, ws: WebSocket) -> None:
         self._sessions[session_id].append(ws)
@@ -1305,6 +1342,8 @@ async def live_audio_ws(websocket: WebSocket):
                             "type": "trivia_card",
                             "text": trivia["text"],
                             "source": trivia["source"],
+                            "source_urls": trivia.get("source_urls", []),
+                            "source_attribution": trivia.get("source_attribution", []),
                             "event_tag": trivia.get("event_tag"),
                             "confidence": trivia["confidence"],
                             "display_duration_ms": trivia["display_duration_ms"],
@@ -1455,6 +1494,8 @@ async def live_audio_ws(websocket: WebSocket):
                                 "type": "trivia_card",
                                 "text": trivia["text"],
                                 "source": trivia["source"],
+                                "source_urls": trivia.get("source_urls", []),
+                                "source_attribution": trivia.get("source_attribution", []),
                                 "event_tag": trivia.get("event_tag"),
                                 "confidence": trivia["confidence"],
                                 "display_duration_ms": trivia["display_duration_ms"],
@@ -1552,6 +1593,10 @@ async def live_audio_ws(websocket: WebSocket):
                             "confidence": player_id.get("confidence"),
                             "source": player_id.get("source"),
                             "jersey_number": player_id.get("jersey_number"),
+                            "position": player_id.get("position"),
+                            "team_side": player_id.get("team_side"),
+                            "kit_color": player_id.get("kit_color"),
+                            "pitch_zone": player_id.get("pitch_zone"),
                         }
 
                     # Add Story 2.4: Overlay coordinates for SVG rendering
@@ -2259,9 +2304,11 @@ async def prepare_commentary_notes(req: CommentaryNotesRequest, request: Request
             # Store NotesStore for live session usage
             if completed_state.notes_store:
                 match_session_key = f"{req.home_team}_{req.away_team}"
+                canonical_match_session_key = build_match_session_key(req.home_team, req.away_team, req.sport)
                 manager.store_notes(match_session_key, completed_state.notes_store)
+                manager.store_notes(canonical_match_session_key, completed_state.notes_store)
                 logger.log_event("notes_store_cached", {
-                    "match_session": match_session_key,
+                    "match_session": canonical_match_session_key,
                     "beat_count": len(completed_state.notes_store.beats),
                     "lookup_tags": len(completed_state.notes_store.lookup)
                 })
@@ -2276,8 +2323,9 @@ async def prepare_commentary_notes(req: CommentaryNotesRequest, request: Request
                     notes_store=completed_state.notes_store,
                 )
                 manager.store_qa_runner(match_session_key, qa_runner)
+                manager.store_qa_runner(canonical_match_session_key, qa_runner)
                 logger.log_event("qa_runner_initialized", {
-                    "match_session": match_session_key,
+                    "match_session": canonical_match_session_key,
                     "qa_cache_size": len(qa_runner.qa_agent.qa_cache),
                 })
 
@@ -2294,6 +2342,8 @@ async def prepare_commentary_notes(req: CommentaryNotesRequest, request: Request
                         "players": beat.players,
                         "section": beat.section,
                         "source": beat.source,
+                        "source_urls": beat.source_urls,
+                        "source_attribution": beat.source_attribution,
                         "confidence": beat.confidence,
                     }
                     for beat in completed_state.notes_store.beats
@@ -2344,11 +2394,14 @@ async def get_commentary_notes(match_session: str):
         "notes": {
             "beats": [
                 {
-                    "beat_id": beat.beat_id,
-                    "title": beat.title,
-                    "narrative": beat.narrative,
-                    "stats": beat.stats,
-                    "tags": beat.tags,
+                    "text": beat.text,
+                    "event_tags": beat.event_tags,
+                    "players": beat.players,
+                    "section": beat.section,
+                    "source": beat.source,
+                    "source_urls": beat.source_urls,
+                    "source_attribution": beat.source_attribution,
+                    "confidence": beat.confidence,
                 }
                 for beat in notes_store.beats
             ] if notes_store.beats else [],

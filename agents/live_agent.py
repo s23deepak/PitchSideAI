@@ -367,7 +367,8 @@ class LiveAgent(BaseLiveAgent):
         if retrieved_beats:
             beat_lines = []
             for beat in retrieved_beats[:5]:  # Limit to 5 most relevant beats
-                beat_lines.append(f"- {beat.text} (source: {beat.source})")
+                attribution = self._format_source_attribution(beat)
+                beat_lines.append(f"- {beat.text} (source: {attribution})")
             beat_context = "\n".join(beat_lines)
 
         # Fix #1: Build settings-based personalization
@@ -431,6 +432,8 @@ Commentary:"""
                     "event_tags": b.event_tags,
                     "players": b.players,
                     "source": b.source,
+                    "source_urls": getattr(b, "source_urls", []),
+                    "source_attribution": getattr(b, "source_attribution", []),
                     "confidence": b.confidence,
                     "section": b.section,
                     "index": idx,
@@ -505,12 +508,32 @@ Commentary:"""
         return {
             "text": fact_text,
             "source": best_beat.source,
+            "source_urls": getattr(best_beat, "source_urls", []),
+            "source_attribution": getattr(best_beat, "source_attribution", []),
             "event_tag": resolved_tag,
             "confidence": confidence,
             "display_duration_ms": display_duration_ms,
             "fade_in_ms": fade_in_ms,
             "fade_out_ms": fade_out_ms,
         }
+
+    def _format_source_attribution(self, beat: Any) -> str:
+        """Return a compact attribution string for prompt grounding."""
+        source = getattr(beat, "source", "") or "research"
+        attributions = getattr(beat, "source_attribution", []) or []
+        urls = getattr(beat, "source_urls", []) or []
+        if attributions:
+            labels = []
+            for item in attributions[:2]:
+                if isinstance(item, dict):
+                    label = item.get("label") or source
+                    url = item.get("url")
+                    labels.append(f"{label} {url}".strip())
+            if labels:
+                return "; ".join(labels)
+        if urls:
+            return f"{source} {'; '.join(urls[:2])}"
+        return source
 
     def get_session_info(self) -> dict:
         """Get current session information."""
