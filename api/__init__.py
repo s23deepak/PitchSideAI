@@ -1,1 +1,1 @@
-"""PitchSide AI — API package."""
+"""PitchSideAI — API package."""

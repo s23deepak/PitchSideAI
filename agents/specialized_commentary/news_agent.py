@@ -148,7 +148,7 @@ Provide:
 
 Keep to 3-4 sentences."""
 
-        synthesis = await self.call_bedrock(
+        synthesis = await self.call_llm(
             prompt=news_synthesis_prompt,
             temperature=0.2,
             max_tokens=120,

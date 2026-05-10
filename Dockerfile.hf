@@ -1,0 +1,48 @@
+# Dockerfile for HuggingFace Space + AMD Hackathon
+# Builds PitchSideAI with StreamingVLM for deployment on AMD MI300X
+FROM rocm/pytorch:rocm6.4_ubuntu24.04_py3.12_pytorch_2.7.1
+
+WORKDIR /app
+
+# System dependencies
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    wget \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Install streaming-vlm inference deps
+RUN pip install --no-cache-dir \
+    qwen-vl-utils \
+    decord \
+    av \
+    accelerate \
+    datasets
+
+# Copy application
+COPY . .
+
+# Clone StreamingVLM
+RUN git clone https://github.com/mit-han-lab/streaming-vlm.git /opt/streaming-vlm
+
+ENV PYTHONPATH="/opt/streaming-vlm:${PYTHONPATH}"
+
+# AMD ROCm environment
+ENV ROCM_PATH=/opt/rocm
+ENV HIP_VISIBLE_DEVICES=0
+ENV PYTORCH_ROCM_ARCH=gfx942
+ENV LLM_BACKEND=vllm
+ENV VISION_LLM_BACKEND=vllm
+ENV VLLM_BASE_URL=http://localhost:8001
+ENV VLLM_VISION_MODEL=Qwen/Qwen2.5-VL-3B-Instruct-AWQ
+
+# Expose FastAPI + vLLM ports
+EXPOSE 8000 8001
+
+CMD ["python", "-m", "uvicorn", "api.server:app", "--host", "0.0.0.0", "--port", "8000"]

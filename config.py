@@ -1,5 +1,5 @@
 """
-config.py — Runtime configuration for PitchSide AI.
+config.py — Runtime configuration for PitchSideAI.
 
 Loads non-secret defaults from config/defaults.py, then overlays
 secrets and deployment-specific values from .env (via python-dotenv).
@@ -14,10 +14,6 @@ load_dotenv()  # Secrets/overrides in .env win over module-level defaults
 AWS_REGION          = os.getenv("AWS_REGION", "us-east-1")
 AWS_ACCESS_KEY_ID   = os.getenv("AWS_ACCESS_KEY_ID", "")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "")
-
-# ── Bedrock AgentCore (deployment-specific) ───────────────────────────────────
-AGENT_ID       = os.getenv("BEDROCK_AGENT_ID", "")
-AGENT_ALIAS_ID = os.getenv("BEDROCK_AGENT_ALIAS_ID", "")
 
 # ── Amazon OpenSearch (deployment-specific) ───────────────────────────────────
 OPENSEARCH_ENDPOINT = os.getenv("OPENSEARCH_ENDPOINT", "")
@@ -43,16 +39,12 @@ COMMENTARY_NOTES_LLM_BACKEND = os.getenv(
 	"COMMENTARY_NOTES_LLM_BACKEND",
 	_d.COMMENTARY_NOTES_LLM_BACKEND,
 )
+STREAMING_BACKEND = os.getenv("STREAMING_BACKEND", _d.STREAMING_BACKEND)
 PORT           = int(os.getenv("PORT",        _d.PORT))
 HOST           = os.getenv("HOST",            _d.HOST)
 LOG_LEVEL      = os.getenv("LOG_LEVEL",       _d.LOG_LEVEL)
 USE_JSON_LOGS  = os.getenv("USE_JSON_LOGS",   str(_d.USE_JSON_LOGS)).lower() == "true"
 LOG_FILE       = os.getenv("LOG_FILE",        _d.LOG_FILE)
-
-OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL",   _d.OLLAMA_BASE_URL)
-OLLAMA_MODEL      = os.getenv("OLLAMA_MODEL",      _d.OLLAMA_MODEL)
-OLLAMA_VISION_MODEL = os.getenv("OLLAMA_VISION_MODEL", _d.OLLAMA_VISION_MODEL)
-OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", _d.OLLAMA_EMBED_MODEL)
 
 OPENAI_MODEL      = os.getenv("OPENAI_MODEL",      _d.OPENAI_MODEL)
 OPENAI_EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", _d.OPENAI_EMBED_MODEL)
@@ -61,6 +53,10 @@ VLLM_BASE_URL    = os.getenv("VLLM_BASE_URL",    _d.VLLM_BASE_URL)
 VLLM_MODEL       = os.getenv("VLLM_MODEL",       _d.VLLM_MODEL)
 VLLM_VISION_MODEL = os.getenv("VLLM_VISION_MODEL", VLLM_MODEL or _d.VLLM_VISION_MODEL)
 VLLM_EMBED_MODEL = os.getenv("VLLM_EMBED_MODEL", _d.VLLM_EMBED_MODEL)
+
+AUDIO_VLLM_BASE_URL = os.getenv("AUDIO_VLLM_BASE_URL", os.getenv("VLLM_BASE_URL", _d.AUDIO_VLLM_BASE_URL))
+AUDIO_MODEL         = os.getenv("AUDIO_MODEL",         _d.AUDIO_MODEL)
+AUDIO_API_TYPE      = os.getenv("AUDIO_API_TYPE",      _d.AUDIO_API_TYPE)
 
 RATE_LIMIT_RPM         = int(os.getenv("RATE_LIMIT_RPM",         _d.RATE_LIMIT_RPM))
 RATE_LIMIT_BURST       = int(os.getenv("RATE_LIMIT_BURST",       _d.RATE_LIMIT_BURST))

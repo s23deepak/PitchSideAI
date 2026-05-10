@@ -1,5 +1,5 @@
 """
-Production configuration for PitchSide AI.
+Production configuration for PitchSideAI.
 Load environment-specific settings and secrets.
 """
 import os
@@ -113,7 +113,7 @@ def validate_config() -> None:
 
 if __name__ == "__main__":
     validate_config()
-    print(" PitchSide AI Configuration Loaded")
+    print(" PitchSideAI Configuration Loaded")
     print(f"Environment: {ENV}")
     print(f"Log Level: {LOG_LEVEL}")
     print(f"Max Concurrent Tasks: {MAX_CONCURRENT_TASKS}")

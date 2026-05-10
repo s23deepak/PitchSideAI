@@ -1,5 +1,5 @@
 """
-Base Retriever Interface — PitchSide AI
+Base Retriever Interface — PitchSideAI
 Defines the standard Protocol for all sport-specific data retrievers.
 """
 from typing import Dict, List, Any, Protocol

@@ -1,4 +1,4 @@
-# Quick Start Guide — PitchSide AI v2.0
+# Quick Start Guide — PitchSideAI v2.0
 
 ## 🚀 Get Running in 5 Minutes
 
@@ -18,7 +18,7 @@ Recommended backend split:
 
 ```bash
 # 1. Clone and setup
-git clone <repo> && cd PitchAI
+git clone <repo> && cd PitchSideAI
 cp .env.example .env
 
 # 2. Install dependencies

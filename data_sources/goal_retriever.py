@@ -1,5 +1,5 @@
 """
-Goal.com Retriever — PitchSide AI
+Goal.com Retriever — PitchSideAI
 Domain-specific retriever specialized in Soccer metrics.
 """
 from typing import Dict, List, Any, Optional

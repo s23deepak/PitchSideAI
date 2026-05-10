@@ -5,6 +5,7 @@ Provides common functionality and interface for all agents.
 import base64
 import json
 import logging
+import unicodedata
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 from datetime import datetime
@@ -12,7 +13,7 @@ from datetime import datetime
 import httpx
 from core import get_logger
 from config import (
-    COMMENTARY_NOTES_LLM_BACKEND, LLM_BACKEND, OLLAMA_BASE_URL, OLLAMA_MODEL, OLLAMA_VISION_MODEL,
+    COMMENTARY_NOTES_LLM_BACKEND, LLM_BACKEND,
     OPENAI_API_KEY, OPENAI_MODEL,
     VISION_LLM_BACKEND, VLLM_BASE_URL, VLLM_MODEL, VLLM_VISION_MODEL,
 )
@@ -59,7 +60,7 @@ def _resolve_backend(agent_type: str) -> str:
 class BaseAgent(ABC):
     """
     Abstract base class for all agents.
-    Provides common Bedrock API interaction, error handling, and logging.
+    Provides common LLM API interaction, error handling, and logging.
     """
 
     def __init__(self, model_id: str, sport: str = "soccer", agent_type: str = "base"):
@@ -67,7 +68,7 @@ class BaseAgent(ABC):
         Initialize agent.
 
         Args:
-            model_id: Model ID (Bedrock model or Ollama model name)
+            model_id: Model ID (Ollama model name, OpenAI model, or vLLM model)
             sport: Sport type (e.g., "soccer", "cricket")
             agent_type: Agent type for logging
         """
@@ -77,25 +78,18 @@ class BaseAgent(ABC):
         self.backend = _resolve_backend(agent_type)
         self.model_id = model_id
 
-        if self.backend == "bedrock":
-            import boto3
-            self.bedrock_client = boto3.client("bedrock-runtime", region_name="us-east-1")
-        elif self.backend == "ollama":
-            if self.agent_type == "vision":
-                self.model_id = OLLAMA_VISION_MODEL
-            else:
-                self.model_id = OLLAMA_MODEL
-            self.bedrock_client = None
-        elif self.backend == "openai":
+        if self.backend == "openai":
             self.model_id = OPENAI_MODEL
-            self.bedrock_client = None
         elif self.backend == "vllm":
             self.model_id = VLLM_VISION_MODEL if self.agent_type == "vision" else VLLM_MODEL
-            self.bedrock_client = None
         else:
-            raise ValueError(f"Unknown LLM_BACKEND: {self.backend}")
+            raise ValueError(
+                f"Unknown LLM_BACKEND: '{self.backend}'. "
+                "Supported backends: 'vllm', 'openai'. "
+                "Set LLM_BACKEND in your .env file."
+            )
 
-    async def call_bedrock(
+    async def call_llm(
         self,
         prompt: str,
         temperature: float = 0.5,
@@ -106,7 +100,7 @@ class BaseAgent(ABC):
         response_format: str = "text"
     ) -> str:
         """
-        Call LLM API (Bedrock, Ollama, OpenAI, or vLLM) with error handling and logging.
+        Call the configured OpenAI-compatible LLM API with error handling and logging.
         """
         guardrail = (
             "\n\nCRITICAL INSTRUCTION: You are generating a final output narrative. "
@@ -115,100 +109,21 @@ class BaseAgent(ABC):
             "Only use facts explicitly provided in the prompt context. If data is unavailable, "
             "state that it is unavailable instead of guessing."
         )
-        prompt = prompt + guardrail
+        prompt = unicodedata.normalize('NFKC', prompt) + guardrail
 
-        if self.backend != "bedrock":
-            return await self._call_openai_compatible(
-                prompt,
-                temperature,
-                max_tokens,
-                image_data,
-                video_data,
-                video_format,
-                response_format,
-            )
-
-        start_time = datetime.utcnow()
-
-        try:
-            # Build message content
-            content = []
-
-            # Add image if provided
-            if image_data:
-                content.append({
-                    "image": {
-                        "format": "jpeg",
-                        "source": {"bytes": image_data}
-                    }
-                })
-
-            if video_data:
-                content.append({
-                    "video": {
-                        "format": video_format or "mp4",
-                        "source": {"bytes": video_data}
-                    }
-                })
-
-            # Add text
-            content.append({"text": prompt})
-
-            # Call Bedrock
-            messages = [{"role": "user", "content": content}]
-
-            call_config = {
-                "modelId": self.model_id,
-                "messages": messages,
-                "inferenceConfig": {"temperature": temperature}
-            }
-
-            if max_tokens:
-                call_config["inferenceConfig"]["maxTokens"] = max_tokens
-
-            response = self.bedrock_client.converse(**call_config)
-
-            # Extract response text
-            response_text = response['output']['message']['content'][0]['text']
-
-            # Log success
-            duration_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
-            self.logger.log_performance(
-                f"{self.agent_type}.bedrock_call",
-                duration_ms,
-                success=True
-            )
-
-            return response_text
-
-        except json.JSONDecodeError as exc:
-            self.logger.error(
-                "bedrock_json_parse_error",
-                error=str(exc),
-                response_format=response_format,
-                exc_info=True
-            )
-            raise
-
-        except Exception as exc:
-            duration_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
-            self.logger.log_performance(
-                f"{self.agent_type}.bedrock_call",
-                duration_ms,
-                success=False
-            )
-            self.logger.error(
-                f"{self.agent_type}_bedrock_error",
-                error=str(exc),
-                exc_info=True
-            )
-            raise
+        return await self._call_openai_compatible(
+            prompt,
+            temperature,
+            max_tokens,
+            image_data,
+            video_data,
+            video_format,
+            response_format,
+        )
 
     def _get_openai_config(self) -> tuple:
         """Return (base_url, api_key) for the active backend."""
-        if self.backend == "ollama":
-            return OLLAMA_BASE_URL, None
-        elif self.backend == "openai":
+        if self.backend == "openai":
             return "https://api.openai.com", OPENAI_API_KEY
         elif self.backend == "vllm":
             return VLLM_BASE_URL, None
@@ -238,7 +153,7 @@ class BaseAgent(ABC):
         video_format: Optional[str] = None,
         response_format: str = "text"
     ) -> str:
-        """Call any OpenAI-compatible API (Ollama, OpenAI, vLLM)."""
+        """Call any OpenAI-compatible API (vLLM or OpenAI)."""
         start_time = datetime.utcnow()
         base_url, api_key = self._get_openai_config()
 

@@ -8,6 +8,7 @@ Tavily search (biography), FBref (statistics), and ESPN (roster) data sources.
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 import asyncio
+import json
 import logging
 from agents.base import BaseAgent
 from data_sources import DataCache, WikipediaRetriever
@@ -134,6 +135,7 @@ class PlayerResearchAgent(BaseAgent):
 
         # Filter out any errors
         enriched_players = [p for p in enriched_players if not isinstance(p, Exception)]
+        enriched_players = await self._synthesize_player_profiles(team_name, enriched_players)
 
         return {
             "team_name": team_name,
@@ -202,38 +204,6 @@ class PlayerResearchAgent(BaseAgent):
                     "notable_achievements": wiki_bio.get("notable_achievements"),
                 })
 
-            # Build stats context
-            stats_summary = ""
-            if player_stats:
-                goals = player_stats.get("goals", 0) or 0
-                assists = player_stats.get("assists", 0) or 0
-                stats_summary = f"Season: {goals}G {assists}A"
-
-            # Synthesize into profile using Bedrock
-            profile_prompt = f"""Create a professional {self.sport} player profile for {player_name}:
-
-Basic Info:
-- Position: {player_data.get('position', 'Unknown')}
-- Age: {player_data.get('age', 'Unknown')}
-- Team: {team_name}
-
-Career: {wiki_bio.get('career_summary', '')[:150]}
-
-Statistics: {stats_summary}
-
-Provide:
-1. Playing style (2 key characteristics)
-2. Strengths (2 main attributes)
-3. Match impact prediction
-
-Keep it concise (2-3 sentences) for commentary notes."""
-
-            profile_text = await self.call_bedrock(
-                prompt=profile_prompt,
-                temperature=0.3,
-                max_tokens=120,
-            )
-
             return {
                 "name": player_name,
                 "position": player_data.get("position", "Unknown"),
@@ -243,7 +213,7 @@ Keep it concise (2-3 sentences) for commentary notes."""
                 "biography": wiki_bio.get("career_summary", "")[:100],
                 "nationality": wiki_bio.get("nationality") or player_data.get("nationality", "N/A"),
                 "injury_status": player_data.get("injury_status", "Healthy"),
-                "profile": profile_text,
+                "profile": "",
             }
 
         except Exception as e:
@@ -256,28 +226,95 @@ Keep it concise (2-3 sentences) for commentary notes."""
                 "error": str(e),
             }
 
+    async def _synthesize_player_profiles(
+        self,
+        team_name: str,
+        players: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Create all player blurbs for a squad with one LLM call."""
+        if not players:
+            return players
+
+        payload = []
+        for player in players:
+            stats = player.get("stats", {}) if isinstance(player.get("stats"), dict) else {}
+            payload.append({
+                "name": player.get("name", "Unknown"),
+                "position": player.get("position", "Unknown"),
+                "age": player.get("age", "Unknown"),
+                "goals": stats.get("goals", 0) or 0,
+                "assists": stats.get("assists", 0) or 0,
+                "appearances": stats.get("appearances", 0) or 0,
+                "career": player.get("biography", "")[:150],
+            })
+
+        prompt = f"""Create concise {self.sport} commentary profiles for these {team_name} players.
+
+Use only the provided facts. For each player, write one compact sentence covering playing style, main strength, and likely match impact.
+
+Return valid JSON only:
+{{"profiles": [{{"name": "Player Name", "profile": "One sentence."}}]}}
+
+Players:
+{json.dumps(payload, ensure_ascii=True)}
+"""
+
+        try:
+            response = await self.call_llm(prompt=prompt, temperature=0.3, max_tokens=420)
+            parsed = await self.parse_json_response(response)
+            profile_by_name = {
+                item.get("name", ""): item.get("profile", "")
+                for item in parsed.get("profiles", [])
+                if isinstance(item, dict)
+            }
+        except Exception as exc:
+            logger.warning("Batch profile synthesis failed for %s: %s", team_name, exc)
+            profile_by_name = {}
+
+        for player in players:
+            name = player.get("name", "Unknown")
+            player["profile"] = profile_by_name.get(name) or self._fallback_profile(player, team_name)
+        return players
+
+    def _fallback_profile(self, player: Dict[str, Any], team_name: str) -> str:
+        """Deterministic profile when the batch LLM call is unavailable."""
+        name = player.get("name", "This player")
+        position = player.get("position", "player")
+        stats = player.get("stats", {}) if isinstance(player.get("stats"), dict) else {}
+        goals = stats.get("goals", 0) or 0
+        assists = stats.get("assists", 0) or 0
+        contribution = []
+        if goals:
+            contribution.append(f"{goals} goals")
+        if assists:
+            contribution.append(f"{assists} assists")
+        contribution_text = f" with {' and '.join(contribution)}" if contribution else ""
+        return f"{name} is a {position} for {team_name}{contribution_text}, profiled for likely match impact from verified squad data."
+
     async def _fetch_player_stats(
         self, player_name: str, team_name: str
     ) -> Dict[str, Any]:
-        """Fetch player stats from local DB first, then FBref as fallback."""
+        """Fetch player stats from local DB first, then MultiSourceRetriever as fallback."""
         db = get_player_db()
 
-        # Check DB for current season stats (saved from a previous successful FBref fetch)
-        cached_stats = db.get_season_stats(player_name, self.sport, "25-26", "fbref")
+        # Check DB for current season stats (saved from a previous successful fetch)
+        cached_stats = db.get_season_stats(player_name, self.sport, "25-26", "multi")
         if cached_stats:
-            logger.info("DB stats hit for %s — skipping FBref", player_name)
+            logger.info("DB stats hit for %s — skipping external fetch", player_name)
             return cached_stats
 
         if not self.fbref or not self.fbref.is_available:
             return {}
 
         try:
-            stats = await self.fbref.get_player_season_stats(player_name, team_name)
-            if stats:
-                db.upsert_season_stats(player_name, self.sport, "25-26", "fbref", stats)
-            return stats
+            # MultiSourceRetriever uses get_player_stats(player_name, team_name, sport)
+            stats = await self.fbref.get_player_stats(player_name, team_name, self.sport)
+            if stats and not stats.get("error"):
+                db.upsert_season_stats(player_name, self.sport, "25-26", stats.get("data_source", "multi"), stats)
+                return stats
+            return {}
         except Exception as exc:
-            logger.warning("FBref player stats failed for %s: %s", player_name, exc)
+            logger.warning("MultiSource player stats failed for %s: %s", player_name, exc)
             return {}
 
     async def close(self):

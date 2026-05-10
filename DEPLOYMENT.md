@@ -1,8 +1,8 @@
-# PitchSide AI — Production Deployment Guide
+# PitchSideAI — Production Deployment Guide
 
 ## Overview
 
-This guide covers deploying PitchSide AI as a production-grade, highly-concurrent multimodal sports AI platform.
+This guide covers deploying PitchSideAI as a production-grade, highly-concurrent multimodal sports AI platform.
 
 Update: `/ws/live` now accepts explicit `tactical_detection` messages, broadcasting an immediate analyst note followed by generated tactical commentary. The commentary-notes UI also exposes a dedicated Tactical Brief tab sourced from the organizer JSON payload.
 
@@ -105,7 +105,7 @@ docker push YOUR_ECR_REPO/pitchside-ai:latest
 
 ## Multi-Agent Orchestration
 
-PitchSide AI implements advanced multi-agent workflows:
+PitchSideAI implements advanced multi-agent workflows:
 
 ### Agent Types
 1. **Research Agent** (Nova Pro) - Pre-match analysis
@@ -278,7 +278,7 @@ Response:
 ```json
 {
   "status": "healthy",
-  "service": "PitchSide AI",
+  "service": "PitchSideAI",
   "version": "2.0.0",
   "timestamp": "2026-03-27T12:34:56Z"
 }

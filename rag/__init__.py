@@ -1,5 +1,5 @@
 """
-Advanced RAG strategies for PitchSide AI.
+Advanced RAG strategies for PitchSideAI.
 Implements hybrid search, semantic reranking, and multi-strategy retrieval.
 """
 import logging
@@ -15,7 +15,7 @@ from requests_aws4auth import AWS4Auth
 
 from config import (
     AWS_REGION, OPENSEARCH_ENDPOINT, OPENSEARCH_INDEX, EMBEDDING_MODEL,
-    LLM_BACKEND, OLLAMA_BASE_URL, OLLAMA_EMBED_MODEL,
+    LLM_BACKEND,
     OPENAI_API_KEY, OPENAI_EMBED_MODEL,
     VLLM_BASE_URL, VLLM_EMBED_MODEL,
 )
@@ -95,12 +95,8 @@ class AdvancedRAGRetriever:
 
     def _embed_text(self, text: str) -> List[float]:
         """Generate embeddings using configured backend."""
-        if LLM_BACKEND in ("ollama", "openai", "vllm"):
-            if LLM_BACKEND == "ollama":
-                url = f"{OLLAMA_BASE_URL}/api/embed"
-                payload = {"model": OLLAMA_EMBED_MODEL, "input": text}
-                headers = {}
-            elif LLM_BACKEND == "openai":
+        if LLM_BACKEND in ("openai", "vllm"):
+            if LLM_BACKEND == "openai":
                 url = "https://api.openai.com/v1/embeddings"
                 payload = {"model": OPENAI_EMBED_MODEL, "input": text}
                 headers = {"Authorization": f"Bearer {OPENAI_API_KEY}"}
@@ -112,9 +108,6 @@ class AdvancedRAGRetriever:
             response = httpx.post(url, json=payload, headers=headers, timeout=30.0)
             response.raise_for_status()
             data = response.json()
-            # Ollama uses "embeddings[0]", OpenAI/vLLM use "data[0].embedding"
-            if "embeddings" in data:
-                return data["embeddings"][0]
             return data["data"][0]["embedding"]
 
         body = json.dumps({"inputText": text})
