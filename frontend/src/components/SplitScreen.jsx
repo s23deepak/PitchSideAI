@@ -65,6 +65,7 @@ export default function SplitScreen({
     children,
     videoPreview = null,   // Object URL for uploaded video clip (from useVideoQA)
     liveVideoUrl = null,   // Object URL of the video currently playing in VideoCanvas
+    liveVideoTime = 0,     // Current playback time from the underlying VideoCanvas
     isAnalyzing = false,   // True while video Q&A backend is processing
     clipQuestion = '',     // The question the user typed before uploading
 }) {
@@ -73,6 +74,7 @@ export default function SplitScreen({
     const [loadingSkeleton, setLoadingSkeleton] = useState(false)
     const contentTimeoutRef = useRef(null)
     const autoDismissRef = useRef(null)
+    const livePreviewRef = useRef(null)
     const prefersReducedMotion = useRef(false)
 
     // Detect prefers-reduced-motion on mount
@@ -178,6 +180,31 @@ export default function SplitScreen({
             handleDismiss()
         }
     }, [handleDismiss])
+    const seekLivePreview = useCallback(() => {
+        const video = livePreviewRef.current
+        if (!video || !Number.isFinite(liveVideoTime)) return
+        const seek = () => {
+            try {
+                if (Math.abs((video.currentTime || 0) - liveVideoTime) > 0.75) {
+                    video.currentTime = liveVideoTime
+                }
+                video.play?.().catch(() => {})
+            } catch {
+                // Browser can reject seeks before metadata is ready; loadedmetadata retries.
+            }
+        }
+        if (video.readyState >= 1) {
+            seek()
+        } else {
+            video.addEventListener('loadedmetadata', seek, { once: true })
+        }
+    }, [liveVideoTime])
+
+    useEffect(() => {
+        if (isActive && liveVideoUrl) {
+            seekLivePreview()
+        }
+    }, [isActive, liveVideoUrl, seekLivePreview])
 
     // Don't render if hidden
     if (state === SplitScreenState.HIDDEN) {
@@ -222,11 +249,12 @@ export default function SplitScreen({
             <div className="split-screen-left">
                 {liveVideoUrl ? (
                     <video
+                        ref={livePreviewRef}
                         src={liveVideoUrl}
                         autoPlay
-                        loop
                         muted
                         playsInline
+                        onLoadedMetadata={seekLivePreview}
                         style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000' }}
                     />
                 ) : children}

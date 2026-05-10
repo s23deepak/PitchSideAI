@@ -188,8 +188,9 @@ export default function VideoCanvas({
             framesSent,
             videoReady,
             hasVideo: Boolean(videoFile),
+            currentTime,
         })
-    }, [isStreaming, wsReady, connectionState, framesSent, videoReady, videoFile, onStreamingStatus])
+    }, [isStreaming, wsReady, connectionState, framesSent, videoReady, videoFile, currentTime, onStreamingStatus])
 
     // Frame capture at target FPS
     const captureLoop = useCallback(() => {

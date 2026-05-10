@@ -107,6 +107,7 @@ export default function FanLensBroadcast() {
 
   // Current video URL playing in VideoCanvas (for SplitScreen left panel)
   const [canvasVideoUrl, setCanvasVideoUrl] = useState(null)
+  const [canvasVideoTime, setCanvasVideoTime] = useState(0)
   const [streamingStatus, setStreamingStatus] = useState({
     isStreaming: false,
     wsReady: false,
@@ -231,6 +232,7 @@ export default function FanLensBroadcast() {
           liveVideoUrl={canvasVideoUrl}
           isAnalyzing={Boolean(qaAnswer?.analyzing)}
           clipQuestion={qaAnswer?.question || ''}
+          liveVideoTime={canvasVideoTime}
         />
       }
       videoOverlays={null}
@@ -498,7 +500,12 @@ export default function FanLensBroadcast() {
         awayTeam={awayTeam}
         sport={sport}
         onVideoReady={(url) => setCanvasVideoUrl(url)}
-        onStreamingStatus={setStreamingStatus}
+        onStreamingStatus={(status) => {
+          setStreamingStatus(status)
+          if (Number.isFinite(status.currentTime)) {
+            setCanvasVideoTime(status.currentTime)
+          }
+        }}
         onTacticalDetection={(analysis) => {
           updateDetection(analysis)
           sendTacticalDetection(analysis)

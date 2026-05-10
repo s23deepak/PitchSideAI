@@ -31,10 +31,16 @@ export function useSpeechRecognition({
     const recognitionRef = useRef(null)
     const timeoutRef = useRef(null)
     const startTimeRef = useRef(null)
+    const isListeningRef = useRef(false)
+    const interimTranscriptRef = useRef('')
+    const finalTranscriptRef = useRef('')
+    const confidenceRef = useRef(null)
 
     // Check browser support
-    const isSupported = typeof window !== 'undefined' &&
+    const isSupported = Boolean(
+        typeof window !== 'undefined' &&
         (window.SpeechRecognition || window.webkitSpeechRecognition)
+    )
 
     // Initialize SpeechRecognition
     useEffect(() => {
@@ -52,20 +58,24 @@ export function useSpeechRecognition({
 
         recognition.onstart = () => {
             setIsListening(true)
+            isListeningRef.current = true
             setInterimTranscript('')
+            interimTranscriptRef.current = ''
             setFinalTranscript('')
+            finalTranscriptRef.current = ''
             setConfidence(null)
+            confidenceRef.current = null
             setError(null)
             startTimeRef.current = Date.now()
 
             // 15-second timeout failsafe for Chrome onend bug
             timeoutRef.current = setTimeout(() => {
-                if (isListening) {
+                if (isListeningRef.current) {
                     console.warn('[useSpeechRecognition] 15s timeout fired — forcing stop')
                     recognition.stop()
                     // Force submit if we have interim results
-                    if (interimTranscript) {
-                        handleForcedSubmit(interimTranscript)
+                    if (interimTranscriptRef.current) {
+                        handleForcedSubmit(interimTranscriptRef.current)
                     }
                 }
             }, 15000)
@@ -75,13 +85,16 @@ export function useSpeechRecognition({
             let interim = ''
             let final = ''
             let maxConfidence = 0
+            let hasFinalResult = false
 
             for (let i = event.resultIndex; i < event.results.length; i++) {
                 const result = event.results[i]
                 const transcript = result[0].transcript
                 const conf = result[0].confidence || 0
 
-                if (result.isFinal) {
+                const isFinal = result.isFinal || result[0]?.isFinal
+                if (isFinal) {
+                    hasFinalResult = true
                     final += transcript
                     maxConfidence = Math.max(maxConfidence, conf)
                 } else {
@@ -92,12 +105,18 @@ export function useSpeechRecognition({
 
             // Fix: Always update interim transcript (don't accumulate stale data)
             setInterimTranscript(interim || '')
-            if (final) {
+            interimTranscriptRef.current = interim || ''
+            if (hasFinalResult) {
+                const usableConfidence = maxConfidence > 0 ? maxConfidence : 0.75
                 setFinalTranscript(final)
-                setConfidence(maxConfidence)
+                finalTranscriptRef.current = final
+                setConfidence(usableConfidence)
+                confidenceRef.current = usableConfidence
             } else if (interim) {
                 // Use interim confidence as provisional
-                setConfidence(maxConfidence)
+                const usableConfidence = maxConfidence > 0 ? maxConfidence : 0.75
+                setConfidence(usableConfidence)
+                confidenceRef.current = usableConfidence
             }
         }
 
@@ -109,23 +128,30 @@ export function useSpeechRecognition({
             }
 
             setIsListening(false)
+            isListeningRef.current = false
 
-            // Only process if we have a final transcript
-            if (finalTranscript && confidence !== null) {
-                handleConfidenceGate(finalTranscript, confidence)
+            const transcript = finalTranscriptRef.current || interimTranscriptRef.current
+            const transcriptConfidence = confidenceRef.current ?? (transcript ? 0.75 : null)
+
+            if ((transcript || transcriptConfidence !== null) && transcriptConfidence !== null) {
+                handleConfidenceGate(transcript, transcriptConfidence)
             }
 
             // Fix: Clear interim transcript to prevent memory leak
             setInterimTranscript('')
+            interimTranscriptRef.current = ''
             setFinalTranscript('')
+            finalTranscriptRef.current = ''
             // Also clear confidence to avoid stale data
             setConfidence(null)
+            confidenceRef.current = null
         }
 
         recognition.onerror = (event) => {
             console.error('[useSpeechRecognition] Error:', event.error)
             setError(event.error)
             setIsListening(false)
+            isListeningRef.current = false
 
             if (timeoutRef.current) {
                 clearTimeout(timeoutRef.current)
@@ -171,7 +197,7 @@ export function useSpeechRecognition({
 
     // Handle forced submit from 15s timeout
     const handleForcedSubmit = useCallback((transcript) => {
-        const conf = confidence || 0.5 // Assume low confidence on timeout
+        const conf = confidenceRef.current ?? confidence ?? 0.75
         handleConfidenceGate(transcript, conf)
     }, [confidence, handleConfidenceGate])
 
