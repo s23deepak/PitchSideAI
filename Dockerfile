@@ -16,25 +16,28 @@ COPY frontend/ ./
 # Build production bundle
 RUN npm run build
 
-# Stage 2: Backend production
+# Stage 2: Python dependency build
+FROM python:3.11-slim AS python-deps
+
+WORKDIR /deps
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements-prod.txt .
+RUN python -m venv /opt/venv \
+    && /opt/venv/bin/pip install --no-cache-dir --upgrade pip \
+    && /opt/venv/bin/pip install --no-cache-dir -r requirements-prod.txt
+
+# Stage 3: Backend production
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y \
-    libgl1 \
-    libglib2.0-0 \
-    libsm6 \
-    libxext6 \
-    libxrender-dev \
-    libgomp1 \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+ENV PATH="/opt/venv/bin:$PATH"
 
-# Copy requirements and install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY --from=python-deps /opt/venv /opt/venv
 
 # Copy built frontend from Stage 1
 COPY --from=frontend /app/frontend/dist ./frontend/dist
@@ -62,7 +65,7 @@ EXPOSE 8080
 
 # Health check (60s start-period for model warm-up)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=5).read()" || exit 1
 
 # Run FastAPI server
 CMD ["python", "-m", "uvicorn", "api.server:app", "--host", "0.0.0.0", "--port", "8080"]

@@ -12,22 +12,29 @@ COPY frontend .
 RUN npm run build
 
 
+# Build Python dependencies outside the runtime image
+FROM python:3.11-slim AS python-deps
+
+WORKDIR /deps
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements-prod.txt .
+RUN python -m venv /opt/venv \
+    && /opt/venv/bin/pip install --no-cache-dir --upgrade pip \
+    && /opt/venv/bin/pip install --no-cache-dir -r requirements-prod.txt
+
+
 # Backend + Frontend serving
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    libgl1 \
-    libglib2.0-0 \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+ENV PATH="/opt/venv/bin:$PATH"
 
-# Copy Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY --from=python-deps /opt/venv /opt/venv
 
 # Copy application
 COPY . .
@@ -44,7 +51,7 @@ EXPOSE 8080 5173
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=5).read()" || exit 1
 
 # Run backend
 CMD ["python", "-m", "uvicorn", "api.server:app", "--host", "0.0.0.0", "--port", "8080"]
