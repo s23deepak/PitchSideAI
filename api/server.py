@@ -26,8 +26,6 @@ from config import (
     AWS_REGION,
     LOG_LEVEL,
     PORT,
-    SGLANG_BASE_URL,
-    SGLANG_MODEL,
     STREAMING_BACKEND,
     VLLM_BASE_URL,
     VLLM_VISION_MODEL,
@@ -448,8 +446,6 @@ Translation:"""
                 OPENAI_MODEL,
                 VLLM_BASE_URL,
                 VLLM_MODEL,
-                SGLANG_BASE_URL,
-                SGLANG_MODEL,
             )
 
             if LLM_BACKEND == "openai":
@@ -463,13 +459,11 @@ Translation:"""
                     },
                     headers={"Authorization": f"Bearer {OPENAI_API_KEY}"} if OPENAI_API_KEY else {},
                 )
-            elif LLM_BACKEND in {"vllm", "sglang"}:
-                base_url = SGLANG_BASE_URL if LLM_BACKEND == "sglang" else VLLM_BASE_URL
-                model = (SGLANG_MODEL or VLLM_MODEL) if LLM_BACKEND == "sglang" else VLLM_MODEL
+            elif LLM_BACKEND == "vllm":
                 response = await client.post(
-                    f"{base_url}/v1/chat/completions",
+                    f"{VLLM_BASE_URL}/v1/chat/completions",
                     json={
-                        "model": model or "",
+                        "model": VLLM_MODEL or "",
                         "messages": [{"role": "user", "content": prompt}],
                         "temperature": 0.3,
                         "max_completion_tokens": 500,
@@ -884,7 +878,7 @@ async def analyze_video(req: VideoAnalysisRequest) -> dict:
 
 # ── Video Q&A — streaming SSE endpoint ───────────────────────────────────────
 # Users upload a clip and ask a question; the backend auto-selects the best
-# available streaming vision backend (StreamingVLM → SGLang → vLLM+sliding window).
+# available streaming vision backend (StreamingVLM → vLLM).
 # No backend, fps, or chunk parameters are exposed to the client.
 
 @app.post("/api/v1/video/qa")
@@ -892,7 +886,7 @@ async def video_qa(
     video: UploadFile = File(...),
     query: str = Form(default=""),
     sport: str = Form(default="soccer"),
-    backend: str = Form(default=STREAMING_BACKEND),  # "streaming_vlm" | "sglang" | "vllm" | "auto"
+    backend: str = Form(default=STREAMING_BACKEND),  # "streaming_vlm" | "vllm" | "auto"
 ) -> StreamingResponse:
     """
     Upload a video clip and ask an AI question about it.
@@ -905,8 +899,7 @@ async def video_qa(
 
     The backend is automatically selected via FallbackStreamingBackend:
       Level 1: StreamingVLM (mit-han-lab/StreamingVLM) — needs 40GB+ VRAM
-      Level 2: SGLang + KV sliding window
-      Level 4: vLLM frame-by-frame (always available)
+      Level 2: vLLM frame-by-frame (always available)
     """
     import json as _json
 
@@ -1797,7 +1790,7 @@ async def _process_video_chunk(
 
 class StreamingVideoConfig(BaseModel):
     """Configuration for StreamingVisionBridge video streaming."""
-    backend: str = Field(default=STREAMING_BACKEND, pattern="^(auto|vllm|sglang|streaming_vlm)$")
+    backend: str = Field(default=STREAMING_BACKEND, pattern="^(auto|vllm|streaming_vlm)$")
     chunk_interval_seconds: int = Field(default=5, ge=1, le=30)
     max_chunk_frames: int = Field(default=24, ge=4, le=48)
     target_fps: float = Field(default=8.0, ge=1.0, le=30.0)
@@ -1856,11 +1849,11 @@ async def streaming_video_ws(websocket: WebSocket):
         streaming_config = StreamingVideoConfig(**config_data)
 
         # Initialize StreamingVisionBridge.
-        # Explicit backend ("streaming_vlm", "sglang", "vllm") → no fallback cascade.
-        # "auto" → fallback chain (Level 1→2→3→4).
+        # Explicit backend ("streaming_vlm", "vllm") → no fallback cascade.
+        # "auto" → fallback chain (StreamingVLM → vLLM).
         explicit_backend = streaming_config.backend != "auto"
         bridge_config = StreamingBridgeConfig(
-            backend=streaming_config.backend,  # "auto" | "vllm" | "sglang" | "streaming_vlm"
+            backend=streaming_config.backend,  # "auto" | "vllm" | "streaming_vlm"
             sport=streaming_config.sport,
             target_fps=streaming_config.target_fps,
             chunk_interval_seconds=streaming_config.chunk_interval_seconds,
@@ -1868,8 +1861,6 @@ async def streaming_video_ws(websocket: WebSocket):
             auto_commentary_enabled=streaming_config.auto_commentary_enabled,
             vllm_base_url=VLLM_BASE_URL,
             vllm_model=VLLM_VISION_MODEL,
-            sglang_base_url=SGLANG_BASE_URL,
-            sglang_model=SGLANG_MODEL,
             use_fallback_chain=not explicit_backend,  # fallback only for "auto"
         )
         bridge = StreamingVisionBridge(bridge_config)

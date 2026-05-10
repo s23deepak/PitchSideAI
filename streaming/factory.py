@@ -1,29 +1,17 @@
 """
 Streaming Backend Factory with Fallback Chain
 
-Implements a 4-level fallback chain for streaming vision:
+Implements a 2-level fallback chain for streaming vision:
 
-Level 1: SGLang + StreamingVLM (full capability)
-  - RadixAttention prefix reuse
+Level 1: StreamingVLM (full capability)
   - Compact KV-cache with attention sinks
   - Temporal scrub across chunks
-  - Best for: MI300X, H100 with SGLang serving
+  - Best for: MI300X / high-memory GPU sessions
 
-Level 2: SGLang + Custom KV Window (loses StreamingVLM optimizations)
-  - RadixAttention prefix reuse
-  - Standard sliding window (no attention sinks)
-  - Temporal continuity maintained
-  - Best for: When StreamingVLM patches fail
-
-Level 3: Pre-computed Embeddings + vLLM (loses temporal scrub)
-  - No KV-cache reuse
-  - Each chunk independent
-  - Fallback when SGLang unavailable
-
-Level 4: vLLM Frame-by-Frame (no temporal continuity)
+Level 2: vLLM Frame-by-Frame
   - Basic frame-by-frame VQA
   - No temporal continuity
-  - Last resort fallback
+  - Local/dev fallback
 
 Usage:
     from streaming.factory import get_streaming_backend
@@ -51,25 +39,23 @@ def get_streaming_backend(
     Get streaming backend with fallback chain.
 
     Args:
-        backend: Explicit backend selection ("sglang", "vllm", "streaming_vlm")
-        target_level: Fallback level (1-4). Lower is better capability.
+        backend: Explicit backend selection ("vllm", "streaming_vlm")
+        target_level: Fallback level (1-2). Lower is better capability.
 
     Returns:
         StreamingBackend instance (may be fallback wrapper)
 
     Fallback Chain:
-        Level 1: SGLang + StreamingVLM (full capability)
-        Level 2: SGLang + Custom KV Window
-        Level 3: Pre-computed Embeddings + vLLM
-        Level 4: vLLM Frame-by-Frame
+        Level 1: StreamingVLM
+        Level 2: vLLM Frame-by-Frame
     """
     # Explicit backend selection overrides auto-detection
-    if backend == "sglang":
-        return _create_sglang_backend()
-    elif backend == "streaming_vlm":
+    if backend == "streaming_vlm":
         return _create_streaming_vlm_backend()
     elif backend == "vllm":
         return _create_vllm_backend()
+    elif backend not in {None, "auto"}:
+        raise ValueError("Unsupported streaming backend. Use 'streaming_vlm', 'vllm', or 'auto'.")
 
     # Auto-detect based on environment and availability
     if target_level is not None:
@@ -77,22 +63,6 @@ def get_streaming_backend(
 
     # Default: try best available
     return _get_best_available_backend()
-
-
-def _create_sglang_backend() -> StreamingBackend:
-    """Create SGLang backend (Level 2 capability)."""
-    from streaming.sglang_backend import SGLangStreamingBackend
-
-    sglang_url = os.environ.get("SGLANG_BASE_URL", "http://localhost:30000")
-    model_name = os.environ.get("VISION_MODEL", "Qwen/Qwen2.5-VL-3B-Instruct")
-    sport = os.environ.get("SPORT", "football")
-
-    logger.info(f"Creating SGLang backend: {sglang_url}/{model_name}")
-    return SGLangStreamingBackend(
-        sglang_base_url=sglang_url,
-        model_name=model_name,
-        sport=sport,
-    )
 
 
 def _create_streaming_vlm_backend() -> StreamingBackend:
@@ -135,10 +105,8 @@ def _get_backend_by_level(level: int) -> StreamingBackend:
     """
     Get backend for specific fallback level.
 
-    Level 1: SGLang + StreamingVLM (full capability)
-    Level 2: SGLang + Custom KV Window
-    Level 3: Pre-computed Embeddings + vLLM
-    Level 4: vLLM Frame-by-Frame
+    Level 1: StreamingVLM
+    Level 2: vLLM Frame-by-Frame
     """
     if level == 1:
         # Try StreamingVLM (may fail if not installed)
@@ -146,51 +114,34 @@ def _get_backend_by_level(level: int) -> StreamingBackend:
             backend = _create_streaming_vlm_backend()
             backend._fallback_level = 1
             return backend
-        except ImportError as e:
-            logger.warning(f"StreamingVLM not available: {e}. Falling back to Level 2.")
+        except Exception as e:
+            logger.warning(f"StreamingVLM not available: {e}. Falling back to vLLM.")
             return _get_backend_by_level(2)
 
     elif level == 2:
-        # SGLang without StreamingVLM patches
-        try:
-            backend = _create_sglang_backend()
-            backend._fallback_level = 2
-            return backend
-        except Exception as e:
-            logger.warning(f"SGLang not available: {e}. Falling back to Level 3.")
-            return _get_backend_by_level(3)
-
-    elif level == 3:
-        # vLLM with pre-computed embeddings (not yet implemented)
-        # For now, fall through to Level 4
-        logger.warning("Level 3 (pre-computed embeddings) not implemented. Using Level 4.")
-        return _get_backend_by_level(4)
-
-    elif level == 4:
-        # vLLM frame-by-frame (always available)
         backend = _create_vllm_backend()
-        backend._fallback_level = 4
+        backend._fallback_level = 2
         return backend
 
     else:
-        raise ValueError(f"Invalid fallback level: {level}. Expected 1-4.")
+        raise ValueError(f"Invalid fallback level: {level}. Expected 1-2.")
 
 
 def _get_best_available_backend() -> StreamingBackend:
     """
     Get the best available backend using fallback chain.
 
-    Tries levels in order: 1 → 2 → 3 → 4
+    Tries levels in order: 1 → 2
     Returns first available backend.
     """
-    for level in [1, 2, 3, 4]:
+    for level in [1, 2]:
         try:
             return _get_backend_by_level(level)
         except Exception as e:
             logger.debug(f"Level {level} failed: {e}")
             continue
 
-    # Should never reach here (Level 4 should always work)
+    # Should never reach here (Level 2 should always work when vLLM is running)
     raise RuntimeError("All streaming backends failed")
 
 
@@ -214,7 +165,7 @@ class FallbackStreamingBackend(StreamingBackend):
 
     async def initialize(self):
         """Initialize backend at current level."""
-        while self.current_level <= 4:
+        while self.current_level <= 2:
             try:
                 self._backend = _get_backend_by_level(self.current_level)
                 await self._backend.initialize()
@@ -246,7 +197,7 @@ class FallbackStreamingBackend(StreamingBackend):
 
             # Try next level
             self.current_level += 1
-            if self.current_level <= 4:
+            if self.current_level <= 2:
                 self._backend = _get_backend_by_level(self.current_level)
                 await self._backend.initialize()
                 return await self._backend.process_chunk(

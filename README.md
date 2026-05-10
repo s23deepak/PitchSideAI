@@ -43,9 +43,9 @@ cd PitchAI
 # Backend
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env          # set LLM_BACKEND=vllm or sglang
+cp .env.example .env          # set LLM_BACKEND=vllm
 
-# Start a vLLM or SGLang OpenAI-compatible server separately
+# Start a vLLM OpenAI-compatible server separately
 # Example: export VLLM_BASE_URL=http://localhost:8001
 
 # Start backend
@@ -79,10 +79,10 @@ Browser (React / Vite)
         │           │                       │
         │    ┌──────┴───────┐         Streaming
         │    │ Round-Robin  │         Fallback
-        │    │ 5 Sources    │         Chain (L1→L4)
+        │    │ 5 Sources    │         Chain (L1→L2)
         │    └──────────────┘
         │           │
-        └─── LLM Backend (openai / vllm / sglang)
+        └─── LLM Backend (openai / vllm)
 ```
 
 **Single WebSocket per session** — `ConnectionManager` in `api/server.py` handles fan-out to all tabs. Game state (score, minute, phase) is attached to every outbound message.
@@ -139,22 +139,18 @@ Each agent extends `BaseAgent` and calls `call_llm()` via `httpx.AsyncClient` �
 
 ---
 
-## Vision Pipeline — 4-Level Fallback
+## Vision Pipeline — 2-Level Fallback
 
 The `/ws/video/streaming` endpoint runs a hardware-adaptive fallback chain:
 
 | Level | Backend | Hardware needed | Status |
 |---|---|---|---|
 | 1 | StreamingVLM (MIT HAN Lab) | AMD MI300X / H100 (40GB+ VRAM) | Code ready, requires high-end GPU |
-| 2 | SGLang KV sliding window | Any GPU + SGLang server | Code complete — activate with `SGLANG_BASE_URL` |
-| 3 | Pre-computed embeddings | — | Not implemented, falls through |
-| 4 | vLLM frame-by-frame | Consumer GPU (6GB+) | **Active default path** |
+| 2 | vLLM frame-by-frame | Consumer GPU (6GB+) | **Active default path** |
 
-Level 4 tested on NVIDIA RTX 5060 8GB with `Qwen2.5-VL-3B-Instruct-AWQ`:
+Level 2 tested on NVIDIA RTX 5060 8GB with `Qwen2.5-VL-3B-Instruct-AWQ`:
 - ~2.5s latency per 5-second video chunk
 - 6.2GB VRAM
-
-To activate Level 2 (SGLang), set `SGLANG_BASE_URL` — no code changes needed.
 
 ```python
 # Auto-selects highest available level
@@ -192,7 +188,6 @@ Set `LLM_BACKEND` in `.env`:
 |---|---|---|
 | `openai` | Cloud fallback | `gpt-4o-mini` |
 | `vllm` | Self-hosted, best quality | `Qwen2.5-VL-7B-Instruct-AWQ` |
-| `sglang` | Self-hosted, low-latency serving | `Qwen2.5-VL-7B-Instruct-AWQ` |
 
 Override per-component:
 ```env
@@ -207,18 +202,6 @@ vllm serve Qwen/Qwen2.5-VL-3B-Instruct-AWQ \
   --trust-remote-code \
   --quantization awq_marlin \
   --gpu-memory-utilization 0.75
-```
-
-**Start SGLang (Level 2 vision, optional):**
-```bash
-python -m sglang.launch_server \
-  --model-path Qwen/Qwen2.5-VL-7B-Instruct-AWQ \
-  --host 0.0.0.0 --port 30000 --tp 1
-```
-```env
-COMMENTARY_NOTES_LLM_BACKEND=sglang
-SGLANG_BASE_URL=http://localhost:30000
-SGLANG_MODEL=Qwen/Qwen2.5-VL-7B-Instruct-AWQ
 ```
 
 **Voice transcription (Qwen2-Audio):**
@@ -237,16 +220,12 @@ AUDIO_MODEL=Qwen/Qwen2-Audio-7B-Instruct
 
 ```env
 # Required
-LLM_BACKEND=vllm                            # openai | vllm | sglang
+LLM_BACKEND=vllm                            # openai | vllm
 
 # vLLM (self-hosted)
 VLLM_BASE_URL=http://localhost:8001
 VLLM_MODEL=Qwen/Qwen2.5-3B-Instruct
 VLLM_VISION_MODEL=Qwen/Qwen2.5-VL-3B-Instruct-AWQ
-
-# SGLang (Level 2 vision, optional)
-SGLANG_BASE_URL=http://localhost:30000
-SGLANG_MODEL=Qwen/Qwen2.5-VL-7B-Instruct-AWQ
 
 # Audio transcription
 AUDIO_VLLM_BASE_URL=http://localhost:8001
@@ -299,8 +278,7 @@ PitchAI/
 │   ├── firecrawl_retriever.py
 │   └── statsbomb_retriever.py        # Historical only (TTL 4h)
 ├── streaming/
-│   ├── factory.py                    # 4-level fallback chain
-│   ├── sglang_backend.py             # Level 2: SGLang KV sliding window
+│   ├── factory.py                    # StreamingVLM → vLLM fallback chain
 │   ├── streaming_bridge.py           # Level 1: StreamingVLM bridge
 │   └── streaming-vlm/               # MIT HAN Lab StreamingVLM (git submodule)
 ├── rag/
@@ -450,6 +428,6 @@ MIT — see [LICENSE](LICENSE).
 - **AMD** — AI Hackathon 2026 and MI300X hardware
 - **MIT HAN Lab** — StreamingVLM architecture
 - **Qwen Team** — Qwen2.5-VL and Qwen2-Audio models
-- **vLLM / SGLang** — LLM inference infrastructure
+- **vLLM** — LLM inference infrastructure
 - **StatsBomb** — Open football data
 - **Peter Drury** — Commentary style inspiration

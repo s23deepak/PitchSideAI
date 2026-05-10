@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 
 const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
-const FAN_LENS_BACKENDS = new Set(['vllm', 'sglang', 'streaming_vlm', 'auto'])
+const FAN_LENS_BACKENDS = new Set(['vllm', 'streaming_vlm', 'auto'])
 const DEFAULT_FAN_LENS_BACKEND = FAN_LENS_BACKENDS.has(import.meta.env.VITE_FAN_LENS_BACKEND)
     ? import.meta.env.VITE_FAN_LENS_BACKEND
     : 'vllm'

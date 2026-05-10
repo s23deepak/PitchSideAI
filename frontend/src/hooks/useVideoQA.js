@@ -1,14 +1,13 @@
 /**
  * useVideoQA — Video Clip Q&A hook
  *
- * Abstracts the full StreamingVLM → SGLang → vLLM+sliding-window fallback chain
+ * Abstracts the StreamingVLM → vLLM fallback chain
  * behind a single "upload a clip, get an answer" interface.
  *
  * Users never see backend selection, FPS settings, chunk sizes, or model names.
  * The backend auto-selects the best available level:
  *   Level 1: StreamingVLM  (needs 40GB+ VRAM — OOMs locally, falls through)
- *   Level 2: SGLang        (needs SGLang server — falls through if not running)
- *   Level 4: vLLM sliding window (always active with vLLM at localhost:8000)
+ *   Level 2: vLLM frame-by-frame (always active with vLLM at localhost:8000)
  */
 import { useState, useCallback, useRef } from 'react'
 

@@ -682,11 +682,9 @@ class StreamingVLMBackend(StreamingBackend):
 @dataclass
 class StreamingBridgeConfig:
     """Top-level configuration for the streaming vision bridge."""
-    backend: str = "streaming_vlm"     # "auto" | "vllm" | "sglang" | "streaming_vlm"
+    backend: str = "streaming_vlm"     # "auto" | "vllm" | "streaming_vlm"
     vllm_base_url: str = "http://localhost:8001"
     vllm_model: str = "Qwen/Qwen3-VL-2B-Instruct"
-    sglang_base_url: str = "http://localhost:30000"
-    sglang_model: str = "Qwen/Qwen3-VL-2B-Instruct"
     streaming_vlm_model: str = "Qwen/Qwen3-VL-2B-Instruct"
     sport: str = "football"
     # Frame buffer config
@@ -744,11 +742,11 @@ class StreamingVisionBridge:
         """Initialize the appropriate backend."""
         from streaming.factory import get_streaming_backend, FallbackStreamingBackend
 
-        # "auto" uses the fallback chain (Level 1→2→3→4).
-        # Any explicit backend ("streaming_vlm", "sglang", "vllm") is used as-is —
+        # "auto" uses the fallback chain (StreamingVLM → vLLM).
+        # Any explicit backend ("streaming_vlm", "vllm") is used as-is —
         # no cascade to another backend on failure.
         if self.config.backend == "auto" or self.config.use_fallback_chain:
-            logger.info("Initializing with fallback chain (Level 1→2→3→4)")
+            logger.info("Initializing with fallback chain (StreamingVLM → vLLM)")
             self._backend = FallbackStreamingBackend(start_level=1)
             await self._backend.initialize()
             stats = self._backend.get_stats()
@@ -762,13 +760,6 @@ class StreamingVisionBridge:
                     window_size=self.config.window_size,
                     text_sink=self.config.text_sink,
                     text_sliding_window=self.config.text_sliding_window,
-                )
-            elif self.config.backend == "sglang":
-                from streaming.sglang_backend import SGLangStreamingBackend
-                self._backend = SGLangStreamingBackend(
-                    sglang_base_url=self.config.sglang_base_url,
-                    model_name=self.config.sglang_model,
-                    sport=self.config.sport,
                 )
             elif self.config.backend == "vllm":
                 self._backend = VLLMStreamingBackend(

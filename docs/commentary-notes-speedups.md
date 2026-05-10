@@ -7,8 +7,8 @@
 - Fetched match-day weather and forecast trend concurrently before weather impact synthesis.
 - Batched player profile generation to one LLM call per squad instead of one LLM call per player.
 - Raced the first two available API/source retrievers for player stats, recent form, team news, and injuries, while preserving per-source rate limiters.
-- Added `sglang` as a first-class OpenAI-compatible LLM backend for notes and translation paths via `SGLANG_BASE_URL` and `SGLANG_MODEL`.
-- Removed Ollama from the active README setup path; notes inference should use `vllm` or `sglang`.
+- Standardized notes inference on `vllm` for the active self-hosted path.
+- Removed Ollama from the active README setup path; notes inference should use `vllm`.
 
 ## Parallel vs Sequential
 
