@@ -44,35 +44,9 @@ export default function MicButton({
 
     // Speech recognition callbacks
     const handleConfidencePass = useCallback(({ transcript, confidence, skipConfirmation }) => {
-        if (skipConfirmation) {
-            // High confidence (>90%): submit immediately
-            setConfirmationText('')
-            setState('processing')
-            onQuestionSubmit?.({ text: transcript, confidence })
-        } else {
-            // Medium confidence (70-90%): show confirmation for 1.5s
-            setConfirmationText(transcript)
-            setState('confirmation')
-
-            // Fix #7: Confirmation Timeout Race Condition - track if cleared
-            // Fix: Make confirmation delay configurable (default 1000ms, accessible via data attribute or prop)
-            const confirmationDelay = typeof window !== 'undefined'
-                ? (window.PITCHAI_CONFIG?.confirmationDelay || 1000)
-                : 1000
-
-            let confirmationCleared = false
-            confirmationTimeoutRef.current = setTimeout(() => {
-                if (!confirmationCleared) {
-                    setState('processing')
-                    onQuestionSubmit?.({ text: transcript, confidence })
-                }
-            }, confirmationDelay)
-
-            // Store the clear function to prevent timeout from firing after dismissal
-            confirmationTimeoutRef.current.clear = () => {
-                confirmationCleared = true
-            }
-        }
+        setConfirmationText('')
+        setState('processing')
+        onQuestionSubmit?.({ text: transcript, confidence })
     }, [onQuestionSubmit])
 
     const handleConfidenceReject = useCallback(({ transcript, confidence }) => {

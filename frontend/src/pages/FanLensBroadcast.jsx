@@ -86,6 +86,7 @@ export default function FanLensBroadcast() {
   const [excitement, setExcitement] = useState(90)
   const [knowledge, setKnowledge] = useState(65)
   const [broadcastOpen, setBroadcastOpen] = useState(true)
+  const [insightOpen, setInsightOpen] = useState(true)
 
   // Language
   const [language, setLanguage] = useState('en')
@@ -248,11 +249,15 @@ export default function FanLensBroadcast() {
         >
           {/* AI glow border */}
           <div style={{ position: 'absolute', inset: 0, border: `1px solid rgba(195,244,0,0.15)`, borderRadius: '12px', pointerEvents: 'none' }} />
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: T.primaryContainer }}>
+          <div
+            onClick={() => setInsightOpen(o => !o)}
+            style={{ display: 'flex', alignItems: 'center', gap: '8px', color: T.primaryContainer, cursor: 'pointer', userSelect: 'none' }}
+          >
             <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>lightbulb</span>
-            <span style={{ fontFamily: T.fontMono, fontSize: '12px', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase' }}>AI INSIGHT</span>
+            <span style={{ fontFamily: T.fontMono, fontSize: '12px', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', flex: 1 }}>AI INSIGHT</span>
+            <span className="material-symbols-outlined" style={{ fontSize: '16px', transition: 'transform 0.2s', transform: insightOpen ? 'rotate(0deg)' : 'rotate(-90deg)' }}>expand_more</span>
           </div>
-          {liveCommentary[0]?.text ? (
+          {insightOpen && liveCommentary[0]?.text ? (
             <>
               <p style={{ color: T.onSurface, fontFamily: T.fontUI, fontSize: '14px', lineHeight: '20px', margin: 0 }}>
                 {liveCommentary[0].text.slice(0, 160)}{liveCommentary[0].text.length > 160 ? '…' : ''}
@@ -263,7 +268,7 @@ export default function FanLensBroadcast() {
                 <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: `rgba(195,244,0,0.4)` }} />
               </div>
             </>
-          ) : (
+          ) : insightOpen ? (
             <>
               <h3 style={{ color: T.onSurface, fontFamily: T.fontUI, fontSize: '16px', lineHeight: '22px', fontWeight: 700, margin: 0 }}>
                 {hasUsableTeams ? `${homeTeam} vs ${awayTeam}` : 'Match context not set'}
@@ -310,7 +315,7 @@ export default function FanLensBroadcast() {
                 {hasPreparedNotes ? 'Notes Ready' : buildingNotes ? 'Generating Notes' : 'Generate Notes'}
               </button>
             </>
-          )}
+          ) : null}
         </div>
       }
       broadcastEngine={
