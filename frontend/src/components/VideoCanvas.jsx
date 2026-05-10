@@ -19,6 +19,7 @@ export default function VideoCanvas({
     homeTeam = 'Home',
     awayTeam = 'Away',
     sport = 'soccer',
+    startLabel = 'Start Video Analysis',
     onTacticalDetection,
     onCommentary,
     onVideoReady, // (objectUrl: string | null) => void — notifies parent when video loads/clears
@@ -440,10 +441,12 @@ export default function VideoCanvas({
 
     // Connection state indicator
     const renderConnectionIndicator = () => {
+        if (!videoFile || !isStreaming) return null
+
         const stateConfig = {
             connected: { color: 'var(--success)', label: 'Live', pulse: true },
             reconnecting: { color: 'var(--warning)', label: 'Reconnecting...', pulse: true },
-            disconnected: { color: 'var(--danger)', label: 'Disconnected', pulse: false },
+            disconnected: { color: 'var(--danger)', label: 'Analysis stopped', pulse: false },
         }
 
         const config = stateConfig[connectionState] || stateConfig.disconnected
@@ -672,7 +675,7 @@ export default function VideoCanvas({
                         onClick={startStreaming}
                         style={{ padding: '4px 10px', fontSize: 12 }}
                     >
-                        Start Commentary
+                        {startLabel}
                     </button>
                 </div>
             ) : isStreaming ? (

@@ -233,73 +233,7 @@ export default function FanLensBroadcast() {
           clipQuestion={qaAnswer?.question || ''}
         />
       }
-      videoOverlays={
-        <>
-          {/* ── Scoreboard pill — center top ── */}
-          <div
-            role="status"
-            aria-label={`Score: ${homeTeam} ${homeScore} - ${awayScore} ${awayTeam}`}
-            style={{
-              ...glass,
-              position: 'absolute', top: '24px', left: '50%', transform: 'translateX(-50%)',
-              padding: '10px 24px', display: 'flex', alignItems: 'center', gap: '16px',
-              whiteSpace: 'nowrap', pointerEvents: 'none', borderRadius: '999px',
-              boxShadow: '0 4px 24px rgba(0,0,0,0.4)',
-            }}
-          >
-            <span style={{ color: T.onSurface, fontFamily: T.fontMono, fontSize: '14px', fontWeight: 700, letterSpacing: '0.05em' }}>
-              {shortName(homeTeam, 'HME')}
-            </span>
-            <span style={{ color: T.primaryContainer, fontFamily: T.fontMono, fontSize: '24px', fontWeight: 700, lineHeight: 1 }}>
-              {homeScore}
-            </span>
-            <div style={{ width: '1px', height: '20px', background: 'rgba(255,255,255,0.2)' }} />
-            <span style={{ color: T.primaryContainer, fontFamily: T.fontMono, fontSize: '14px', opacity: 0.85 }}>
-              {matchMinute != null ? `${matchMinute}'` : '—'}
-            </span>
-            <div style={{ width: '1px', height: '20px', background: 'rgba(255,255,255,0.2)' }} />
-            <span style={{ color: T.onSurface, fontFamily: T.fontMono, fontSize: '24px', fontWeight: 700, lineHeight: 1 }}>
-              {awayScore}
-            </span>
-            <span style={{ color: T.onSurface, fontFamily: T.fontMono, fontSize: '14px', fontWeight: 700, letterSpacing: '0.05em' }}>
-              {shortName(awayTeam, 'AWY')}
-            </span>
-          </div>
-
-          {/* ── Language toggle pill — top right ── */}
-          <div
-            role="group"
-            aria-label="Commentary language"
-            style={{
-              ...glass, borderRadius: '999px',
-              position: 'absolute', top: '24px', right: '24px',
-              padding: '4px', display: 'flex', alignItems: 'center',
-              pointerEvents: 'auto',
-            }}
-          >
-            {['en', 'es'].map((lang) => (
-              <button
-                key={lang}
-                aria-pressed={language === lang}
-                aria-label={lang === 'en' ? 'English' : 'Spanish'}
-                onClick={() => {
-                  setLanguage(lang)
-                  updateLanguage(lang)
-                }}
-                style={{
-                  padding: '6px 16px', borderRadius: '999px', border: 'none', cursor: 'pointer',
-                  background: language === lang ? T.primaryContainer : 'transparent',
-                  color: language === lang ? T.onPrimary : T.onSurfaceVar,
-                  fontFamily: T.fontMono, fontSize: '12px', fontWeight: 700, letterSpacing: '0.1em',
-                  textTransform: 'uppercase', transition: 'color 0.15s, background 0.15s',
-                }}
-              >
-                {lang.toUpperCase()}
-              </button>
-            ))}
-          </div>
-        </>
-      }
+      videoOverlays={null}
       triviaCards={
         /* ── AI Insight trivia card — w-80 bottom-left (spec) ── */
         <div
@@ -572,6 +506,7 @@ export default function FanLensBroadcast() {
         onCommentary={(msg) => {
           if (msg.type === 'commentary') addCommentaryItem(msg)
         }}
+        startLabel="Start Video Analysis"
       />
     </FanLensLayout>
   )
