@@ -12,7 +12,7 @@ const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
  * - Connection state indicator
  * - Trivia card animations
  *
- * Connects to existing /ws/live WebSocket (not separate connection).
+ * Streams frames to /ws/video/streaming for live video Q&A.
  */
 export default function VideoCanvas({
     matchSession,
@@ -22,6 +22,7 @@ export default function VideoCanvas({
     onTacticalDetection,
     onCommentary,
     onVideoReady, // (objectUrl: string | null) => void — notifies parent when video loads/clears
+    onStreamingStatus,
 }) {
     // Streaming state
     const [isStreaming, setIsStreaming] = useState(false)
@@ -40,7 +41,7 @@ export default function VideoCanvas({
     const [triviaCard, setTriviaCard] = useState(null)
 
     // Backend config
-    const [backend, setBackend] = useState('vllm')
+    const [backend, setBackend] = useState('streaming_vlm')
     const [chunkInterval, setChunkInterval] = useState(5) // seconds
     const [targetFps, setTargetFps] = useState(8)
 
@@ -49,6 +50,8 @@ export default function VideoCanvas({
     const canvasRef = useRef(null)
     const captureInterval = useRef(null)
     const overlayTimeout = useRef(null)
+    const pendingQueryRef = useRef(null)
+    const framesSentRef = useRef(0)
 
     // Connect to video streaming WebSocket (separate from LiveSession /ws/live)
     const connectWebSocket = useCallback(() => {
@@ -109,6 +112,10 @@ export default function VideoCanvas({
                             }
                         }
                         onCommentary?.(msg)
+                        break
+
+                    case 'answer':
+                        window.dispatchEvent(new CustomEvent('pitchai:qa_answer', { detail: msg }))
                         break
 
                     case 'trivia_card':
@@ -172,6 +179,17 @@ export default function VideoCanvas({
         }
     }, [homeTeam, awayTeam, sport, backend, chunkInterval, targetFps, onTacticalDetection, onCommentary])
 
+    useEffect(() => {
+        onStreamingStatus?.({
+            isStreaming,
+            wsReady,
+            connectionState,
+            framesSent,
+            videoReady,
+            hasVideo: Boolean(videoFile),
+        })
+    }, [isStreaming, wsReady, connectionState, framesSent, videoReady, videoFile, onStreamingStatus])
+
     // Frame capture at target FPS
     const captureLoop = useCallback(() => {
         if (!videoRef.current || !canvasRef.current || isPaused || !videoReady) return
@@ -197,20 +215,29 @@ export default function VideoCanvas({
                     type: 'frame',
                     frame_b64,
                     timestamp_ms,
-                    keyframe: framesSent % Math.round(targetFps) === 0,
+                    keyframe: framesSentRef.current % Math.round(targetFps) === 0,
                 }))
-                setFramesSent(f => f + 1)
+                const nextFramesSent = framesSentRef.current + 1
+                framesSentRef.current = nextFramesSent
+                setFramesSent(nextFramesSent)
+                if (pendingQueryRef.current && nextFramesSent >= 2) {
+                    wsRef.current.send(JSON.stringify({ type: 'query', text: pendingQueryRef.current }))
+                    pendingQueryRef.current = null
+                }
             }
         } catch (err) {
             console.error('Frame capture error:', err)
         }
-    }, [isPaused, videoReady, targetFps, framesSent])
+    }, [isPaused, videoReady, targetFps])
 
     const handleVideoSelect = (e) => {
         const file = e.target.files?.[0]
         if (!file) return
         setVideoFile(file)
         setVideoReady(false)
+        setFramesSent(0)
+        framesSentRef.current = 0
+        pendingQueryRef.current = null
 
         const url = URL.createObjectURL(file)
         if (videoRef.current) {
@@ -240,6 +267,9 @@ export default function VideoCanvas({
         setVideoReady(false)
         setVideoFile(null)
         setConnectionState('disconnected')
+        setFramesSent(0)
+        framesSentRef.current = 0
+        pendingQueryRef.current = null
 
         if (captureInterval.current) {
             clearInterval(captureInterval.current)
@@ -265,6 +295,35 @@ export default function VideoCanvas({
             setIsPaused(true)
         }
     }
+
+    useEffect(() => {
+        const handleStreamingQuery = (event) => {
+            const text = event.detail?.text?.trim()
+            if (!text) return
+            pendingQueryRef.current = text
+            if (wsRef.current?.readyState === WebSocket.OPEN && framesSentRef.current >= 2) {
+                wsRef.current.send(JSON.stringify({ type: 'query', text }))
+                pendingQueryRef.current = null
+                return
+            }
+            if (!isStreaming && videoRef.current && videoFile && videoReady) {
+                startStreaming()
+                return
+            }
+            if (!videoFile || !videoReady) {
+                window.dispatchEvent(new CustomEvent('pitchai:qa_answer', {
+                    detail: {
+                        type: 'answer',
+                        text: 'Upload match footage first, then ask me about what is happening in the video.',
+                        source: 'system',
+                    },
+                }))
+            }
+        }
+
+        window.addEventListener('pitchai:streaming_query', handleStreamingQuery)
+        return () => window.removeEventListener('pitchai:streaming_query', handleStreamingQuery)
+    }, [isStreaming, videoFile, videoReady, startStreaming])
 
     useEffect(() => {
         return () => {
@@ -581,11 +640,16 @@ export default function VideoCanvas({
                     </label>
                 </div>
             ) : videoReady && !isStreaming ? (
-                /* Video playing — overlay controls at bottom */
+                /* Video ready — compact overlay away from the Ask AI tray */
                 <div style={{
-                    position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 5,
-                    padding: '16px',
-                    background: 'linear-gradient(to top, rgba(0,0,0,0.75) 0%, transparent 100%)',
+                    position: 'absolute', top: 16, left: 16, zIndex: 5,
+                    maxWidth: 'min(520px, calc(100% - 32px))',
+                    padding: '10px 12px',
+                    borderRadius: 12,
+                    background: 'rgba(0,0,0,0.68)',
+                    backdropFilter: 'blur(14px)',
+                    WebkitBackdropFilter: 'blur(14px)',
+                    border: '1px solid rgba(255,255,255,0.12)',
                     display: 'flex', alignItems: 'center', gap: 8,
                 }}>
                     <span style={{ flex: 1, fontSize: 12, color: 'rgba(255,255,255,0.7)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -608,15 +672,19 @@ export default function VideoCanvas({
                         onClick={startStreaming}
                         style={{ padding: '4px 10px', fontSize: 12 }}
                     >
-                        Start AI Analysis
+                        Start Commentary
                     </button>
                 </div>
             ) : isStreaming ? (
-                /* Streaming — show playback controls overlay at bottom */
+                /* Streaming — keep playback controls away from the Ask AI tray */
                 <div style={{
-                    position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 5,
-                    padding: '12px 16px',
-                    background: 'linear-gradient(to top, rgba(0,0,0,0.75) 0%, transparent 100%)',
+                    position: 'absolute', top: 16, left: 16, right: 16, zIndex: 5,
+                    padding: '10px 12px',
+                    borderRadius: 12,
+                    background: 'rgba(0,0,0,0.68)',
+                    backdropFilter: 'blur(14px)',
+                    WebkitBackdropFilter: 'blur(14px)',
+                    border: '1px solid rgba(255,255,255,0.12)',
                 }}>
                     {/* Progress bar */}
                     <div style={{

@@ -37,7 +37,7 @@ from agents.player_id_agent import PlayerIDAgent
 from tools.dynamodb_tool import build_match_session_key, get_recent_events, write_event
 from models.game_state import GameState
 from streaming import StreamingVisionBridge
-from streaming.streaming_bridge import StreamingBridgeConfig
+from streaming.streaming_bridge import StreamingBridgeConfig, clean_model_answer
 
 # Setup production logging
 setup_logging(level=LOG_LEVEL, json_logs=True)
@@ -970,9 +970,10 @@ async def video_qa(
             result = await _backend.process_chunk(chunk, query_hint=question)
             # StreamingResult is a dataclass; dicts also supported
             if isinstance(result, dict):
-                text = result.get("analysis") or result.get("text") or str(result)
+                text = result.get("analysis") or result.get("text") or result.get("commentary") or str(result)
             else:
                 text = getattr(result, 'commentary', None) or getattr(result, 'analysis', None) or str(result)
+            text = clean_model_answer(text) or "I could not produce a clear answer from this clip."
 
             # Stream as tokens (sentence-level for smooth UI)
             import re as _re
@@ -1191,7 +1192,7 @@ async def live_audio_ws(websocket: WebSocket):
             except asyncio.TimeoutError:
                 logger.warning("start_session timed out — continuing without match brief")
             except Exception as exc:
-                logger.warning("start_session failed: %s", exc)
+                logger.warning(f"start_session failed: {exc}")
 
             try:
                 await asyncio.wait_for(
@@ -1782,6 +1783,7 @@ class StreamingVideoConfig(BaseModel):
     max_chunk_frames: int = Field(default=24, ge=4, le=48)
     target_fps: float = Field(default=8.0, ge=1.0, le=30.0)
     sport: str = Field(default="football", pattern="^(football|soccer|cricket|basketball)$")
+    auto_commentary_enabled: bool = True
 
 
 @app.websocket("/ws/video/streaming")
@@ -1844,12 +1846,17 @@ async def streaming_video_ws(websocket: WebSocket):
             target_fps=streaming_config.target_fps,
             chunk_interval_seconds=streaming_config.chunk_interval_seconds,
             max_chunk_frames=streaming_config.max_chunk_frames,
+            auto_commentary_enabled=streaming_config.auto_commentary_enabled,
             sglang_base_url=os.environ.get("SGLANG_BASE_URL", "http://localhost:30000"),
             sglang_model=os.environ.get("VISION_MODEL", "Qwen/Qwen2.5-VL-3B-Instruct"),
             use_fallback_chain=not explicit_backend,  # fallback only for "auto"
         )
         bridge = StreamingVisionBridge(bridge_config)
-        await bridge.initialize()
+        if streaming_config.backend in {"streaming_vlm", "auto"}:
+            bridge._backend = await get_or_init_streaming_backend(streaming_config.backend)
+            bridge._initialized = True
+        else:
+            await bridge.initialize()
 
         # Get actual backend level from fallback
         backend_stats = bridge._backend.get_stats() if bridge._backend else {}
@@ -1990,12 +1997,24 @@ async def streaming_video_ws(websocket: WebSocket):
 
                 elif msg_type == "query":
                     query_text = data.get("text", "").strip()
-                    if not query_text or not live_agent:
+                    if not query_text:
                         continue
-                    answer = await live_agent.handle_text_query(query_text)
+                    result = await bridge.force_flush(query_hint=query_text) if bridge else None
+                    if result:
+                        answer = clean_model_answer(
+                            result.get("commentary")
+                            or result.get("key_observation")
+                            or "I processed the current video context, but no answer text was returned."
+                        )
+                    elif live_agent:
+                        answer = await live_agent.handle_text_query(query_text)
+                    else:
+                        answer = "I need a few video frames before I can answer from the stream."
                     await manager.send(websocket, {
                         "type": "answer",
                         "text": answer,
+                        "source": "streaming_vlm" if result else "live",
+                        "result": result,
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                     })
 

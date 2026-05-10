@@ -14,6 +14,28 @@ import { useState, useCallback, useRef } from 'react'
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
+function cleanAnswerText(text) {
+    if (!text) return ''
+    let cleaned = String(text).trim()
+    try {
+        const parsed = JSON.parse(cleaned)
+        if (parsed && typeof parsed === 'object') {
+            cleaned = parsed.answer || parsed.commentary || parsed.key_observation || parsed.analysis || parsed.text || cleaned
+        }
+    } catch {
+        const match = cleaned.match(/"(?:answer|commentary|key_observation|analysis|text)"\s*:\s*"([^"]+)/s)
+        if (match) cleaned = match[1]
+    }
+    return cleaned
+        .replace(/\\n/g, ' ')
+        .replace(/\\"/g, '"')
+        .replace(/^\s*(?:answer|commentary|analysis|text)\s*:\s*/i, '')
+        .replace(/",?\s*\d+\s*:\s*.*$/s, '')
+        .replace(/^[\s{}[\],'"]+|[\s{}[\],'"]+$/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+}
+
 /**
  * @typedef {Object} VideoQAState
  * @property {boolean}  isAnalyzing     - True while the backend is processing
@@ -111,14 +133,14 @@ export function useVideoQA() {
                         if (event.type === 'meta') {
                             setBackendLevel(event.backend_level ?? null)
                         } else if (event.type === 'token') {
-                            setAnswer(prev => prev + (event.text ?? ''))
+                            setAnswer(prev => cleanAnswerText(prev + (event.text ?? '')))
                         } else if (event.type === 'error') {
                             throw new Error(event.message)
                         }
                     } catch (parseErr) {
                         // Non-JSON line — treat as raw token text
                         if (data && data !== '[DONE]') {
-                            setAnswer(prev => prev + data)
+                            setAnswer(prev => cleanAnswerText(prev + data))
                         }
                     }
                 }

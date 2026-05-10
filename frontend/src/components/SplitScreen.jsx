@@ -34,6 +34,30 @@ const CONTENT_TIMEOUT = 500
 const AUTO_DISMISS_TIMEOUT = 5000      // 5s for voice Q&A
 const VIDEO_AUTO_DISMISS_TIMEOUT = 15000 // 15s for video clip Q&A
 
+function cleanAnswerText(text) {
+    if (!text) return ''
+    let cleaned = String(text).trim()
+
+    try {
+        const parsed = JSON.parse(cleaned)
+        if (parsed && typeof parsed === 'object') {
+            cleaned = parsed.answer || parsed.commentary || parsed.key_observation || parsed.analysis || parsed.text || cleaned
+        }
+    } catch {
+        const match = cleaned.match(/"(?:answer|commentary|key_observation|analysis|text)"\s*:\s*"([^"]+)/s)
+        if (match) cleaned = match[1]
+    }
+
+    return cleaned
+        .replace(/\\n/g, ' ')
+        .replace(/\\"/g, '"')
+        .replace(/^\s*(?:answer|commentary|analysis|text)\s*:\s*/i, '')
+        .replace(/",?\s*\d+\s*:\s*.*$/s, '')
+        .replace(/^[\s{}[\],'"]+|[\s{}[\],'"]+$/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+}
+
 export default function SplitScreen({
     answer,
     isActive,
@@ -162,6 +186,7 @@ export default function SplitScreen({
 
     // Determine if we're in limited temporal context mode
     const isLimitedContext = answer?.temporal_context === 'limited'
+    const answerText = cleanAnswerText(answer?.text)
 
     // Animation class based on state
     const getAnimationClass = () => {
@@ -282,7 +307,7 @@ export default function SplitScreen({
                                     color: '#e5e2e1', fontFamily: "'Inter', sans-serif",
                                     fontSize: '14px', lineHeight: '1.6', margin: 0,
                                 }}>
-                                    {answer?.text}
+                                    {answerText}
                                     {isAnalyzing && <span style={{ color: '#c3f400', animation: 'pulse 1s infinite' }}>▌</span>}
                                 </p>
                             )}
@@ -296,13 +321,13 @@ export default function SplitScreen({
                 ) : isLimitedContext ? (
                     <div className="limited-context-panel">
                         <div className="limited-context-indicator">Based on available footage</div>
-                        <div className="answer-text">{answer?.text}</div>
+                        <div className="answer-text">{answerText}</div>
                     </div>
                 ) : (
                     <FrozenFrameWithSVG
                         timestamp_ms={answer?.timestamp_ms}
                         overlay={answer?.overlay_coordinates}
-                        answerText={answer?.text}
+                        answerText={answerText}
                         onDismiss={handleDismiss}
                     />
                 )}

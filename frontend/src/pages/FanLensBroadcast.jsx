@@ -19,10 +19,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useLiveSession } from '@/contexts/LiveSessionContext'
 import { FanLensLayout } from '@/layouts/FanLensLayout'
-import { useVideoQA } from '@/hooks/useVideoQA'
 import SplitScreen from '@/components/SplitScreen'
 import VideoCanvas from '@/components/VideoCanvas'
 import MicButton from '@/components/MicButton'
+import { useBrowserSpeechSynthesis } from '@/hooks/useBrowserSpeechSynthesis'
 
 // ── Design tokens (Midnight Stadium) ──────────────────────────────────────────
 const T = {
@@ -87,6 +87,7 @@ export default function FanLensBroadcast() {
 
   // Language
   const [language, setLanguage] = useState('en')
+  const [voiceEnabled, setVoiceEnabled] = useState(false)
 
   // Live score derived from WS messages
   const [homeScore, setHomeScore] = useState(0)
@@ -102,17 +103,26 @@ export default function FanLensBroadcast() {
   const [textInputOpen, setTextInputOpen] = useState(false)
   const [textQuery, setTextQuery] = useState('')
 
-  // Clip Q&A question
-  const [clipQuestion, setClipQuestion] = useState('')
-
   // Current video URL playing in VideoCanvas (for SplitScreen left panel)
   const [canvasVideoUrl, setCanvasVideoUrl] = useState(null)
+  const [streamingStatus, setStreamingStatus] = useState({
+    isStreaming: false,
+    wsReady: false,
+    connectionState: 'disconnected',
+    framesSent: 0,
+    videoReady: false,
+    hasVideo: false,
+  })
 
-  // Video Q&A hook — hides all backend complexity
-  const { isAnalyzing, answer: videoAnswer, error: videoError, videoPreview, analyzeClip, reset: resetVideoQA } = useVideoQA()
-
-  // File input ref for upload button
-  const fileInputRef = useRef(null)
+  const pendingQuestionRef = useRef(null)
+  const lastSpokenAnswerRef = useRef(null)
+  const browserVoice = useBrowserSpeechSynthesis({
+    enabled: voiceEnabled,
+    lang: language === 'es' ? 'es-ES' : 'en-US',
+    rate: 1,
+    pitch: 1,
+    volume: 1,
+  })
 
   // Sync settings to WS
   const pushSettings = useCallback((b, e, k) => {
@@ -138,46 +148,64 @@ export default function FanLensBroadcast() {
   useEffect(() => {
     const handle = (e) => {
       if (isDismissing) return
-      setQaAnswer(e.detail)
+      const detail = { ...e.detail }
+      if (detail.source === 'streaming_vlm') {
+        detail.source = 'video_qa'
+      }
+      if (!detail.question && pendingQuestionRef.current) {
+        detail.question = pendingQuestionRef.current
+      }
+      detail.analyzing = false
+      pendingQuestionRef.current = null
+      setQaAnswer(detail)
       setSplitActive(true)
+      const answerText = detail.text || detail.answer || detail.commentary
+      if (answerText && answerText !== lastSpokenAnswerRef.current) {
+        lastSpokenAnswerRef.current = answerText
+        browserVoice.speak(answerText)
+      }
     }
     window.addEventListener('pitchai:qa_answer', handle)
     return () => window.removeEventListener('pitchai:qa_answer', handle)
-  }, [isDismissing])
-
-  // Sync streaming videoAnswer tokens into qaAnswer for SplitScreen
-  useEffect(() => {
-    if (!videoAnswer) return
-    setQaAnswer({ text: videoAnswer, source: 'video_qa' })
-    if (!splitActive) setSplitActive(true)
-  }, [videoAnswer])
+  }, [browserVoice, isDismissing])
 
   const handleDismiss = useCallback(() => {
     setIsDismissing(true)
     setSplitActive(false)
     setQaAnswer(null)
-    resetVideoQA()
+    browserVoice.cancel()
     window.dispatchEvent(new CustomEvent('pitchai:split_resolved', { detail: { dismissed: true } }))
     setTimeout(() => setIsDismissing(false), 300)
-  }, [resetVideoQA])
+  }, [browserVoice])
+
+  const submitFanQuestion = useCallback((q) => {
+    const text = q.trim()
+    if (!text) return
+    if (streamingStatus.hasVideo || streamingStatus.videoReady || streamingStatus.wsReady) {
+      pendingQuestionRef.current = text
+      setQaAnswer({ text: 'Watching the current video moment...', source: 'video_qa', analyzing: true, question: text })
+      setSplitActive(true)
+      window.dispatchEvent(new CustomEvent('pitchai:streaming_query', { detail: { text } }))
+      return
+    }
+    if (isConnected) {
+      sendQuery(text)
+      return
+    }
+    setQaAnswer({
+      text: 'Start the video stream first so I can answer from the live video.',
+      source: 'system',
+    })
+    setSplitActive(true)
+  }, [streamingStatus.hasVideo, streamingStatus.videoReady, streamingStatus.wsReady, isConnected, sendQuery])
 
   const handleTextQuerySubmit = useCallback(() => {
     const q = textQuery.trim()
-    if (!q || !isConnected) return
-    sendQuery(q)
+    if (!q) return
+    submitFanQuestion(q)
     setTextQuery('')
     setTextInputOpen(false)
-  }, [textQuery, sendQuery, isConnected])
-
-  const handleFileChange = (e) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    analyzeClip(file, clipQuestion.trim(), sport)
-    // Preview opens split screen while analyzing
-    setSplitActive(true)
-    setQaAnswer({ text: '', source: 'video_qa', analyzing: true })
-    e.target.value = '' // Reset so same file can be re-selected
-  }
+  }, [textQuery, submitFanQuestion])
 
   const shortName = (t, n) => (t || n).slice(0, 3).toUpperCase()
 
@@ -188,10 +216,9 @@ export default function FanLensBroadcast() {
           answer={qaAnswer}
           isActive={splitActive}
           onDismiss={handleDismiss}
-          videoPreview={videoPreview}
           liveVideoUrl={canvasVideoUrl}
-          isAnalyzing={isAnalyzing}
-          clipQuestion={clipQuestion}
+          isAnalyzing={Boolean(qaAnswer?.analyzing)}
+          clipQuestion={qaAnswer?.question || ''}
         />
       }
       videoOverlays={
@@ -336,60 +363,6 @@ export default function FanLensBroadcast() {
               valueLabel={knowledge > 70 ? 'Tactical' : knowledge < 40 ? 'Casual' : 'Mixed'}
               onChange={(v) => { setKnowledge(v); pushSettings(bias, excitement, v) }}
             />
-
-            {/* Divider */}
-            <div style={{ width: '100%', height: '1px', background: T.borderDim }} />
-
-            {/* Video Q&A Upload */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              <span style={{ fontFamily: T.fontMono, fontSize: '11px', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: T.onSurfaceVar }}>ASK AI ABOUT A CLIP</span>
-              <input
-                type="text"
-                value={clipQuestion}
-                onChange={e => setClipQuestion(e.target.value)}
-                placeholder="What do you want to know? (optional)"
-                disabled={isAnalyzing}
-                style={{
-                  width: '100%', boxSizing: 'border-box',
-                  background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)',
-                  borderRadius: '6px', padding: '7px 10px',
-                  color: '#e5e2e1', fontFamily: "'Inter', sans-serif", fontSize: '12px',
-                  outline: 'none', transition: 'border-color 0.2s',
-                }}
-                onFocus={e => { e.target.style.borderColor = 'rgba(195,244,0,0.5)' }}
-                onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.1)' }}
-              />
-              <label
-                style={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
-                  padding: '8px 12px', borderRadius: '8px', cursor: 'pointer',
-                  border: `1px dashed rgba(195,244,0,${isAnalyzing ? '0.6' : '0.35'})`,
-                  background: isAnalyzing ? 'rgba(195,244,0,0.06)' : 'transparent',
-                  transition: 'border-color 0.2s, background 0.2s',
-                }}
-                onMouseEnter={e => { if (!isAnalyzing) e.currentTarget.style.borderColor = 'rgba(195,244,0,0.7)' }}
-                onMouseLeave={e => { if (!isAnalyzing) e.currentTarget.style.borderColor = 'rgba(195,244,0,0.35)' }}
-              >
-                <span className="material-symbols-outlined" style={{ fontSize: '18px', color: T.primaryContainer }}>
-                  {isAnalyzing ? 'hourglass_top' : 'upload_file'}
-                </span>
-                <span style={{ fontFamily: T.fontMono, fontSize: '12px', fontWeight: 600, color: T.primaryContainer }}>
-                  {isAnalyzing ? 'Analyzing…' : 'Upload Clip for Q&A'}
-                </span>
-                <input
-                  ref={fileInputRef}
-                  type="file" accept="video/*"
-                  style={{ display: 'none' }}
-                  onChange={handleFileChange}
-                  disabled={isAnalyzing}
-                />
-              </label>
-              {videoError && (
-                <p style={{ color: '#ffb4ab', fontFamily: T.fontUI, fontSize: '11px', margin: 0 }}>
-                  {videoError}
-                </p>
-              )}
-            </div>
             </>}
           </div>
 
@@ -435,7 +408,7 @@ export default function FanLensBroadcast() {
                   data-testid="text-query-submit"
                   onClick={handleTextQuerySubmit}
                   aria-label="Send question"
-                  disabled={!textQuery.trim() || !isConnected}
+                  disabled={!textQuery.trim()}
                   style={{
                     width: '36px', height: '36px',
                     background: textQuery.trim() ? T.primaryContainer : 'rgba(255,255,255,0.07)',
@@ -480,10 +453,48 @@ export default function FanLensBroadcast() {
               </span>
             </button>
 
+            {/* Browser TTS toggle */}
+            <button
+              data-testid="voice-output-toggle"
+              onClick={() => {
+                setVoiceEnabled(v => {
+                  const next = !v
+                  if (!next) browserVoice.cancel()
+                  return next
+                })
+              }}
+              aria-label={voiceEnabled ? 'Turn answer voice off' : 'Turn answer voice on'}
+              aria-pressed={voiceEnabled}
+              disabled={!browserVoice.isSupported}
+              title={
+                browserVoice.isSupported
+                  ? voiceEnabled ? 'Answer voice on' : 'Answer voice off'
+                  : 'Speech synthesis is not supported in this browser'
+              }
+              style={{
+                width: '48px', height: '48px',
+                borderRadius: '50%',
+                background: voiceEnabled ? T.primaryContainer : 'rgba(255,255,255,0.08)',
+                border: `1px solid ${voiceEnabled ? T.primaryContainer : T.border}`,
+                cursor: browserVoice.isSupported ? 'pointer' : 'not-allowed',
+                opacity: browserVoice.isSupported ? 1 : 0.45,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                transition: 'background 0.15s, border-color 0.15s',
+                pointerEvents: 'auto',
+              }}
+            >
+              <span className="material-symbols-outlined" style={{
+                fontSize: '22px',
+                color: voiceEnabled ? T.onPrimary : T.onSurface,
+              }}>
+                {browserVoice.isSpeaking ? 'record_voice_over' : voiceEnabled ? 'volume_up' : 'volume_off'}
+              </span>
+            </button>
+
             {/* Mic button — inline in the flex row */}
             <MicButton
-              onQuestionSubmit={({ text }) => sendQuery(text)}
-              isAiReady={isConnected}
+              onQuestionSubmit={({ text }) => submitFanQuestion(text)}
+              isAiReady={isConnected || streamingStatus.wsReady}
               isSplitScreenActive={splitActive}
               inline
             />
@@ -498,6 +509,7 @@ export default function FanLensBroadcast() {
         awayTeam={awayTeam}
         sport={sport}
         onVideoReady={(url) => setCanvasVideoUrl(url)}
+        onStreamingStatus={setStreamingStatus}
         onTacticalDetection={(analysis) => {
           updateDetection(analysis)
           sendTacticalDetection(analysis)

@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional
 
 import aiohttp
 
-from streaming.streaming_bridge import StreamingBackend, StreamingResult
+from streaming.streaming_bridge import StreamingBackend, StreamingResult, clean_model_answer
 from streaming.frame_buffer import VideoChunk
 
 logger = logging.getLogger("pitchai.streaming.sglang")
@@ -107,8 +107,13 @@ class SGLangStreamingBackend(StreamingBackend):
             context = "\n".join(f"[{i+1}] {c}" for i, c in enumerate(recent))
 
         # Build prompt with streaming context
+        is_question = query_hint is not None
         query = query_hint or "Describe the key action happening in this moment of the match."
-        prompt = self._build_streaming_prompt(context, query)
+        prompt = (
+            self._build_question_prompt(context, query)
+            if is_question
+            else self._build_streaming_prompt(context, query)
+        )
 
         # Build messages with vision content
         content = [{"type": "text", "text": prompt}]
@@ -160,12 +165,17 @@ class SGLangStreamingBackend(StreamingBackend):
         self._total_latency_ms += elapsed
 
         # Parse the raw output into structured result
-        result = self._parse_commentary(raw_text, chunk, elapsed)
+        result = (
+            self._parse_answer(raw_text, chunk, elapsed)
+            if is_question
+            else self._parse_commentary(raw_text, chunk, elapsed)
+        )
 
-        # Store for context in future chunks
-        self._conversation_history.append(result.commentary)
-        if len(self._conversation_history) > 20:
-            self._conversation_history = self._conversation_history[-20:]
+        # Store only automatic commentary for future continuity.
+        if not is_question:
+            self._conversation_history.append(result.commentary)
+            if len(self._conversation_history) > 20:
+                self._conversation_history = self._conversation_history[-20:]
 
         return result
 
@@ -216,6 +226,44 @@ Commentary Rules:
 - Build drama: use the style of Peter Drury — poetic, passionate, precise
 - Stay current: comment on THIS moment, not what happened before
 - Keep it tight: 2-3 sentences maximum"""
+
+    def _build_question_prompt(
+        self,
+        context: str,
+        query: str,
+    ) -> str:
+        """Build prompt for an interrupting user question."""
+        return f"""You are watching the current moment of a live football match.
+
+Previous commentary for continuity:
+{context if context else "(No previous commentary yet)"}
+
+Answer the user's question using the visible frames from the latest moment. Be direct, grounded in what is on screen, and use plain English.
+
+Question: {query}
+
+Answer in one or two concise sentences. Do not output JSON, markdown, labels, or commentary fields."""
+
+    def _parse_answer(
+        self,
+        raw_text: str,
+        chunk: VideoChunk,
+        latency_ms: float,
+    ) -> StreamingResult:
+        """Parse direct Q&A output into the shared result shape."""
+        answer = clean_model_answer(raw_text)
+        return StreamingResult(
+            commentary=answer or raw_text[:200],
+            tactical_label="Question Answer",
+            key_observation=answer[:100] if answer else raw_text[:100],
+            confidence=0.6,
+            actionable_insight="Resume live commentary from the newest frames.",
+            start_timestamp_ms=chunk.start_timestamp_ms,
+            end_timestamp_ms=chunk.end_timestamp_ms,
+            latency_ms=latency_ms,
+            chunk_index=chunk.chunk_index,
+            raw_generation=raw_text,
+        )
 
     def _parse_commentary(
         self,

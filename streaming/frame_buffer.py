@@ -64,6 +64,7 @@ class FrameBuffer:
         self._chunk_index: int = 0
         self._last_chunk_time: float = 0.0
         self._frame_times: deque[float] = deque(maxlen=30)
+        self._recent_frames: deque[FrameSample] = deque(maxlen=max(4, self.config.min_chunk_frames))
         self._actual_fps: float = 0.0
 
     def reset(self):
@@ -73,6 +74,7 @@ class FrameBuffer:
         self._chunk_index = 0
         self._last_chunk_time = 0.0
         self._frame_times.clear()
+        self._recent_frames.clear()
         self._actual_fps = 0.0
 
     @property
@@ -117,6 +119,7 @@ class FrameBuffer:
         )
         self._frame_index += 1
         self._buffer.append(sample)
+        self._recent_frames.append(sample)
 
         # Overflow protection: drop oldest non-keyframe
         while len(self._buffer) > self.config.buffer_high_watermark:
@@ -166,12 +169,31 @@ class FrameBuffer:
         self._chunk_index += 1
         return chunk
 
-    def force_chunk(self) -> Optional[VideoChunk]:
-        """Force formation of a chunk from any buffered frames."""
+    def force_chunk(self, min_frames: int = 1, include_recent: bool = False) -> Optional[VideoChunk]:
+        """Force formation of a chunk from buffered frames.
+
+        When answering an interrupting user question, the live buffer may have
+        just been drained by automatic commentary. In that case include_recent
+        lets the caller reuse the latest retained frames without waiting for the
+        next chunk interval.
+        """
         if not self._buffer:
-            return None
-        frames = list(self._buffer)
-        self._buffer.clear()
+            if include_recent and self._recent_frames:
+                frames = list(self._recent_frames)[-min_frames:]
+            else:
+                return None
+        else:
+            frames = list(self._buffer)
+        if len(frames) < min_frames:
+            existing = {frame.frame_index for frame in frames}
+            needed = min_frames - len(frames)
+            context_frames = [
+                frame for frame in self._recent_frames
+                if frame.frame_index not in existing
+            ][-needed:]
+            frames = context_frames + frames
+        if self._buffer:
+            self._buffer.clear()
         chunk = VideoChunk(
             frames=frames,
             start_timestamp_ms=frames[0].timestamp_ms,

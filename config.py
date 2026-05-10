@@ -39,6 +39,7 @@ COMMENTARY_NOTES_LLM_BACKEND = os.getenv(
 	"COMMENTARY_NOTES_LLM_BACKEND",
 	_d.COMMENTARY_NOTES_LLM_BACKEND,
 )
+STREAMING_BACKEND = os.getenv("STREAMING_BACKEND", _d.STREAMING_BACKEND)
 PORT           = int(os.getenv("PORT",        _d.PORT))
 HOST           = os.getenv("HOST",            _d.HOST)
 LOG_LEVEL      = os.getenv("LOG_LEVEL",       _d.LOG_LEVEL)

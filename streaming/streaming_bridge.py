@@ -18,7 +18,7 @@ import sys
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 # streaming-vlm-qwen3-rocm is installed as a package (pip install -e).
 # Fallback: add the directory to sys.path for editable installs that aren't on PATH yet.
@@ -30,6 +30,41 @@ from streaming.frame_buffer import FrameBuffer, FrameBufferConfig, VideoChunk
 from streaming.kv_cache_manager import KVCacheManager, KVCacheConfig, KVCacheState
 
 logger = logging.getLogger("pitchai.streaming")
+
+
+def clean_model_answer(text: Any) -> str:
+    """Return a user-facing answer from raw model text or malformed JSON."""
+    import re
+
+    if text is None:
+        return ""
+    cleaned = str(text).strip()
+    if not cleaned:
+        return ""
+
+    try:
+        parsed = json.loads(cleaned)
+        if isinstance(parsed, dict):
+            for key in ("answer", "commentary", "key_observation", "analysis", "text"):
+                value = parsed.get(key)
+                if isinstance(value, str) and value.strip():
+                    cleaned = value.strip()
+                    break
+    except Exception:
+        match = re.search(
+            r'"(?:answer|commentary|key_observation|analysis|text)"\s*:\s*"([^"]+)',
+            cleaned,
+            re.DOTALL,
+        )
+        if match:
+            cleaned = match.group(1)
+
+    cleaned = cleaned.replace("\\n", " ").replace('\\"', '"')
+    cleaned = cleaned.strip(" \t\r\n{}[],'\"")
+    cleaned = re.sub(r'^\s*(?:answer|commentary|analysis|text)\s*:\s*', "", cleaned, flags=re.I)
+    cleaned = re.sub(r'",?\s*\d+\s*:\s*.*$', "", cleaned, flags=re.DOTALL)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned[:500].rstrip(" ,:;")
 
 
 # ── Protocol Types ────────────────────────────────────────────────────────────
@@ -145,8 +180,13 @@ class VLLMStreamingBackend(StreamingBackend):
             context = "\n".join(f"[{i+1}] {c}" for i, c in enumerate(recent))
 
         # Build prompt with streaming context
+        is_question = query_hint is not None
         query = query_hint or "Describe the key action happening in this moment of the match."
-        prompt = self._build_streaming_prompt(context, previous_text, query)
+        prompt = (
+            self._build_question_prompt(context, previous_text, query)
+            if is_question
+            else self._build_streaming_prompt(context, previous_text, query)
+        )
 
         # Build OpenAI-compatible messages with vision content
         content = [{"type": "text", "text": prompt}]
@@ -187,12 +227,18 @@ class VLLMStreamingBackend(StreamingBackend):
         self._total_latency_ms += elapsed
 
         # Parse the raw output into structured result
-        result = self._parse_commentary(raw_text, chunk, elapsed)
+        result = (
+            self._parse_answer(raw_text, chunk, elapsed)
+            if is_question
+            else self._parse_commentary(raw_text, chunk, elapsed)
+        )
 
-        # Store for context in future chunks
-        self._conversation_history.append(result.commentary)
-        if len(self._conversation_history) > 20:
-            self._conversation_history = self._conversation_history[-20:]
+        # Store only automatic commentary for continuity. User answers should
+        # not become the seed for the next broadcast line.
+        if not is_question:
+            self._conversation_history.append(result.commentary)
+            if len(self._conversation_history) > 20:
+                self._conversation_history = self._conversation_history[-20:]
 
         return result
 
@@ -233,6 +279,34 @@ Commentary Rules:
 - Build drama: use the style of Peter Drury — poetic, passionate, precise
 - Stay current: comment on THIS moment, not what happened before
 - Keep it tight: 2-3 sentences maximum"""
+
+    def _build_question_prompt(self, context: str, previous_text: str, query: str) -> str:
+        recent = context or previous_text or "(No previous commentary yet)"
+        return f"""You are watching the current moment of a live football match.
+
+Previous commentary for continuity:
+{recent}
+
+Answer the user's question using the visible frames from the latest moment. Be direct, grounded in what is on screen, and use plain English.
+
+Question: {query}
+
+Answer in one or two concise sentences. Do not output JSON, markdown, labels, or commentary fields."""
+
+    def _parse_answer(self, raw_text: str, chunk: VideoChunk, latency_ms: float) -> StreamingResult:
+        answer = clean_model_answer(raw_text)
+        return StreamingResult(
+            commentary=answer or raw_text[:200],
+            tactical_label="Question Answer",
+            key_observation=answer[:100] if answer else raw_text[:100],
+            confidence=0.6,
+            actionable_insight="Resume live commentary from the newest frames.",
+            start_timestamp_ms=chunk.start_timestamp_ms,
+            end_timestamp_ms=chunk.end_timestamp_ms,
+            latency_ms=latency_ms,
+            chunk_index=chunk.chunk_index,
+            raw_generation=raw_text,
+        )
 
     def _parse_commentary(self, raw_text: str, chunk: VideoChunk, latency_ms: float) -> StreamingResult:
         """Parse model output into structured result."""
@@ -306,6 +380,9 @@ class StreamingVLMBackend(StreamingBackend):
         self._processor = None
         self._initialized = False
         self._cache: Optional[KVCacheState] = None
+        self._past_key_values = None
+        self._accumulated_input_ids = None
+        self._video_token_positions: List[Tuple[int, int]] = []
         self._chunk_count = 0
         self._total_latency_ms = 0.0
         self._input_video_path: Optional[str] = None
@@ -313,6 +390,7 @@ class StreamingVLMBackend(StreamingBackend):
     async def initialize(self):
         """Load model and processor using local streaming-vlm-qwen3-rocm package."""
         import torch
+        from streaming_vlm.inference.generate.streaming_cache import StreamingCache
         from streaming_vlm.inference.inference import StreamingConfig, load_model_and_processor
 
         logger.info(f"Loading {self.model_path} via streaming-vlm-qwen3-rocm...")
@@ -332,6 +410,9 @@ class StreamingVLMBackend(StreamingBackend):
             return load_model_and_processor(config)
 
         self._model, self._processor = await loop.run_in_executor(None, _load)
+        self._past_key_values = StreamingCache()
+        self._accumulated_input_ids = None
+        self._video_token_positions = []
         self._initialized = True
         try:
             import torch
@@ -345,12 +426,9 @@ class StreamingVLMBackend(StreamingBackend):
         """
         Process a video chunk using StreamingVLM's compact KV-cache algorithm.
 
-        For the full StreamingVLM pipeline, we need the raw video file + timestamps.
-        The chunk's frames are decoded from the video at the right timestamps.
+        The bridge receives decoded frame chunks from the WebSocket and runs the
+        same stateful StreamingVLM cache/prune step used by offline inference.
         """
-        import torch
-        from streaming_vlm.inference.streaming_args import StreamingArgs
-
         if not self._initialized:
             await self.initialize()
 
@@ -363,7 +441,7 @@ class StreamingVLMBackend(StreamingBackend):
             result_text = await loop.run_in_executor(
                 None,
                 self._run_streaming_inference,
-                chunk, query, previous_text,
+                chunk, query, previous_text, query_hint is not None,
             )
 
             elapsed = (time.perf_counter() - start) * 1000.0
@@ -373,7 +451,7 @@ class StreamingVLMBackend(StreamingBackend):
             return self._parse_result(result_text, chunk, elapsed)
 
         except Exception as exc:
-            logger.error(f"StreamingVLM inference failed: {exc}")
+            logger.exception(f"StreamingVLM inference failed: {exc}")
             elapsed = (time.perf_counter() - start) * 1000.0
             return StreamingResult(
                 commentary="Streaming vision processing interrupted.",
@@ -387,23 +465,50 @@ class StreamingVLMBackend(StreamingBackend):
                 chunk_index=chunk.chunk_index,
             )
 
-    def _run_streaming_inference(self, chunk: VideoChunk, query: str, previous_text: str) -> str:
-        """Run VLM inference over sampled frames (blocking)."""
-        import base64
+    def _run_streaming_inference(self, chunk: VideoChunk, query: str, previous_text: str,
+                                 stateless: bool = False) -> str:
+        """Run one StreamingVLM step over a frame chunk, preserving KV cache."""
         import torch
         from PIL import Image
         import io
+        from streaming_vlm.inference.inference import StreamingConfig, prune_kv_cache
+        from streaming_vlm.inference.streaming_args import StreamingArgs
 
-        # Build image content list
-        image_content = []
-        for frame in chunk.frames:
-            b64 = base64.b64encode(frame.data).decode("utf-8")
-            image_content.append({"type": "image", "image": f"data:image/jpeg;base64,{b64}"})
+        pil_frames = [Image.open(io.BytesIO(f.data)).convert("RGB") for f in chunk.frames]
+        fps = len(pil_frames) / max(chunk.duration_seconds, 0.001)
+        fps = max(1.0, min(fps, 8.0))
 
-        user_content = image_content + [{"type": "text", "text": query}]
+        if stateless:
+            prompt = (
+                "Answer the user's question about the current football video in plain English. "
+                "Do not output JSON, labels, markdown, lists, or commentary fields. "
+                "Give one or two direct sentences.\n\n"
+                f"Question: {query}"
+            )
+        else:
+            prompt = query
+        if previous_text and not stateless:
+            prompt = (
+                "Previous commentary for continuity:\n"
+                f"{previous_text}\n\n"
+                f"{query}"
+            )
+
+        user_content = [
+            {"type": "video", "video": pil_frames, "fps": fps},
+            {"type": "text", "text": prompt},
+        ]
 
         full_history = [
-            {"role": "system", "content": "You are an expert sports analyst. Answer questions about the video frames concisely and accurately in 2-3 sentences."},
+            {
+                "role": "system",
+                "content": (
+                    "You are an expert football analyst using continuous video context. "
+                    "For user questions, answer directly in plain English. "
+                    "For automatic commentary, return concise JSON with commentary, "
+                    "tactical_label, key_observation, confidence, and actionable_insight."
+                ),
+            },
             {"role": "user", "content": user_content},
         ]
 
@@ -415,27 +520,104 @@ class StreamingVLMBackend(StreamingBackend):
         except StopIteration:
             _device = torch.device('cpu')
 
-        pil_images = [Image.open(io.BytesIO(f.data)) for f in chunk.frames]
-        inputs = self._processor(text=[text], images=pil_images, padding=True, return_tensors="pt").to(_device)
+        inputs = self._processor(
+            text=[text],
+            images=None,
+            videos=[pil_frames],
+            padding=True,
+            return_tensors="pt",
+        )
+        inputs = {
+            k: v.to(_device) if isinstance(v, torch.Tensor) else v
+            for k, v in inputs.items()
+        }
+
+        input_ids = inputs["input_ids"]
+        video_token_id = getattr(self._model.config, "video_token_id", None)
+        if video_token_id is not None and not stateless:
+            video_mask = input_ids == video_token_id
+            if video_mask.any():
+                positions = video_mask.nonzero(as_tuple=True)[1]
+                offset = (
+                    self._accumulated_input_ids.shape[1]
+                    if self._accumulated_input_ids is not None
+                    else 0
+                )
+                self._video_token_positions.append(
+                    (offset + positions[0].item(), offset + positions[-1].item())
+                )
+
+        streaming_args = StreamingArgs(
+            pos_mode="shrink",
+            all_text=False,
+            input_ids=input_ids,
+            video_grid_thw=inputs.get("video_grid_thw") if hasattr(inputs, "get") else None,
+            second_per_grid_ts=inputs.get("second_per_grid_ts") if hasattr(inputs, "get") else None,
+        )
+
+        generate_kwargs = {
+            **inputs,
+            "past_key_values": (
+                self._past_key_values
+                if self._accumulated_input_ids is not None and not stateless
+                else None
+            ),
+            "max_new_tokens": 60,
+            "use_cache": True,
+            "do_sample": False,
+            "streaming_args": streaming_args,
+            "repetition_penalty": 1.1,
+        }
+        tokenizer = getattr(self._processor, "tokenizer", None)
+        pad_token_id = getattr(tokenizer, "pad_token_id", None)
+        if pad_token_id is not None:
+            generate_kwargs["pad_token_id"] = pad_token_id
 
         with torch.no_grad():
-            outputs = self._model.generate(
-                **inputs,
-                max_new_tokens=60,
-                use_cache=True,
-                return_dict_in_generate=True,
-                do_sample=False,
-                repetition_penalty=1.1,
-                pad_token_id=151645,
+            outputs = self._model.generate(**generate_kwargs)
+
+        generated_ids = outputs.sequences if hasattr(outputs, "sequences") else outputs
+        new_tokens = generated_ids[:, input_ids.shape[1]:]
+        response = self._processor.batch_decode(new_tokens, skip_special_tokens=True)[0]
+
+        if stateless:
+            return clean_model_answer(response)
+
+        if self._accumulated_input_ids is None:
+            self._accumulated_input_ids = generated_ids
+        else:
+            self._accumulated_input_ids = torch.cat(
+                [self._accumulated_input_ids, generated_ids[:, input_ids.shape[1]:]],
+                dim=1,
             )
 
-        generated_ids = outputs.sequences
-        new_tokens = generated_ids[:, inputs['input_ids'].shape[1]:]
-        response = self._processor.batch_decode(new_tokens, skip_special_tokens=True)[0]
+        prune_config = StreamingConfig(
+            model_path=self.model_path,
+            fps=fps,
+            chunk_duration=float(self.chunk_duration),
+            window_size=self.window_size,
+            text_sink=self.text_sink,
+            text_sliding_window=self.text_sliding_window,
+            max_new_tokens=60,
+            attn_implementation="sdpa",
+            device=self.device,
+            dtype="bfloat16",
+        )
+        self._accumulated_input_ids, self._past_key_values = prune_kv_cache(
+            self._accumulated_input_ids,
+            self._past_key_values,
+            prune_config,
+            self._video_token_positions,
+        )
         return response.strip()
 
     async def reset(self):
+        from streaming_vlm.inference.generate.streaming_cache import StreamingCache
+
         self._cache = KVCacheState()
+        self._past_key_values = StreamingCache()
+        self._accumulated_input_ids = None
+        self._video_token_positions = []
         self._chunk_count = 0
         self._total_latency_ms = 0.0
         self._input_video_path = None
@@ -449,24 +631,27 @@ class StreamingVLMBackend(StreamingBackend):
         return {
             "backend": "streaming_vlm",
             "model": self.model_path,
-            "model_base": self.model_base,
             "chunks_processed": self._chunk_count,
             "avg_latency_ms": round(avg_latency, 1),
             "total_latency_ms": round(self._total_latency_ms, 1),
             "window_size": self.window_size,
             "chunk_duration": self.chunk_duration,
+            "streaming_cache_active": self._past_key_values is not None,
+            "cached_video_ranges": len(self._video_token_positions),
         }
 
     def _parse_result(self, raw_text: str, chunk: VideoChunk, latency_ms: float) -> StreamingResult:
+        cleaned_text = clean_model_answer(raw_text)
         try:
             import re
             json_match = re.search(r'\{[^{}]*"commentary"[^{}]*\}', raw_text)
             if json_match:
                 parsed = json.loads(json_match.group(0))
+                commentary = clean_model_answer(parsed.get("commentary", raw_text))
                 return StreamingResult(
-                    commentary=parsed.get("commentary", raw_text),
+                    commentary=commentary,
                     tactical_label=parsed.get("tactical_label", "Open Play"),
-                    key_observation=parsed.get("key_observation", raw_text[:100]),
+                    key_observation=clean_model_answer(parsed.get("key_observation", commentary)),
                     confidence=float(parsed.get("confidence", 0.7)),
                     actionable_insight=parsed.get("actionable_insight", "Continue commentary."),
                     start_timestamp_ms=chunk.start_timestamp_ms,
@@ -479,9 +664,9 @@ class StreamingVLMBackend(StreamingBackend):
             pass
 
         return StreamingResult(
-            commentary=raw_text[:200],
+            commentary=cleaned_text or raw_text[:200],
             tactical_label="Open Play",
-            key_observation=raw_text[:100],
+            key_observation=cleaned_text[:100] if cleaned_text else raw_text[:100],
             confidence=0.5,
             actionable_insight="Monitor the developing play.",
             start_timestamp_ms=chunk.start_timestamp_ms,
@@ -512,6 +697,7 @@ class StreamingBridgeConfig:
     window_size: int = 16
     text_sink: int = 512
     text_sliding_window: int = 512
+    auto_commentary_enabled: bool = False
     # Fallback
     use_fallback_chain: bool = False     # True only when backend="auto"; explicit backends never fallback
 
@@ -612,20 +798,22 @@ class StreamingVisionBridge:
             keyframe=keyframe, quality_score=quality_score,
         )
 
-        if chunk is None:
+        if chunk is None or not self.config.auto_commentary_enabled:
             return None
 
         return await self._process_chunk(chunk)
 
-    async def _process_chunk(self, chunk: VideoChunk) -> Dict[str, Any]:
+    async def _process_chunk(self, chunk: VideoChunk, query_hint: Optional[str] = None) -> Dict[str, Any]:
         """Process a formed chunk through the streaming backend."""
+        is_question = query_hint is not None
         result = await self._backend.process_chunk(
             chunk,
             previous_text=self._previous_text,
+            query_hint=query_hint,
         )
 
         # Update context for next chunk
-        if result.commentary:
+        if result.commentary and not is_question:
             self._commentary_history.append(result.commentary)
             self._previous_text = result.commentary
             if len(self._commentary_history) > 20:
@@ -636,12 +824,17 @@ class StreamingVisionBridge:
 
         return result.to_dict()
 
-    async def force_flush(self) -> Optional[Dict[str, Any]]:
+    async def force_flush(self, query_hint: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Force process any remaining buffered frames."""
-        chunk = self.frame_buffer.force_chunk()
+        if query_hint is None and not self.config.auto_commentary_enabled:
+            return None
+        chunk = self.frame_buffer.force_chunk(
+            min_frames=2 if query_hint else 1,
+            include_recent=query_hint is not None,
+        )
         if chunk is None:
             return None
-        return await self._process_chunk(chunk)
+        return await self._process_chunk(chunk, query_hint=query_hint)
 
     def get_previous_commentary(self, n: int = 3) -> str:
         """Get the last N commentary lines for context injection."""
