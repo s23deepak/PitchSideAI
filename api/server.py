@@ -2267,6 +2267,17 @@ async def prepare_commentary_notes(req: CommentaryNotesRequest, request: Request
                 "match": f"{req.home_team} vs {req.away_team}",
                 "sport": req.sport,
                 "markdown_notes": completed_state.markdown_notes or "",
+                "beats": [
+                    {
+                        "text": beat.text,
+                        "event_tags": beat.event_tags,
+                        "players": beat.players,
+                        "section": beat.section,
+                        "source": beat.source,
+                        "confidence": beat.confidence,
+                    }
+                    for beat in completed_state.notes_store.beats
+                ] if completed_state.notes_store and completed_state.notes_store.beats else [],
                 "preparation_time_ms": duration_ms,
                 "agents_completed": len(completed_state.completed_agents),
                 "errors": completed_state.errors,

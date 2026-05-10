@@ -50,12 +50,8 @@ export default function Teleprompter({
         ? `${progressPercent}%`
         : buildStatus === 'loading' ? '60%' : '90%'
 
-    // Switch to long-sheet mode when match is live
-    useEffect(() => {
-        if (liveDetection) {
-            setIsLongSheetMode(true)
-        }
-    }, [liveDetection])
+    // Keep the full notes in tabbed mode. The old long-sheet view is only useful
+    // once live beat extraction is quality-gated; otherwise it looks like a raw sheet.
 
     // Listen for beat highlight messages from WebSocket (via parent)
     useEffect(() => {
@@ -214,32 +210,36 @@ export default function Teleprompter({
     }, [highlightedBeatIndex])
 
     // Parse notes into beats for long-sheet mode
-    // Fix: Add fallback for markdown-only notes (no beats structure)
     const parseBeats = () => {
         if (!notesData) return []
 
-        // If beats array exists, use it
-        if (notesData.beats && Array.isArray(notesData.beats)) {
+        if (Array.isArray(notesData.beats) && notesData.beats.length > 0) {
             return notesData.beats
         }
 
-        // Fallback: parse markdown into pseudo-beats
-        if (notesData.markdown_notes) {
-            const lines = notesData.markdown_notes.split('\n').filter(line => line.trim())
-            return lines.map((line, index) => ({
-                text: line.replace(/^[#\-*]\s*/, ''),
-                source: 'markdown',
-                confidence: 1.0, // Fix #5: Markdown fallback should highlight (bypasses 0.6 gating)
-                event_tags: [],
-                section: 'general',
-                index,
-            }))
+        if (Array.isArray(notesData.notes?.beats) && notesData.notes.beats.length > 0) {
+            return notesData.notes.beats
+                .map((beat) => ({
+                    text: beat.text || beat.narrative || beat.title || '',
+                    source: beat.source || beat.section || 'notes',
+                    confidence: beat.confidence ?? 0.8,
+                    event_tags: beat.event_tags || beat.tags || [],
+                    section: beat.section || 'general',
+                }))
+                .filter((beat) => beat.text)
         }
 
         return []
     }
 
     const beats = parseBeats()
+    const hasLiveBeats = beats.length > 0
+
+    useEffect(() => {
+        if (isLongSheetMode && !hasLiveBeats) {
+            setIsLongSheetMode(false)
+        }
+    }, [isLongSheetMode, hasLiveBeats])
 
     // Parse notes into sections for tabbed mode
     const parseSections = () => {
@@ -551,14 +551,6 @@ export default function Teleprompter({
                                 Regenerate Notes
                             </button>
                         )}
-                        <button
-                            className="btn btn-sm btn-ghost"
-                            onClick={() => setIsLongSheetMode(true)}
-                            title="Switch to long-sheet mode"
-                        >
-                            <span className="material-icons">article</span>
-                            Long Sheet
-                        </button>
                     </div>
                 </div>
 
