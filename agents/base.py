@@ -16,6 +16,7 @@ from config import (
     COMMENTARY_NOTES_LLM_BACKEND, LLM_BACKEND,
     OPENAI_API_KEY, OPENAI_MODEL,
     VISION_LLM_BACKEND, VLLM_BASE_URL, VLLM_MODEL, VLLM_VISION_MODEL,
+    SGLANG_BASE_URL, SGLANG_MODEL,
 )
 
 logger = get_logger(__name__)
@@ -82,10 +83,12 @@ class BaseAgent(ABC):
             self.model_id = OPENAI_MODEL
         elif self.backend == "vllm":
             self.model_id = VLLM_VISION_MODEL if self.agent_type == "vision" else VLLM_MODEL
+        elif self.backend == "sglang":
+            self.model_id = SGLANG_MODEL or VLLM_MODEL
         else:
             raise ValueError(
                 f"Unknown LLM_BACKEND: '{self.backend}'. "
-                "Supported backends: 'vllm', 'openai'. "
+                "Supported backends: 'vllm', 'sglang', 'openai'. "
                 "Set LLM_BACKEND in your .env file."
             )
 
@@ -100,7 +103,7 @@ class BaseAgent(ABC):
         response_format: str = "text"
     ) -> str:
         """
-        Call LLM API (Ollama, OpenAI, or vLLM) with error handling and logging.
+        Call the configured OpenAI-compatible LLM API with error handling and logging.
         """
         guardrail = (
             "\n\nCRITICAL INSTRUCTION: You are generating a final output narrative. "
@@ -127,6 +130,8 @@ class BaseAgent(ABC):
             return "https://api.openai.com", OPENAI_API_KEY
         elif self.backend == "vllm":
             return VLLM_BASE_URL, None
+        elif self.backend == "sglang":
+            return SGLANG_BASE_URL, None
         raise ValueError(f"No OpenAI-compatible config for backend: {self.backend}")
 
     @staticmethod
@@ -184,7 +189,7 @@ class BaseAgent(ABC):
                 "stream": False,
             }
             if max_tokens:
-                max_tokens_key = "max_completion_tokens" if self.backend == "vllm" else "max_tokens"
+                max_tokens_key = "max_completion_tokens" if self.backend in {"vllm", "sglang"} else "max_tokens"
                 payload[max_tokens_key] = max_tokens
             if response_format == "json":
                 payload["response_format"] = {"type": "json_object"}

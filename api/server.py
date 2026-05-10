@@ -433,7 +433,15 @@ Translation:"""
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             # Use the configured LLM backend for translation
-            from config import LLM_BACKEND, OPENAI_API_KEY, OPENAI_MODEL, VLLM_BASE_URL, VLLM_MODEL
+            from config import (
+                LLM_BACKEND,
+                OPENAI_API_KEY,
+                OPENAI_MODEL,
+                VLLM_BASE_URL,
+                VLLM_MODEL,
+                SGLANG_BASE_URL,
+                SGLANG_MODEL,
+            )
 
             if LLM_BACKEND == "openai":
                 response = await client.post(
@@ -446,11 +454,13 @@ Translation:"""
                     },
                     headers={"Authorization": f"Bearer {OPENAI_API_KEY}"} if OPENAI_API_KEY else {},
                 )
-            elif LLM_BACKEND == "vllm":
+            elif LLM_BACKEND in {"vllm", "sglang"}:
+                base_url = SGLANG_BASE_URL if LLM_BACKEND == "sglang" else VLLM_BASE_URL
+                model = (SGLANG_MODEL or VLLM_MODEL) if LLM_BACKEND == "sglang" else VLLM_MODEL
                 response = await client.post(
-                    f"{VLLM_BASE_URL}/v1/chat/completions",
+                    f"{base_url}/v1/chat/completions",
                     json={
-                        "model": VLLM_MODEL or "",
+                        "model": model or "",
                         "messages": [{"role": "user", "content": prompt}],
                         "temperature": 0.3,
                         "max_completion_tokens": 500,

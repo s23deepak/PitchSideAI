@@ -7,6 +7,7 @@ for how weather will affect tactical play.
 
 from typing import Dict, Any, Optional
 from datetime import datetime
+import asyncio
 import logging
 from agents.base import BaseAgent
 from data_sources import WeatherDataRetriever, DataCache
@@ -72,22 +73,22 @@ class WeatherContextAgent(BaseAgent):
         """
         start_time = datetime.utcnow()
 
-        # Get weather data
-        weather_data = await self.weather_retriever.get_match_day_weather(
-            venue,
-            latitude,
-            longitude,
-            match_datetime,
-            self.sport,
-        )
-
-        # Get forecast trend
-        forecast = await self.weather_retriever.get_forecast_trend(
-            venue,
-            latitude,
-            longitude,
-            match_datetime,
-            hours_window=3,
+        # Current conditions and forecast trend are independent lookups.
+        weather_data, forecast = await asyncio.gather(
+            self.weather_retriever.get_match_day_weather(
+                venue,
+                latitude,
+                longitude,
+                match_datetime,
+                self.sport,
+            ),
+            self.weather_retriever.get_forecast_trend(
+                venue,
+                latitude,
+                longitude,
+                match_datetime,
+                hours_window=3,
+            ),
         )
 
         # Contextualize for sport

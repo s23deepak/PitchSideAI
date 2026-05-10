@@ -190,6 +190,51 @@ class MultiSourceRetriever:
             logger.warning("%s.%s failed: %s", name, method, exc)
             raise
 
+    async def _race_sources(
+        self,
+        method: str,
+        validator,
+        *args,
+        max_parallel: int = 2,
+        skip_names: Optional[set[str]] = None,
+        **kwargs,
+    ):
+        """Race a small set of sources and return the first useful result."""
+        skip_names = skip_names or set()
+        candidates = [
+            (name, retriever, limiter)
+            for name, retriever, limiter in self._retrievers
+            if name not in skip_names and hasattr(retriever, method)
+        ][:max_parallel]
+        if not candidates:
+            return None, None, []
+
+        async def _call_source(name: str, retriever: Any, limiter: RateLimiter):
+            try:
+                result = await self._call_with_rate_limit(name, retriever, limiter, method, *args, **kwargs)
+                return name, result, None
+            except Exception as exc:
+                return name, None, exc
+
+        tasks = [asyncio.create_task(_call_source(name, retriever, limiter)) for name, retriever, limiter in candidates]
+        errors = []
+        try:
+            for completed in asyncio.as_completed(tasks):
+                name, result, error = await completed
+                if error:
+                    errors.append(f"{name}: {error}")
+                    continue
+                if validator(result):
+                    for task in tasks:
+                        if not task.done():
+                            task.cancel()
+                    return name, result, errors
+            return None, None, errors
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+
     # ── Public API ─────────────────────────────────────────────────────────────
 
     async def get_player_stats(
@@ -208,23 +253,18 @@ class MultiSourceRetriever:
         if cached:
             return cached
 
-        errors = []
-        for attempt in range(min(3, len(self._retrievers))):
-            name, retriever, limiter = self._get_next_retriever()
-            if not retriever:
-                break
-
-            try:
-                result = await self._call_with_rate_limit(
-                    name, retriever, limiter, "get_player_stats", player_name, team_name, sport
-                )
-                if result and (not isinstance(result, dict) or result.get("error") is None):
-                    merged = {**result, "data_source": name}
-                    self.cache.set("multi_player", cache_key, merged)
-                    return merged
-            except Exception as exc:
-                errors.append(f"{name}: {exc}")
-                continue
+        name, result, errors = await self._race_sources(
+            "get_player_stats",
+            lambda r: bool(r and (not isinstance(r, dict) or r.get("error") is None)),
+            player_name,
+            team_name,
+            sport,
+            max_parallel=2,
+        )
+        if result:
+            merged = {**result, "data_source": name}
+            self.cache.set("multi_player", cache_key, merged)
+            return merged
 
         logger.warning("All sources failed for player %s/%s: %s", player_name, team_name, errors)
         return {"name": player_name, "team": team_name, "stats": {}, "error": "All sources failed"}
@@ -279,21 +319,18 @@ class MultiSourceRetriever:
         if cached:
             return cached
 
-        for attempt in range(min(3, len(self._retrievers))):
-            name, retriever, limiter = self._get_next_retriever()
-            if not retriever:
-                break
-
-            try:
-                result = await self._call_with_rate_limit(
-                    name, retriever, limiter, "get_recent_form", team_name, sport, num_games
-                )
-                if result and result.get("form_string") != "UNKNOWN":
-                    merged = {**result, "data_source": name}
-                    self.cache.set("multi_form", cache_key, merged)
-                    return merged
-            except Exception as exc:
-                continue
+        name, result, _errors = await self._race_sources(
+            "get_recent_form",
+            lambda r: bool(r and r.get("form_string") != "UNKNOWN"),
+            team_name,
+            sport,
+            num_games,
+            max_parallel=2,
+        )
+        if result:
+            merged = {**result, "data_source": name}
+            self.cache.set("multi_form", cache_key, merged)
+            return merged
 
         return {"team": team_name, "form_string": "UNKNOWN", "error": "All sources failed"}
 
@@ -330,26 +367,17 @@ class MultiSourceRetriever:
         if cached and isinstance(cached, list) and len(cached) > 0:
             return cached
 
-        for attempt in range(min(3, len(self._retrievers))):  # Try all 3 sources
-            name, retriever, limiter = self._get_next_retriever()
-            if not retriever:
-                break
-
-            logger.info(f"Trying {name} for team news: {team_name}")
-            try:
-                result = await self._call_with_rate_limit(
-                    name, retriever, limiter, "get_team_news", team_name, sport
-                )
-                # Only cache non-empty results, with short TTL for empty
-                if result and len(result) > 0:
-                    self.cache.set("multi_news", cache_key, result)
-                    logger.info(f"Found {len(result)} news items from {name}")
-                    return result
-                else:
-                    logger.warning(f"{name} returned empty news for {team_name}")
-            except Exception as exc:
-                logger.warning(f"{name} failed for team news: {exc}")
-                continue
+        name, result, _errors = await self._race_sources(
+            "get_team_news",
+            lambda r: bool(r and len(r) > 0),
+            team_name,
+            sport,
+            max_parallel=2,
+        )
+        if result:
+            self.cache.set("multi_news", cache_key, result)
+            logger.info(f"Found {len(result)} news items from {name}")
+            return result
 
         # Don't cache empty results - try fresh next time
         return []
@@ -361,20 +389,16 @@ class MultiSourceRetriever:
         if cached:
             return cached
 
-        for attempt in range(min(2, len(self._retrievers))):
-            name, retriever, limiter = self._get_next_retriever()
-            if not retriever:
-                break
-
-            try:
-                result = await self._call_with_rate_limit(
-                    name, retriever, limiter, "get_injuries", team_name, sport
-                )
-                if result:
-                    self.cache.set("multi_injuries", cache_key, result)
-                    return result
-            except Exception as exc:
-                continue
+        _name, result, _errors = await self._race_sources(
+            "get_injuries",
+            lambda r: bool(r),
+            team_name,
+            sport,
+            max_parallel=2,
+        )
+        if result:
+            self.cache.set("multi_injuries", cache_key, result)
+            return result
 
         return []
 

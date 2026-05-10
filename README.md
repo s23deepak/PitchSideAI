@@ -43,11 +43,10 @@ cd PitchAI
 # Backend
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env          # set LLM_BACKEND=ollama at minimum
+cp .env.example .env          # set LLM_BACKEND=vllm or sglang
 
-# Pull models (Ollama)
-ollama pull qwen2.5:3b
-ollama pull qwen2.5vl:3b
+# Start a vLLM or SGLang OpenAI-compatible server separately
+# Example: export VLLM_BASE_URL=http://localhost:8001
 
 # Start backend
 python -m uvicorn api.server:app --reload --port 8000
@@ -83,7 +82,7 @@ Browser (React / Vite)
         │    │ 5 Sources    │         Chain (L1→L4)
         │    └──────────────┘
         │           │
-        └─── LLM Backend (ollama / openai / vllm)
+        └─── LLM Backend (openai / vllm / sglang)
 ```
 
 **Single WebSocket per session** — `ConnectionManager` in `api/server.py` handles fan-out to all tabs. Game state (score, minute, phase) is attached to every outbound message.
@@ -191,9 +190,9 @@ Set `LLM_BACKEND` in `.env`:
 
 | Backend | Use case | Models |
 |---|---|---|
-| `ollama` | Local development (free) | `qwen2.5:3b`, `qwen2.5vl:3b` |
 | `openai` | Cloud fallback | `gpt-4o-mini` |
 | `vllm` | Self-hosted, best quality | `Qwen2.5-VL-7B-Instruct-AWQ` |
+| `sglang` | Self-hosted, low-latency serving | `Qwen2.5-VL-7B-Instruct-AWQ` |
 
 Override per-component:
 ```env
@@ -216,6 +215,11 @@ python -m sglang.launch_server \
   --model-path Qwen/Qwen2.5-VL-7B-Instruct-AWQ \
   --host 0.0.0.0 --port 30000 --tp 1
 ```
+```env
+COMMENTARY_NOTES_LLM_BACKEND=sglang
+SGLANG_BASE_URL=http://localhost:30000
+SGLANG_MODEL=Qwen/Qwen2.5-VL-7B-Instruct-AWQ
+```
 
 **Voice transcription (Qwen2-Audio):**
 ```bash
@@ -233,12 +237,7 @@ AUDIO_MODEL=Qwen/Qwen2-Audio-7B-Instruct
 
 ```env
 # Required
-LLM_BACKEND=ollama                          # ollama | openai | vllm
-
-# Ollama (local dev)
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=qwen2.5:3b
-OLLAMA_VISION_MODEL=qwen2.5vl:3b
+LLM_BACKEND=vllm                            # openai | vllm | sglang
 
 # vLLM (self-hosted)
 VLLM_BASE_URL=http://localhost:8001
@@ -247,6 +246,7 @@ VLLM_VISION_MODEL=Qwen/Qwen2.5-VL-3B-Instruct-AWQ
 
 # SGLang (Level 2 vision, optional)
 SGLANG_BASE_URL=http://localhost:30000
+SGLANG_MODEL=Qwen/Qwen2.5-VL-7B-Instruct-AWQ
 
 # Audio transcription
 AUDIO_VLLM_BASE_URL=http://localhost:8001

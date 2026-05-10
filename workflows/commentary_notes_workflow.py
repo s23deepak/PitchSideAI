@@ -334,10 +334,10 @@ class CommentaryNotesWorkflow:
         state = await self.initialize_workflow(state)
         await _emit("initialize", "Match context ready", done=True)
 
-        # OPTIMIZATION 1: Run Phase 2 (initial context) + Phase 3 (squad research) IN PARALLEL
-        # These are independent - squad research only needs team names
+        # OPTIMIZATION 1: Run independent research branches together.
+        # Team form only needs team names, so it does not need to wait for squad research.
         await _emit("parallel_phase", "Running parallel research phase...",
-                    agents=["news", "weather", "historical", "player_research"])
+                    agents=["news", "weather", "historical", "player_research", "team_form"])
 
         async def _gather_context():
             result = await self.gather_initial_context(state)
@@ -351,16 +351,41 @@ class CommentaryNotesWorkflow:
             await _emit("squad_research", f"Squads researched ({home_count} + {away_count} players)", done=True)
             return result
 
-        # Execute both phases in parallel
-        await asyncio.gather(_gather_context(), _research_squads())
+        async def _analyze_team_form():
+            from agents.specialized_commentary.team_form_agent import TeamFormAgent
+
+            try:
+                state.phase = WorkflowPhase.FORM_ANALYSIS
+                cache = getattr(self, "_cache", None)
+                agent = TeamFormAgent(sport=state.sport, cache=cache)
+                state.team_form = await agent.analyze_both_teams(state.home_team, state.away_team)
+                state.completed_agents.append("team_form")
+                await _emit("form_analysis", "Team form analyzed", done=True)
+            except Exception as e:
+                state.errors.append(f"TeamFormAgent: {e}")
+                state.warnings.append("Form data unavailable — skipping")
+                logger.warning(f"[{state.workflow_id}] TeamFormAgent failed: {e}")
+            return state
+
+        # Execute independent branches in parallel
+        await asyncio.gather(_gather_context(), _research_squads(), _analyze_team_form())
         await _emit("parallel_phase", "Parallel research phase complete", done=True)
 
-        # OPTIMIZATION 2: TeamForm analysis can start immediately after Phase 1 (only needs team names)
-        # But we run it after Phase 2 to ensure all data is ready before MatchupAnalysis
-        # MatchupAnalysis MUST wait for player_research (Phase 2)
-        await _emit("form_analysis", "Analyzing team form and key matchups...", agents=["team_form", "matchup_analysis"])
-        state = await self.analyze_form(state)
-        await _emit("form_analysis", f"Form and matchups analyzed ({len(state.completed_agents)} agents)", done=True)
+        # OPTIMIZATION 2: MatchupAnalysis MUST wait for player_research.
+        await _emit("matchup_analysis", "Analyzing key matchups...", agents=["matchup_analysis"])
+        from agents.specialized_commentary.matchup_analysis_agent import MatchupAnalysisAgent
+        try:
+            state.phase = WorkflowPhase.TACTICAL_PREPARATION
+            home_players = state.player_research.get("home_team", {}).get("players", [])
+            away_players = state.player_research.get("away_team", {}).get("players", [])
+            agent = MatchupAnalysisAgent(sport=state.sport)
+            state.matchup_analysis = await agent.analyze_key_matchups(home_players, away_players)
+            state.completed_agents.append("matchup_analysis")
+            await _emit("matchup_analysis", "Key matchups analyzed", done=True)
+        except Exception as e:
+            state.errors.append(f"MatchupAnalysisAgent: {e}")
+            state.warnings.append("Matchup analysis unavailable — skipping")
+            logger.warning(f"[{state.workflow_id}] MatchupAnalysisAgent failed: {e}")
 
         # Phase 5: Synthesize
         await _emit("synthesis", "Synthesizing commentary notes...")

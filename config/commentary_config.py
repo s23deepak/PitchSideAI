@@ -9,7 +9,7 @@ from typing import Dict, Optional, List
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from config import LLM_BACKEND, OPENAI_MODEL, VLLM_MODEL
+from config import COMMENTARY_NOTES_LLM_BACKEND, OPENAI_MODEL, VLLM_MODEL, SGLANG_MODEL
 
 # ===== API Key Configuration =====
 
@@ -27,10 +27,13 @@ EXTERNAL_API_KEYS: Dict[str, Optional[str]] = {
 
 def _get_commentary_model_ids() -> Dict[str, str]:
     """Return model IDs for commentary agents based on active backend."""
-    if LLM_BACKEND == "openai":
+    backend = COMMENTARY_NOTES_LLM_BACKEND
+    if backend == "openai":
         m = OPENAI_MODEL
-    elif LLM_BACKEND == "vllm":
+    elif backend == "vllm":
         m = VLLM_MODEL
+    elif backend == "sglang":
+        m = SGLANG_MODEL or VLLM_MODEL
     else:
         # Bedrock: use differentiated models per role
         return {

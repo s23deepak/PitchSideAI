@@ -8,9 +8,9 @@ Secrets and deployment-specific overrides belong in .env
 # ── Model ID Defaults (override via .env or per-backend config) ───────────────
 # These are used only when no backend-specific model is configured.
 LIVE_AUDIO_MODEL = ""        # Unused: audio goes through Qwen2-Audio / AUDIO_VLLM_BASE_URL
-VISION_MODEL = ""             # Override with OLLAMA_VISION_MODEL / VLLM_VISION_MODEL
-RESEARCH_MODEL = ""           # Override with OLLAMA_MODEL / VLLM_MODEL / OPENAI_MODEL
-EMBEDDING_MODEL = ""          # Override with OLLAMA_EMBED_MODEL / VLLM_EMBED_MODEL
+VISION_MODEL = ""             # Override with VLLM_VISION_MODEL / SGLANG_MODEL
+RESEARCH_MODEL = ""           # Override with VLLM_MODEL / SGLANG_MODEL / OPENAI_MODEL
+EMBEDDING_MODEL = ""          # Override with VLLM_EMBED_MODEL
 
 # ── Search / Vector Store ─────────────────────────────────────────────────────
 OPENSEARCH_INDEX = "pitchside-match-notes"
@@ -27,7 +27,7 @@ USE_JSON_LOGS = True
 LOG_FILE = "logs/pitchside.log"
 
 # ── LLM Backend ───────────────────────────────────────────────────────────────
-# Options: "openai", "vllm"
+# Options: "openai", "vllm", "sglang"
 # Streaming/video pipeline uses: "streaming_vlm", "sglang", "vllm", "auto"
 LLM_BACKEND = "vllm"
 VISION_LLM_BACKEND = "vllm"
@@ -43,6 +43,10 @@ VLLM_BASE_URL = "http://localhost:8001"
 VLLM_MODEL = ""
 VLLM_VISION_MODEL = ""
 VLLM_EMBED_MODEL = ""
+
+# ── SGLang (Self-Hosted, OpenAI-compatible) ──────────────────────────────────
+SGLANG_BASE_URL = "http://localhost:30000"
+SGLANG_MODEL = ""
 
 # ── Qwen2-Audio / Whisper ASR (separate vLLM instance) ───────────────────────
 # AUDIO_API_TYPE controls which endpoint format _transcribe_audio uses:
