@@ -248,7 +248,7 @@ describe('MicButton', () => {
             render(<MicButton {...defaultProps} isAiReady={false} />)
 
             const button = screen.getByRole('button')
-            expect(button).toHaveAttribute('title', 'AI warming up... ready in ~20s')
+            expect(button).toHaveAttribute('title', 'AI warming up...')
         })
     })
 

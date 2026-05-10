@@ -158,7 +158,6 @@ export default function MicButton({
     useEffect(() => {
         if (!isAiReady && (state === 'idle' || state === 'disabled')) {
             setState('disabled')
-            setErrorMessage('AI warming up... ready in ~20s')
             setErrorMessage('AI warming up...')
         } else if (!isSupported && (state === 'idle' || state === 'disabled')) {
             // Fix #4: Safari/Firefox incompatibility - distinct state

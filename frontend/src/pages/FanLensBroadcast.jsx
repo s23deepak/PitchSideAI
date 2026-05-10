@@ -216,6 +216,7 @@ export default function FanLensBroadcast() {
     Number.isFinite(noteProgressValue)
       ? `${(Math.max(0, Math.min(100, noteProgressValue * 100))).toFixed(1)}%`
       : buildProgress || 'Preparing...'
+  const fanLensAiReady = isConnected || streamingStatus.wsReady || streamingStatus.hasVideo || streamingStatus.videoReady
 
   const handlePrepareNotes = () => {
     if (!buildingNotes && hasUsableTeams) {
@@ -490,7 +491,7 @@ export default function FanLensBroadcast() {
             {/* Mic button — inline in the flex row */}
             <MicButton
               onQuestionSubmit={({ text }) => submitFanQuestion(text)}
-              isAiReady={isConnected || streamingStatus.wsReady}
+              isAiReady={fanLensAiReady}
               isSplitScreenActive={splitActive}
               inline
             />

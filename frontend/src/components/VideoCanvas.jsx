@@ -1,6 +1,10 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 
 const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
+const FAN_LENS_BACKENDS = new Set(['vllm', 'sglang', 'streaming_vlm', 'auto'])
+const DEFAULT_FAN_LENS_BACKEND = FAN_LENS_BACKENDS.has(import.meta.env.VITE_FAN_LENS_BACKEND)
+    ? import.meta.env.VITE_FAN_LENS_BACKEND
+    : 'vllm'
 
 /**
  * VideoCanvas — Fan Lens video player with tactical overlays.
@@ -42,7 +46,7 @@ export default function VideoCanvas({
     const [triviaCard, setTriviaCard] = useState(null)
 
     // Backend config
-    const [backend, setBackend] = useState('vllm')
+    const [backend, setBackend] = useState(DEFAULT_FAN_LENS_BACKEND)
     const [chunkInterval, setChunkInterval] = useState(5) // seconds
     const [targetFps, setTargetFps] = useState(8)
 
