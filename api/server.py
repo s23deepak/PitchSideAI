@@ -22,7 +22,16 @@ from pydantic import BaseModel, Field
 import os
 import structlog
 
-from config import AWS_REGION, PORT, LOG_LEVEL, STREAMING_BACKEND
+from config import (
+    AWS_REGION,
+    LOG_LEVEL,
+    PORT,
+    SGLANG_BASE_URL,
+    SGLANG_MODEL,
+    STREAMING_BACKEND,
+    VLLM_BASE_URL,
+    VLLM_VISION_MODEL,
+)
 from config.sports import SportType
 from core import setup_logging, get_logger, get_rate_limiter, RateLimitConfig
 from core.exceptions import RateLimitError, WorkflowExecutionError
@@ -1857,8 +1866,10 @@ async def streaming_video_ws(websocket: WebSocket):
             chunk_interval_seconds=streaming_config.chunk_interval_seconds,
             max_chunk_frames=streaming_config.max_chunk_frames,
             auto_commentary_enabled=streaming_config.auto_commentary_enabled,
-            sglang_base_url=os.environ.get("SGLANG_BASE_URL", "http://localhost:30000"),
-            sglang_model=os.environ.get("VISION_MODEL", "Qwen/Qwen2.5-VL-3B-Instruct"),
+            vllm_base_url=VLLM_BASE_URL,
+            vllm_model=VLLM_VISION_MODEL,
+            sglang_base_url=SGLANG_BASE_URL,
+            sglang_model=SGLANG_MODEL,
             use_fallback_chain=not explicit_backend,  # fallback only for "auto"
         )
         bridge = StreamingVisionBridge(bridge_config)
