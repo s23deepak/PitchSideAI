@@ -292,6 +292,28 @@ class TestNotesStore:
         store = NotesStore(raw_markdown="# Test", beats=beats)
         assert store.lookup["goal"] == [0, 1, 2]
 
+    def test_serializes_source_attribution(self, tmp_path):
+        beat = self._make_beat(
+            "Sourced beat",
+            ["goal"],
+            source="fbref",
+            source_urls=["https://example.com/source"],
+            source_attribution=[{"label": "fbref", "url": "https://example.com/source"}],
+            confidence=0.9,
+        )
+        store = NotesStore(raw_markdown="# Test", beats=[beat])
+
+        path = tmp_path / "notes.json"
+        store.save_json(path)
+        loaded = NotesStore.load_json(path)
+
+        assert loaded.raw_markdown == "# Test"
+        assert loaded.beats[0].source_urls == ["https://example.com/source"]
+        assert loaded.beats[0].source_attribution == [
+            {"label": "fbref", "url": "https://example.com/source"}
+        ]
+        assert loaded.lookup == {"goal": [0]}
+
 
 # ── Canonical tags constant ──────────────────────────────────────────────────
 

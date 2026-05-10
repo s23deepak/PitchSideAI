@@ -29,8 +29,8 @@ STREAMING_TEXT_SINK = int(os.environ.get("STREAMING_TEXT_SINK", "512"))
 STREAMING_TEXT_SLIDING_WINDOW = int(os.environ.get("STREAMING_TEXT_SLIDING_WINDOW", "512"))
 
 # ── AMD ROCm Optimizations ───────────────────────────────────────────────────
-# MI300X has 192GB HBM3 — use large KV-cache for better streaming
-VLLM_GPU_MEMORY_UTILIZATION = float(os.environ.get("VLLM_GPU_MEMORY_UTILIZATION", "0.85"))
+# Keep vLLM to 45% GPU memory so StreamingVLM has headroom in the API process.
+VLLM_GPU_MEMORY_UTILIZATION = float(os.environ.get("VLLM_GPU_MEMORY_UTILIZATION", "0.45"))
 VLLM_MAX_MODEL_LEN = int(os.environ.get("VLLM_MAX_MODEL_LEN", "32768"))
 VLLM_MAX_NUM_SEQS = int(os.environ.get("VLLM_MAX_NUM_SEQS", "64"))
 

@@ -201,7 +201,7 @@ vllm serve Qwen/Qwen2.5-VL-3B-Instruct-AWQ \
   --host 0.0.0.0 --port 8001 \
   --trust-remote-code \
   --quantization awq_marlin \
-  --gpu-memory-utilization 0.75
+  --gpu-memory-utilization 0.45
 ```
 
 **Voice transcription (Qwen2-Audio):**

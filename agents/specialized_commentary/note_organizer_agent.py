@@ -120,6 +120,7 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
                             profile = player.get("profile", "")
 
                             if name:
+                                source_urls = self._extract_source_urls(player)
                                 beat_text = f"{name} ({position}): {profile[:100]}"
                                 beats.append(NarrativeBeat(
                                     text=beat_text,
@@ -127,6 +128,11 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
                                     players=[name],
                                     section="home_team" if side == "home_team" else "away_team",
                                     source=player.get("data_source", "research"),
+                                    source_urls=source_urls,
+                                    source_attribution=self._build_source_attribution(
+                                        player.get("data_source", "research"),
+                                        source_urls,
+                                    ),
                                     confidence=0.8,
                                 ))
 
@@ -140,12 +146,15 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
                     p2 = matchup.get("player2", "")
                     analysis = matchup.get("analysis", "")
                     if p1 and p2:
+                        source_urls = self._extract_source_urls(matchup)
                         beats.append(NarrativeBeat(
                             text=f"Key duel: {p1} vs {p2} — {analysis[:80]}",
                             event_tags=["foul", "free_kick_dangerous"],
                             players=[p1, p2],
                             section="tactical",
                             source="matchup_analysis",
+                            source_urls=source_urls,
+                            source_attribution=self._build_source_attribution("matchup_analysis", source_urls),
                             confidence=0.7,
                         ))
 
@@ -155,6 +164,7 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
             form_data = team_form.get(side, {})
             comprehensive = form_data.get("comprehensive_analysis", "")
             if isinstance(comprehensive, str) and comprehensive:
+                source_urls = self._extract_source_urls(form_data)
                 # Split into sentences and create beats
                 sentences = comprehensive.replace("\n", " ").split(". ")
                 for sentence in sentences[:5]:
@@ -165,6 +175,11 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
                             players=[],
                             section=side,
                             source="team_form",
+                            source_urls=source_urls,
+                            source_attribution=self._build_source_attribution(
+                                form_data.get("data_source", "team_form"),
+                                source_urls,
+                            ),
                             confidence=0.6,
                         ))
 
@@ -172,6 +187,7 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
         historical = all_outputs.get("historical", {})
         narrative = historical.get("narrative", "")
         if isinstance(narrative, str) and narrative:
+            source_urls = self._extract_source_urls(historical)
             sentences = narrative.replace("\n", " ").split(". ")
             for sentence in sentences[:5]:
                 if len(sentence.strip()) > 20:
@@ -181,6 +197,11 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
                         players=[],
                         section="historical",
                         source="historical_context",
+                        source_urls=source_urls,
+                        source_attribution=self._build_source_attribution(
+                            historical.get("data_source", "historical_context"),
+                            source_urls,
+                        ),
                         confidence=0.5,
                     ))
 
@@ -188,16 +209,59 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
         weather = all_outputs.get("weather", {})
         weather_narrative = self._clean_weather_narrative(weather.get("narrative", ""))
         if isinstance(weather_narrative, str) and weather_narrative:
+            source_urls = self._extract_source_urls(weather)
             beats.append(NarrativeBeat(
                 text=f"Weather impact: {weather_narrative[:100]}",
                 event_tags=["foul", "corner"],  # Weather affects set pieces
                 players=[],
                 section="match_info",
                 source="weather_context",
+                source_urls=source_urls,
+                source_attribution=self._build_source_attribution(
+                    weather.get("data_source", "weather_context"),
+                    source_urls,
+                ),
                 confidence=0.6,
             ))
 
         return beats
+
+    def _extract_source_urls(self, value: Any, limit: int = 5) -> List[str]:
+        """Collect source URLs nested under a source object."""
+        urls: List[str] = []
+
+        def _walk(item: Any) -> None:
+            if len(urls) >= limit:
+                return
+            if isinstance(item, dict):
+                for key in ("source_url", "url", "link"):
+                    url = item.get(key)
+                    if isinstance(url, str) and url.startswith(("http://", "https://")) and url not in urls:
+                        urls.append(url)
+                        if len(urls) >= limit:
+                            return
+                source_urls = item.get("source_urls")
+                if isinstance(source_urls, list):
+                    for url in source_urls:
+                        if isinstance(url, str) and url.startswith(("http://", "https://")) and url not in urls:
+                            urls.append(url)
+                            if len(urls) >= limit:
+                                return
+                for child in item.values():
+                    _walk(child)
+            elif isinstance(item, list):
+                for child in item:
+                    _walk(child)
+
+        _walk(value)
+        return urls
+
+    def _build_source_attribution(self, source: Any, source_urls: List[str]) -> List[Dict[str, str]]:
+        """Create display-ready attribution objects for generated beats."""
+        label = str(source or "research")
+        if source_urls:
+            return [{"label": label, "url": url} for url in source_urls[:3]]
+        return [{"label": label, "url": ""}]
 
     async def synthesize_to_markdown_json(
         self,

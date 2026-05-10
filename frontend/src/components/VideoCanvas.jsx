@@ -318,15 +318,8 @@ export default function VideoCanvas({
                 startStreaming()
                 return
             }
-            if (!videoFile || !videoReady) {
-                window.dispatchEvent(new CustomEvent('pitchsideai:qa_answer', {
-                    detail: {
-                        type: 'answer',
-                        text: 'Upload match footage first, then ask me about what is happening in the video.',
-                        source: 'system',
-                    },
-                }))
-            }
+            // Other hidden tabs may also mount VideoCanvas. If this canvas has no
+            // clip, stay silent and let the active Fan Lens canvas handle it.
         }
 
         window.addEventListener('pitchsideai:streaming_query', handleStreamingQuery)

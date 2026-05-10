@@ -5,7 +5,7 @@ Defines the multi-agent workflow using LangGraph for state management,
 parallel execution, and error handling.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields as dataclass_fields
 from typing import Dict, List, Any, Optional, Callable, Awaitable
 from datetime import datetime
 import asyncio
@@ -325,9 +325,21 @@ class CommentaryNotesWorkflow:
             "duration_ms": self.get_duration_ms(state),
         }
 
-    async def run_workflow(self, state: CommentaryNotesState, on_progress: ProgressCallback = None) -> CommentaryNotesState:
+    async def run_workflow(
+        self,
+        state: CommentaryNotesState,
+        on_progress: ProgressCallback = None,
+        use_langgraph: bool = True,
+    ) -> CommentaryNotesState:
         """Execute workflow with maximum parallelization, emitting progress via callback."""
         logger.info("Starting commentary notes workflow (optimized)...")
+
+        if use_langgraph and on_progress is None:
+            graph = build_langgraph(self)
+            if graph is not None:
+                logger.info("Running commentary notes workflow through LangGraph")
+                result = await graph.ainvoke(state)
+                return _coerce_commentary_state(result)
 
         async def _emit(phase: str, message: str, **extra):
             if on_progress:
@@ -408,34 +420,50 @@ def create_workflow() -> CommentaryNotesWorkflow:
     return CommentaryNotesWorkflow()
 
 
+def _coerce_commentary_state(result: Any) -> CommentaryNotesState:
+    """Convert LangGraph's dict output back into the workflow dataclass."""
+    if isinstance(result, CommentaryNotesState):
+        return result
+    if not isinstance(result, dict):
+        raise TypeError(f"Unexpected workflow result type: {type(result)!r}")
+
+    allowed = {field_info.name for field_info in dataclass_fields(CommentaryNotesState)}
+    values = {key: value for key, value in result.items() if key in allowed}
+    phase = values.get("phase")
+    if isinstance(phase, str):
+        values["phase"] = WorkflowPhase(phase)
+    return CommentaryNotesState(**values)
+
+
 # ===== Graph Building (LangGraph Integration) =====
 
-def build_langgraph():
+def build_langgraph(workflow: Optional[CommentaryNotesWorkflow] = None):
     """
     Build LangGraph state graph for workflow.
 
-    This would integrate with actual LangGraph library in production.
+    Returns a compiled LangGraph runnable when langgraph is installed. If the
+    dependency is unavailable, callers can fall back to run_workflow().
     """
-    # from langgraph.graph import StateGraph, END
+    try:
+        from langgraph.graph import END, START, StateGraph
+    except Exception as exc:
+        logger.warning("LangGraph unavailable; using native workflow runner: %s", exc)
+        return None
 
-    # workflow = StateGraph(CommentaryNotesState)
+    runner = workflow or CommentaryNotesWorkflow()
+    graph = StateGraph(CommentaryNotesState)
 
-    # # Add nodes
-    # workflow.add_node("initialize", initialize_workflow_node)
-    # workflow.add_node("gather_context", gather_initial_context_node)
-    # workflow.add_node("research_squads", research_squads_node)
-    # workflow.add_node("analyze_form", analyze_form_node)
-    # workflow.add_node("synthesize", synthesize_notes_node)
+    graph.add_node("initialize", runner.initialize_workflow)
+    graph.add_node("gather_context", runner.gather_initial_context)
+    graph.add_node("research_squads", runner.research_squads)
+    graph.add_node("analyze_form", runner.analyze_form)
+    graph.add_node("synthesize", runner.synthesize_notes)
 
-    # # Add edges
-    # workflow.add_edge("START", "initialize")
-    # workflow.add_edge("initialize", "gather_context")
-    # workflow.add_edge("gather_context", "research_squads")
-    # workflow.add_edge("research_squads", "analyze_form")
-    # workflow.add_edge("analyze_form", "synthesize")
-    # workflow.add_edge("synthesize", END)
+    graph.add_edge(START, "initialize")
+    graph.add_edge("initialize", "gather_context")
+    graph.add_edge("gather_context", "research_squads")
+    graph.add_edge("research_squads", "analyze_form")
+    graph.add_edge("analyze_form", "synthesize")
+    graph.add_edge("synthesize", END)
 
-    # return workflow.compile()
-
-    logger.info("LangGraph integration pending (using sequential execution for now)")
-    return None
+    return graph.compile()

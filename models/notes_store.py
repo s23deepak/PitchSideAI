@@ -5,8 +5,10 @@ TagResolver — 3-tier event tag normalization (exact → synonym → substring 
 with safety gate for goal events to prevent false calls.
 """
 
+import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from models.narrative_beat import NarrativeBeat
@@ -192,3 +194,55 @@ class NotesStore:
             if 0 <= i < len(self.beats):
                 result.append((i, self.beats[i]))
         return result
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize the store for persistence outside process memory."""
+        return {
+            "raw_markdown": self.raw_markdown,
+            "beats": [asdict(beat) for beat in self.beats],
+            "lookup": self.lookup,
+            "index": self.index,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "NotesStore":
+        """Deserialize a NotesStore payload created by to_dict()."""
+        beats = []
+        for item in payload.get("beats", []):
+            if not isinstance(item, Mapping):
+                continue
+            beats.append(
+                NarrativeBeat(
+                    text=str(item.get("text", "")),
+                    event_tags=list(item.get("event_tags", [])),
+                    players=list(item.get("players", [])),
+                    section=str(item.get("section", "")),
+                    source=str(item.get("source", "")),
+                    source_urls=list(item.get("source_urls", [])),
+                    source_attribution=list(item.get("source_attribution", [])),
+                    confidence=float(item.get("confidence", 0.0) or 0.0),
+                )
+            )
+        lookup = {
+            str(tag): [int(idx) for idx in indices]
+            for tag, indices in dict(payload.get("lookup", {})).items()
+            if isinstance(indices, list)
+        }
+        return cls(
+            raw_markdown=str(payload.get("raw_markdown", "")),
+            beats=beats,
+            lookup=lookup,
+            index=payload.get("index"),
+        )
+
+    def save_json(self, path: str | Path) -> None:
+        """Persist the NotesStore as JSON."""
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(self.to_dict(), ensure_ascii=False), encoding="utf-8")
+
+    @classmethod
+    def load_json(cls, path: str | Path) -> "NotesStore":
+        """Load a NotesStore from JSON."""
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        return cls.from_dict(payload)

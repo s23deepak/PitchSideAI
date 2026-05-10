@@ -7,7 +7,7 @@ WORKDIR /app
 # System dependencies
 RUN apt-get update && apt-get install -y \
     ffmpeg \
-    libgl1-mesa-glx \
+    libgl1 \
     libglib2.0-0 \
     wget \
     git \
@@ -41,6 +41,7 @@ ENV LLM_BACKEND=vllm
 ENV VISION_LLM_BACKEND=vllm
 ENV VLLM_BASE_URL=http://localhost:8001
 ENV VLLM_VISION_MODEL=Qwen/Qwen2.5-VL-3B-Instruct-AWQ
+ENV VLLM_GPU_MEMORY_UTILIZATION=0.45
 
 # Expose FastAPI + vLLM ports
 EXPOSE 8000 8001

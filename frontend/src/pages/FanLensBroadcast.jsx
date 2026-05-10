@@ -224,6 +224,26 @@ export default function FanLensBroadcast() {
     }
   }
 
+  const handleVideoReady = useCallback((url) => {
+    setCanvasVideoUrl(url)
+  }, [])
+
+  const handleStreamingStatus = useCallback((status) => {
+    setStreamingStatus(status)
+    if (Number.isFinite(status.currentTime)) {
+      setCanvasVideoTime(status.currentTime)
+    }
+  }, [])
+
+  const handleTacticalDetection = useCallback((analysis) => {
+    updateDetection(analysis)
+    sendTacticalDetection(analysis)
+  }, [sendTacticalDetection, updateDetection])
+
+  const handleVideoCommentary = useCallback((msg) => {
+    if (msg.type === 'commentary') addCommentaryItem(msg)
+  }, [addCommentaryItem])
+
   return (
     <FanLensLayout
       splitScreen={
@@ -505,20 +525,10 @@ export default function FanLensBroadcast() {
         homeTeam={homeTeam}
         awayTeam={awayTeam}
         sport={sport}
-        onVideoReady={(url) => setCanvasVideoUrl(url)}
-        onStreamingStatus={(status) => {
-          setStreamingStatus(status)
-          if (Number.isFinite(status.currentTime)) {
-            setCanvasVideoTime(status.currentTime)
-          }
-        }}
-        onTacticalDetection={(analysis) => {
-          updateDetection(analysis)
-          sendTacticalDetection(analysis)
-        }}
-        onCommentary={(msg) => {
-          if (msg.type === 'commentary') addCommentaryItem(msg)
-        }}
+        onVideoReady={handleVideoReady}
+        onStreamingStatus={handleStreamingStatus}
+        onTacticalDetection={handleTacticalDetection}
+        onCommentary={handleVideoCommentary}
         startLabel="Start Video Analysis"
       />
     </FanLensLayout>

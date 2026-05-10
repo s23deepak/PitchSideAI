@@ -12,6 +12,7 @@ from workflows.commentary_notes_workflow import (
     CommentaryNotesWorkflow,
     CommentaryNotesState,
     WorkflowPhase,
+    build_langgraph,
     create_workflow,
 )
 from workflows.crewai_config import (
@@ -32,6 +33,7 @@ __all__ = [
     "CommentaryNotesWorkflow",
     "CommentaryNotesState",
     "WorkflowPhase",
+    "build_langgraph",
     "create_workflow",
     # CrewAI
     "CREW_CONFIG",
