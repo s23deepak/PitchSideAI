@@ -246,8 +246,8 @@ def test_missing_data_fallbacks_are_booth_guidance_not_homework():
     ]
     for phrase in banned:
         assert phrase not in combined.lower()
-    assert "First receiver under pressure" in players
-    assert "No major team-news disruption surfaced" in news
+    assert "first receiver" in players.lower()
+    assert "No major home side disruption surfaced" in news
     assert "Call the matchup by zone" in matchups
 
 
@@ -288,6 +288,32 @@ def test_missing_players_use_watch_cues_heading():
 
     assert "Player Watch Cues" in section
     assert "Key Players (Sorted by Recent Form)" not in section
+
+
+def test_home_and_away_missing_data_sections_are_not_duplicate():
+    organizer = CommentaryNoteOrganizerAgent(sport="soccer")
+
+    home = organizer._organize_team_analysis_section(
+        player_research={"team_name": "Real Madrid", "players": []},
+        form_analysis={"recent_form": {"form_string": "DLWDW"}},
+        news={},
+        team_label="Real Madrid",
+        page_number=2,
+    )
+    away = organizer._organize_team_analysis_section(
+        player_research={"team_name": "Barcelona", "players": []},
+        form_analysis={"recent_form": {"form_string": "WWWWW"}},
+        news={},
+        team_label="Barcelona",
+        page_number=3,
+    )
+
+    assert "home tempo" in home
+    assert "travel composure" in away
+    assert "Territory setter" in home
+    assert "Back-post threat" in away
+    assert "first escape pass" in away
+    assert home != away
 
 
 def test_tactical_summary_drops_no_critical_battles_scaffold():

@@ -336,6 +336,7 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
         team_name = player_research.get("team_name", team_label)
         players = player_research.get("players", [])[:10]  # Top 10 players
         player_heading = "Key Players (Sorted by Recent Form)" if players else "Player Watch Cues"
+        side_label = "home" if page_number == 2 else "away"
 
         form_text = self._clean_analysis_text(form_analysis.get("comprehensive_analysis", ""), team_name)
 
@@ -374,15 +375,15 @@ Composite Analysis:
 
 #### {player_heading}
 
-{self._format_player_list(players)}
+{self._format_player_list(players, team_name=team_name, side_label=side_label)}
 
 #### Team News ({team_name})
 
-{self._format_news(news)}
+{self._format_news(news, team_name=team_name, side_label=side_label)}
 
 #### Tactical Profile
 
-- Booth cue: tie the first ten minutes back to the form read, the listed player roles, and the matchup notes above.
+{self._build_team_tactical_profile(team_name, side_label, form_analysis, players)}
 """
 
     def _organize_tactical_section(
@@ -506,7 +507,12 @@ Recent H2H Narrative:
             ),
         }
 
-    def _format_player_list(self, players: List[Dict[str, Any]]) -> str:
+    def _format_player_list(
+        self,
+        players: List[Dict[str, Any]],
+        team_name: str = "",
+        side_label: str = "",
+    ) -> str:
         """Format player list for markdown."""
         formatted = []
         for i, player in enumerate(players, 1):
@@ -535,13 +541,14 @@ Recent H2H Narrative:
         if formatted:
             return "\n".join(formatted)
 
-        return (
-            "- First receiver under pressure: identify who wants the ball when the press arrives.\n"
-            "- Line-breaker: watch who plays or carries through the first defensive line.\n"
-            "- Outlet player: name the wide or forward option the team uses when buildup gets squeezed."
-        )
+        return self._build_player_watch_cues(team_name, side_label)
 
-    def _format_news(self, news: Dict[str, Any]) -> str:
+    def _format_news(
+        self,
+        news: Dict[str, Any],
+        team_name: str = "",
+        side_label: str = "",
+    ) -> str:
         """Format team news for markdown."""
         injuries = news.get("injuries", [])
         synthesis = news.get("synthesis", "")
@@ -550,16 +557,13 @@ Recent H2H Narrative:
         synthesis = self._clean_news_text(synthesis)
 
         if not synthesis and not news_items and not injuries:
-            return (
-                "No major team-news disruption surfaced. Keep the lead-in focused on form, tactical roles, "
-                "and the first visible selection surprise."
-            )
+            return self._build_team_news_fallback(team_name, side_label)
 
         output = ""
         if synthesis:
             output = f"{synthesis}\n\n"
         else:
-            output = "No major team-news disruption surfaced. Lead with form and tactical role clarity.\n\n"
+            output = f"{self._build_team_news_fallback(team_name, side_label)}\n\n"
 
         if news_items:
             output += "**Recent Headlines**:\n"
@@ -577,7 +581,64 @@ Recent H2H Narrative:
                 if player != 'Unknown':
                     output += f"- {player}: {status}\n"
 
-        return output if output.strip() else "No major team-news disruption surfaced. Lead with form and tactical role clarity."
+        return output if output.strip() else self._build_team_news_fallback(team_name, side_label)
+
+    def _build_player_watch_cues(self, team_name: str, side_label: str) -> str:
+        """Build side-specific player cues when researched player data is absent."""
+        label = team_name or ("home side" if side_label == "home" else "away side")
+        if side_label == "away":
+            return (
+                f"- {label} outlet: identify the first runner used to escape pressure.\n"
+                "- Counter-press trigger: watch who jumps immediately after losing the ball.\n"
+                "- Back-post threat: name the far-side attacker arriving when play is switched."
+            )
+        return (
+            f"- {label} first receiver: identify who wants the ball when the press arrives.\n"
+            "- Line-breaker: watch who plays or carries through the first defensive line.\n"
+            "- Territory setter: name the wide or midfield option used to pin the opponent back."
+        )
+
+    def _build_team_news_fallback(self, team_name: str, side_label: str) -> str:
+        """Write team-news fallback as commentary direction, not a duplicated status line."""
+        is_away = side_label == "away"
+        label = team_name or ("Away side" if is_away else "home side")
+        if is_away:
+            return (
+                f"No major {label} disruption surfaced. Frame their first spell through travel composure, "
+                "defensive spacing, and whether the outlet runner gives them relief."
+            )
+        return (
+            f"No major {label} disruption surfaced. Frame their first spell through home tempo, "
+            "territory, and whether the selection gives them early control."
+        )
+
+    def _build_team_tactical_profile(
+        self,
+        team_name: str,
+        side_label: str,
+        form_analysis: Dict[str, Any],
+        players: List[Dict[str, Any]],
+    ) -> str:
+        """Build a side-specific tactical profile cue."""
+        form_string = ""
+        recent_form = form_analysis.get("recent_form", {}) if isinstance(form_analysis, dict) else {}
+        if isinstance(recent_form, dict):
+            form_string = recent_form.get("form_string", "") or ""
+        form_clause = f" Their form string is {form_string}." if self._is_meaningful_form_string(form_string) else ""
+        player_clause = (
+            "tie the first ten minutes to the named player roles"
+            if players
+            else "use the first ten minutes to identify the roles live"
+        )
+        if side_label == "away":
+            return (
+                f"- {team_name}: {player_clause}; watch compactness after turnovers, the first escape pass, "
+                f"and how quickly the wide outlet gets support.{form_clause}"
+            )
+        return (
+            f"- {team_name}: {player_clause}; watch the opening tempo, first forward pass, "
+            f"and whether wide pressure turns into sustained territory.{form_clause}"
+        )
 
     def _format_lineup_rows(
         self,
