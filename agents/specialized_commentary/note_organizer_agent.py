@@ -9,6 +9,7 @@ from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 import json
 import logging
+import re
 from agents.base import BaseAgent
 from data_sources import DataCache
 from models.notes_store import NotesStore, NarrativeBeat
@@ -18,6 +19,15 @@ logger = logging.getLogger(__name__)
 
 class CommentaryNoteOrganizerAgent(BaseAgent):
     """Synthesize all research into final commentary notes."""
+
+    LOW_QUALITY_PATTERNS = (
+        "current form status: unavailable",
+        "analysis unavailable",
+        "unavailable.",
+        "unavailable 2",
+        "tactical route unavailable",
+        "verified tactical snapshot unavailable",
+    )
 
     def __init__(
         self,
@@ -176,7 +186,7 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
 
         # Extract weather impact
         weather = all_outputs.get("weather", {})
-        weather_narrative = weather.get("narrative", "")
+        weather_narrative = self._clean_weather_narrative(weather.get("narrative", ""))
         if isinstance(weather_narrative, str) and weather_narrative:
             beats.append(NarrativeBeat(
                 text=f"Weather impact: {weather_narrative[:100]}",
@@ -225,7 +235,8 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
             all_outputs.get("player_research", {}).get("home_team", {}),
             all_outputs.get("team_form", {}).get("home_team", {}),
             all_outputs.get("news", {}).get("home_team", {}),
-            "Home Team",
+            home_team,
+            2,
         )
 
         # PAGE 3: Away Team Analysis
@@ -233,7 +244,8 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
             all_outputs.get("player_research", {}).get("away_team", {}),
             all_outputs.get("team_form", {}).get("away_team", {}),
             all_outputs.get("news", {}).get("away_team", {}),
-            "Away Team",
+            away_team,
+            3,
         )
 
         # PAGE 4-5: Tactical Analysis & Storylines
@@ -309,31 +321,18 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
         form_analysis: Dict[str, Any],
         news: Dict[str, Any],
         team_label: str,
+        page_number: int,
     ) -> str:
         """Organize team analysis section (Pages 2-3)."""
         team_name = player_research.get("team_name", team_label)
         players = player_research.get("players", [])[:10]  # Top 10 players
 
-        form_text = form_analysis.get("comprehensive_analysis", "")
+        form_text = self._clean_analysis_text(form_analysis.get("comprehensive_analysis", ""), team_name)
 
         # Build meaningful form section even when data is sparse
-        if not form_text:
+        if not form_text or self._is_low_quality_text(form_text, team_name):
             # Construct a sensible fallback using whatever data is available
-            record = form_analysis.get("recent_form", {}).get("record", {})
-            if record:
-                wins = record.get("wins", 0)
-                draws = record.get("draws", 0)
-                losses = record.get("losses", 0)
-                form_string = form_analysis.get("recent_form", {}).get("form_string", "")
-                if wins or draws or losses:
-                    form_text = f"{team_name} enters this match with a record of {wins}W-{draws}D-{losses}L. "
-                    if form_string:
-                        form_text += f"Recent form: {form_string}."
-                    form_text += " Full tactical analysis pending live match data."
-                else:
-                    form_text = f"Form data for {team_name} is being compiled. Check live match updates for real-time performance insights."
-            else:
-                form_text = f"Pre-match form analysis for {team_name} will be available closer to kickoff. Monitor team announcements for the latest updates."
+            form_text = self._build_team_form_fallback(form_analysis, team_name)
 
         form_section = form_text
         split = form_analysis.get("home_away_split", {})
@@ -356,9 +355,9 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
 
         return f"""---
 
-## PAGE {2 if team_label == 'Home Team' else 3}: {team_label.upper()} ANALYSIS
+## PAGE {page_number}: {team_name.upper()} ANALYSIS
 
-#### Recent Form ({team_label})
+#### Recent Form ({team_name})
 
 Composite Analysis:
 {form_section}
@@ -367,7 +366,7 @@ Composite Analysis:
 
 {self._format_player_list(players)}
 
-#### Team News ({team_label})
+#### Team News ({team_name})
 
 {self._format_news(news)}
 
@@ -387,8 +386,9 @@ Composite Analysis:
     ) -> str:
         """Organize tactical analysis section (Pages 4-5)."""
         critical_matchups = matchups.get("critical_matchups", [])
-        narrative = historical.get("narrative", "")
+        narrative = self._clean_historical_narrative(historical.get("narrative", ""), home_team, away_team)
         h2h = historical.get("h2h_history", {})
+        weather_narrative = self._clean_weather_narrative(weather.get("narrative", ""))
 
         # Build H2H record with meaningful fallback
         if h2h and (h2h.get("team1_wins", 0) + h2h.get("team2_wins", 0) + h2h.get("draws", 0)) > 0:
@@ -444,7 +444,7 @@ Recent H2H Narrative:
 
 #### Weather Impact
 
-{weather.get('narrative', 'Standard weather conditions')}
+{weather_narrative or 'No verified weather edge yet; update this line when match-day conditions are confirmed.'}
 
 #### Expected Match Dynamic
 
@@ -467,9 +467,15 @@ Recent H2H Narrative:
             self._first_sentence(comparative),
             self._first_sentence(weather.get("narrative", "")),
         ]
-        summary = " ".join(part for part in summary_parts if part).strip()
+        summary = " ".join(
+            part for part in summary_parts
+            if part and not self._is_low_quality_text(part)
+        ).strip()
         if not summary:
-            summary = "Current inputs point to a balanced tactical battle, with matchup edges and weather cues carrying the strongest evidence."
+            summary = (
+                f"{home_team} vs {away_team} profiles as a balanced tactical battle. "
+                "Use the opening exchanges to confirm which midfield line controls territory and which back line handles pressure cleanly."
+            )
 
         return {
             "summary": summary,
@@ -576,7 +582,7 @@ Recent H2H Narrative:
         for matchup in matchups[:5]:
             p1 = matchup.get("player1", "")
             p2 = matchup.get("player2", "")
-            analysis = matchup.get("analysis", "")
+            analysis = self._clean_matchup_analysis(matchup.get("analysis", ""))
             if p1 and p2:
                 if analysis:
                     formatted.append(f"**{p1} vs {p2}**\n{analysis}\n")
@@ -591,7 +597,18 @@ Recent H2H Narrative:
 
     def _format_bullets(self, items: List[str]) -> str:
         """Format a list of text items as markdown bullets."""
-        clean_items = [item.strip() for item in items if isinstance(item, str) and item.strip()]
+        clean_items = [
+            cleaned
+            for item in items
+            if (cleaned := self._clean_analysis_text(item).strip())
+            and not self._is_low_quality_text(cleaned)
+        ]
+        clean_items = [
+            item
+            for item in clean_items
+            if isinstance(item, str)
+            and item.strip()
+        ]
         if clean_items:
             return "\n".join(f"- {item}" for item in clean_items)
         # Return empty string for clean rendering - parent section will have context
@@ -631,7 +648,7 @@ Recent H2H Narrative:
                 f"2. Historical trend: {h2h.get('team1_wins', 0)}-{h2h.get('draws', 0)}-{h2h.get('team2_wins', 0)} in recent meetings"
             )
 
-        weather_narrative = weather.get("narrative", "")
+        weather_narrative = self._clean_weather_narrative(weather.get("narrative", ""))
         if weather_narrative:
             bullets.append(f"3. Weather factor: {weather_narrative.split('.')[0].strip()}")
 
@@ -658,10 +675,10 @@ Recent H2H Narrative:
     def _extract_team_plan(self, form_analysis: Dict[str, Any], team_name: str) -> str:
         """Extract a concise tactical route from the form-analysis summary."""
         analysis = form_analysis.get("comprehensive_analysis", "")
-        plan = self._first_two_sentences(analysis)
-        if plan:
+        plan = self._clean_analysis_text(self._first_two_sentences(analysis), team_name)
+        if plan and not self._is_low_quality_text(plan, team_name):
             return plan
-        return f"Verified tactical route for {team_name} is limited, so lean on live phase cues and matchup swings."
+        return self._build_team_plan_fallback(form_analysis, team_name)
 
     def _build_pressure_points(
         self,
@@ -704,7 +721,7 @@ Recent H2H Narrative:
         if historical_pattern:
             angles.append(f"Frame the rivalry as a {historical_pattern.lower()} head-to-head pattern.")
 
-        weather_lever = self._first_sentence(weather.get("narrative", ""))
+        weather_lever = self._first_sentence(self._clean_weather_narrative(weather.get("narrative", "")))
         if weather_lever:
             angles.append(f"Weather cue: {weather_lever}")
 
@@ -715,7 +732,174 @@ Recent H2H Narrative:
         if not angles:
             angles.append(f"Lead with how {home_team} and {away_team} handle the first tactical swing in midfield.")
 
-        return angles[:4]
+        return [angle for angle in angles if not self._is_low_quality_text(angle)][:4]
+
+    def _build_team_form_fallback(self, form_analysis: Dict[str, Any], team_name: str) -> str:
+        """Build readable team form copy from structured fields when LLM text is weak."""
+        recent_form = form_analysis.get("recent_form", {}) if isinstance(form_analysis, dict) else {}
+        record = recent_form.get("record", {}) if isinstance(recent_form, dict) else {}
+        form_string = recent_form.get("form_string", "") if isinstance(recent_form, dict) else ""
+        wins = record.get("wins")
+        draws = record.get("draws")
+        losses = record.get("losses")
+        has_record = any((value or 0) > 0 for value in (wins, draws, losses))
+
+        if has_record:
+            record_text = f"{wins or 0}W-{draws or 0}D-{losses or 0}L"
+            form_clause = f" Their recent sequence reads {form_string}." if self._is_meaningful_form_string(form_string) else ""
+            return (
+                f"{team_name} enter with a recent record of {record_text}.{form_clause} "
+                "For commentary, watch whether that baseline shows up as early territorial control, clean rest defense, or pressure after turnovers."
+            )
+
+        if self._is_meaningful_form_string(form_string):
+            return (
+                f"{team_name}'s recent sequence reads {form_string}. "
+                "Use that as a light form cue, then verify the real tactical tone through tempo, field tilt, and first-half chance quality."
+            )
+
+        split = form_analysis.get("home_away_split", {}) if isinstance(form_analysis, dict) else {}
+        split_text = self._format_home_away_split_for_notes(split)
+        if split_text:
+            return (
+                f"{team_name} have a usable venue trend: {split_text}. "
+                "Frame the opening phase around whether they can turn that context into sustained possession and high-quality entries."
+            )
+
+        return (
+            f"For {team_name}, keep the tactical read grounded in live cues: first-pass security, midfield spacing, set-piece delivery, "
+            "and how quickly the back line recovers when possession turns over."
+        )
+
+    def _is_meaningful_form_string(self, form_string: Any) -> bool:
+        """Return whether a form string contains useful results rather than placeholders."""
+        if not isinstance(form_string, str):
+            return False
+        cleaned = form_string.strip().lower()
+        return bool(cleaned) and cleaned not in {"no data", "unavailable", "unknown", "n/a", "none", "tbd"}
+
+    def _build_team_plan_fallback(self, form_analysis: Dict[str, Any], team_name: str) -> str:
+        """Build a tactical route when generated prose is placeholder-like."""
+        form_copy = self._build_team_form_fallback(form_analysis, team_name)
+        first = self._first_sentence(form_copy)
+        return (
+            f"{first} The route to tilting the match is to establish territory early, protect the central lane, "
+            "and turn wide pressure into repeatable final-third moments."
+        )
+
+    def _format_home_away_split_for_notes(self, split: Dict[str, Any]) -> str:
+        """Render home/away split rows if they contain real values."""
+        if not isinstance(split, dict):
+            return ""
+        pieces = []
+        for label in ("home", "away"):
+            row = split.get(label, {})
+            if not isinstance(row, dict):
+                continue
+            won = row.get("won", 0) or 0
+            drawn = row.get("draw", 0) or 0
+            lost = row.get("lost", 0) or 0
+            if won or drawn or lost:
+                pieces.append(f"{label.title()} {won}W-{drawn}D-{lost}L")
+        return " | ".join(pieces)
+
+    def _clean_analysis_text(self, text: Any, team_name: str = "") -> str:
+        """Strip outline labels and reject obvious LLM scaffold fragments."""
+        if not isinstance(text, str):
+            return ""
+        cleaned = " ".join(text.split()).strip()
+        if not cleaned:
+            return ""
+        cleaned = re.sub(r"#{1,6}\s*", "", cleaned)
+        cleaned = re.sub(r"\*{2,}", "", cleaned)
+        cleaned = re.sub(
+            r"(?i)\b(?:provide:|current form status|key performance trends|momentum assessment|recent performance pattern|tactical implications)\s*:?",
+            "",
+            cleaned,
+        )
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" -:;")
+        if self._is_low_quality_text(cleaned, team_name):
+            return ""
+        return cleaned
+
+    def _is_low_quality_text(self, text: Any, team_name: str = "") -> bool:
+        """Detect placeholder/scaffold text that should not be shown to commentators."""
+        if not isinstance(text, str):
+            return True
+        cleaned = " ".join(text.split()).strip()
+        if not cleaned:
+            return True
+        lower = cleaned.lower()
+        if any(pattern in lower for pattern in self.LOW_QUALITY_PATTERNS):
+            return True
+        if "****" in cleaned or "###" in cleaned:
+            return True
+        if re.search(r"defensive record of \d+\s+wins?.*\d+\s+loss", lower):
+            return True
+        if re.search(r"defensive record:\s*\d+\s+wins?", lower):
+            return True
+        if "0 wins, 0 draws" in lower:
+            return True
+        if re.search(r"goal-scoring rate.*goals against.*goals scored", lower):
+            return True
+        if "they have not played any matches" in lower:
+            return True
+        if "weather conditions remain unknown" in lower:
+            return True
+        if "we can infer" in lower:
+            return True
+        if re.search(r"\b(?:declining|stable|resurgent|in-form)\s+-\s+defensive record", lower):
+            return True
+        if re.search(r"(^|\s)[1-5]\.\s*(?:$|[1-5]\.|[A-Za-z ]{0,24}:?\s*(?:unavailable|tbd|unknown))", cleaned, re.I):
+            return True
+        if re.fullmatch(r"(?:[1-5]\.\s*)+", cleaned):
+            return True
+        if len(cleaned) < 24 and re.search(r"\b(unavailable|pending|tbd|unknown)\b", lower):
+            return True
+        if team_name and team_name not in {"Home Team", "Away Team"}:
+            if re.search(r"\b(home team|away team)\b", lower):
+                return True
+        return False
+
+    def _clean_matchup_analysis(self, text: Any) -> str:
+        """Keep matchup blurbs short and remove model-generated markdown scaffolding."""
+        cleaned = self._clean_analysis_text(text)
+        if not cleaned:
+            return ""
+        cleaned = re.sub(
+            r"(?i)\b(?:statistical advantage|tactical edge|key battle prediction)\b:?",
+            "",
+            cleaned,
+        )
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" -:;")
+        lower = cleaned.lower()
+        if (
+            self._is_low_quality_text(cleaned)
+            or "both players have not scored" in lower
+            or "the lies in" in lower
+        ):
+            return ""
+        return self._first_two_sentences(cleaned)
+
+    def _clean_historical_narrative(self, text: Any, home_team: str, away_team: str) -> str:
+        """Avoid showing fabricated or contradictory historical copy."""
+        cleaned = self._clean_analysis_text(text)
+        if not cleaned:
+            return ""
+        lower = cleaned.lower()
+        if "0-0-0" in lower or "no previous encounters" in lower or "never met before" in lower:
+            return (
+                f"Treat {home_team} vs {away_team} as a rivalry context without overstating verified head-to-head numbers. "
+                "Use live momentum, crowd tone, and early tactical control as the main story drivers."
+            )
+        return cleaned
+
+    def _clean_weather_narrative(self, text: Any) -> str:
+        """Keep weather notes factual when APIs do not provide conditions."""
+        cleaned = self._clean_analysis_text(text)
+        if not cleaned or self._is_low_quality_text(cleaned):
+            return ""
+        return cleaned
 
     def _first_sentence(self, text: str) -> str:
         """Return the first sentence-like segment from text."""
