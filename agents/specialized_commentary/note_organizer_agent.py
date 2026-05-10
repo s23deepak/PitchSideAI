@@ -624,20 +624,34 @@ Recent H2H Narrative:
         recent_form = form_analysis.get("recent_form", {}) if isinstance(form_analysis, dict) else {}
         if isinstance(recent_form, dict):
             form_string = recent_form.get("form_string", "") or ""
-        form_clause = f" Their form string is {form_string}." if self._is_meaningful_form_string(form_string) else ""
-        player_clause = (
-            "tie the first ten minutes to the named player roles"
-            if players
-            else "use the first ten minutes to identify the roles live"
-        )
         if side_label == "away":
+            player_clause = (
+                "connect the early defensive block to the named player roles"
+                if players
+                else "identify the outlet and counter-press roles from the opening away spell"
+            )
+            form_clause = (
+                f" Recent sequence {form_string}: call whether that confidence survives the first pressure wave."
+                if self._is_meaningful_form_string(form_string)
+                else ""
+            )
             return (
                 f"- {team_name}: {player_clause}; watch compactness after turnovers, the first escape pass, "
                 f"and how quickly the wide outlet gets support.{form_clause}"
             )
+        player_clause = (
+            "tie early territorial control to the named player roles"
+            if players
+            else "identify the tempo-setter and line-breaker from the opening home spell"
+        )
+        form_clause = (
+            f" Recent sequence {form_string}: call whether that becomes sustained territory."
+            if self._is_meaningful_form_string(form_string)
+            else ""
+        )
         return (
             f"- {team_name}: {player_clause}; watch the opening tempo, first forward pass, "
-            f"and whether wide pressure turns into sustained territory.{form_clause}"
+            f"and whether wide pressure pins the opponent back.{form_clause}"
         )
 
     def _format_lineup_rows(

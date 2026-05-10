@@ -313,6 +313,12 @@ def test_home_and_away_missing_data_sections_are_not_duplicate():
     assert "Territory setter" in home
     assert "Back-post threat" in away
     assert "first escape pass" in away
+    assert "use the first ten minutes to identify the roles live" not in home
+    assert "use the first ten minutes to identify the roles live" not in away
+    assert "Their form string is" not in home
+    assert "Their form string is" not in away
+    assert "opening home spell" in home
+    assert "opening away spell" in away
     assert home != away
 
 
