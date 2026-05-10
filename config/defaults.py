@@ -32,7 +32,7 @@ LOG_FILE = "logs/pitchside.log"
 LLM_BACKEND = "vllm"
 VISION_LLM_BACKEND = "vllm"
 COMMENTARY_NOTES_LLM_BACKEND = "vllm"
-STREAMING_BACKEND = "streaming_vlm"  # Default video/streaming inference backend
+STREAMING_BACKEND = "vllm"  # Default video/streaming inference backend
 # ── OpenAI ────────────────────────────────────────────────────────────────────
 OPENAI_MODEL = "gpt-4o-mini"
 OPENAI_EMBED_MODEL = "text-embedding-3-small"

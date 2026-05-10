@@ -42,7 +42,7 @@ export default function VideoCanvas({
     const [triviaCard, setTriviaCard] = useState(null)
 
     // Backend config
-    const [backend, setBackend] = useState('streaming_vlm')
+    const [backend, setBackend] = useState('vllm')
     const [chunkInterval, setChunkInterval] = useState(5) // seconds
     const [targetFps, setTargetFps] = useState(8)
 

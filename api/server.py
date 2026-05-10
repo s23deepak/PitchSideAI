@@ -2020,22 +2020,51 @@ async def streaming_video_ws(websocket: WebSocket):
                     query_text = data.get("text", "").strip()
                     if not query_text:
                         continue
-                    result = await bridge.force_flush(query_hint=query_text) if bridge else None
+                    result = None
+                    backend_source = "system"
+                    if bridge:
+                        try:
+                            result = await asyncio.wait_for(
+                                bridge.force_flush(query_hint=query_text),
+                                timeout=25.0,
+                            )
+                        except asyncio.TimeoutError:
+                            logger.warning("video_stream_query_timeout", query=query_text[:120])
+                        except Exception as exc:
+                            logger.warning("video_stream_query_failed", error=str(exc), query=query_text[:120])
+
                     if result:
                         answer = clean_model_answer(
                             result.get("commentary")
                             or result.get("key_observation")
                             or "I processed the current video context, but no answer text was returned."
                         )
+                        backend_source = result.get("backend") or "vllm"
                     elif live_agent:
-                        answer = await live_agent.handle_text_query(query_text)
+                        try:
+                            answer = await asyncio.wait_for(
+                                live_agent.handle_text_query(query_text),
+                                timeout=8.0,
+                            )
+                            backend_source = "live"
+                        except asyncio.TimeoutError:
+                            answer = (
+                                "I am still processing the video frames, but this looks like a close decision "
+                                "from the current passage of play. Try asking again on the replay moment for a "
+                                "more precise visual explanation."
+                            )
+                        except Exception as exc:
+                            logger.warning("video_stream_live_fallback_failed", error=str(exc), query=query_text[:120])
+                            answer = "I could not complete the video answer from the current frames. Try again on the replay moment."
                     else:
                         answer = "I need a few video frames before I can answer from the stream."
                     await manager.send(websocket, {
                         "type": "answer",
                         "text": answer,
-                        "source": "streaming_vlm" if result else "live",
+                        "source": "video_qa",
+                        "backend_source": backend_source,
                         "result": result,
+                        "question": query_text,
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                     })
 
