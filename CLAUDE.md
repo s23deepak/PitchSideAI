@@ -1,13 +1,13 @@
-# CLAUDE.md — PitchAI Development Conventions
+# CLAUDE.md — PitchSideAI Development Conventions
 
 ## Project Overview
 
-PitchAI is an AI football broadcast companion for the AMD Developer Hackathon (May 4–10, 2026).
+PitchSideAI is an AI football broadcast companion for the AMD Developer Hackathon (May 4–10, 2026).
 Real-time commentary notes, live tactical vision Q&A, and Fan Lens broadcast mode.
 
 **Quick Start:**
 ```bash
-cd /home/deepu/PitchAI
+cd /home/deepu/PitchSideAI
 source .venv/bin/activate
 
 # Backend
@@ -30,7 +30,7 @@ cd frontend && npm run dev   # http://localhost:5173
 | After ANY UI file change | `ui-design-auditor` (proactive) |
 | E2E API contract verification | `integrator-qa` |
 | New UI screens from scratch | `ui-generator` → `ui-evaluator` → `frontend-engineer` |
-| Playwright visual tests against .bmad/screens | `frontend-test-agent` |
+| Playwright visual tests for core UI flows | `frontend-test-agent` |
 | 7-agent notes pipeline bugs / slowness | `pipeline-debugger` |
 | StatsBomb / ESPN / Transfermarkt data issues | `sports-domain-expert` |
 | Docker, HF Space, vLLM server, environment config | `devops-agent` |
@@ -39,8 +39,8 @@ cd frontend && npm run dev   # http://localhost:5173
 
 ## Design System
 
-**Midnight Stadium v3.0** — canonical source: `.bmad/midnight-stadium-design.md`
-Screen reference: `.bmad/screens/*.html` (5 screens — use these for ALL UI validation)
+**Midnight Stadium v3.0** — canonical source: `frontend/src/design-tokens/tokens.css`
+Screen references now live in the React layouts and Playwright coverage.
 
 | Token | Value |
 |---|---|
@@ -126,8 +126,8 @@ streaming/factory.py             # Fallback chain Level 1→4
 frontend/src/contexts/LiveSessionContext.jsx  # WS state + SSE stream
 frontend/src/pages/              # FanLensBroadcast, CommentatorDashboard, NotesGenerationHub
 frontend/src/layouts/            # FanLensLayout.tsx, CommentatorLayout.tsx
-.bmad/midnight-stadium-design.md # Design system authority
-.bmad/screens/                   # 5 reference HTML screens
+frontend/src/design-tokens/tokens.css # Design system authority
+frontend/src/layouts/                 # Core screen layout references
 ```
 
 ---

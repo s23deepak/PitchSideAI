@@ -5,7 +5,7 @@ const config: Config = {
   content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
   theme: {
     extend: {
-      // Design Tokens - PitchAI Dark Theme (UX-DR1)
+      // Design Tokens - PitchSideAI Dark Theme (UX-DR1)
       colors: {
         // Backgrounds
         background: {

@@ -77,8 +77,8 @@ export default function Teleprompter({
             onBeatChange?.({ beatIndex, confidence, nextIndices })
         }
 
-        window.addEventListener('pitchai:beat_highlight', handleBeatHighlight)
-        return () => window.removeEventListener('pitchai:beat_highlight', handleBeatHighlight)
+        window.addEventListener('pitchsideai:beat_highlight', handleBeatHighlight)
+        return () => window.removeEventListener('pitchsideai:beat_highlight', handleBeatHighlight)
     }, [isHoldMode, onBeatChange])
 
     // Reset beatConfidence when notesData changes (fix #6)

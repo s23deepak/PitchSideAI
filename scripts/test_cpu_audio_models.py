@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-CPU audio model smoke tests for PitchAI.
+CPU audio model smoke tests for PitchSideAI.
 
 This script checks whether local CPU-side ASR/TTS options are usable without
 touching the live StreamingVLM GPU path.
@@ -28,7 +28,7 @@ from typing import Any, Optional
 
 
 DEFAULT_TTS_TEXT = (
-    "Roma have risen from their ruins. PitchAI is ready for live commentary."
+    "Roma have risen from their ruins. PitchSideAI is ready for live commentary."
 )
 
 
@@ -61,7 +61,7 @@ def _existing_audio_or_silence(audio_path: Optional[str]) -> tuple[Path, Optiona
             raise FileNotFoundError(f"Audio file does not exist: {path}")
         return path, None
 
-    temp_dir = tempfile.TemporaryDirectory(prefix="pitchai-audio-")
+    temp_dir = tempfile.TemporaryDirectory(prefix="pitchsideai-audio-")
     path = Path(temp_dir.name) / "silence.wav"
     _write_silence_wav(path)
     return path, temp_dir
@@ -224,7 +224,7 @@ def browser_tts_hint() -> CheckResult:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Smoke test CPU ASR/TTS options for the PitchAI demo."
+        description="Smoke test CPU ASR/TTS options for the PitchSideAI demo."
     )
     parser.add_argument("--audio", help="Path to a WAV/MP3/WebM question clip for ASR.")
     parser.add_argument("--asr-model", default="tiny", help="faster-whisper model size/name.")
@@ -237,14 +237,14 @@ def parse_args() -> argparse.Namespace:
         help="Which CPU/local TTS path to check.",
     )
     parser.add_argument("--tts-text", default=DEFAULT_TTS_TEXT, help="Text to synthesize.")
-    parser.add_argument("--tts-output", default="/tmp/pitchai_cpu_tts.wav")
+    parser.add_argument("--tts-output", default="/tmp/pitchsideai_cpu_tts.wav")
     parser.add_argument("--piper-voice", help="Path to a Piper .onnx voice model.")
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
     return parser.parse_args()
 
 
 def print_human(results: list[CheckResult]) -> None:
-    print("PitchAI CPU Audio Smoke Test")
+    print("PitchSideAI CPU Audio Smoke Test")
     print("=" * 31)
     for result in results:
         latency = f" ({result.latency_ms:.1f} ms)" if result.latency_ms is not None else ""

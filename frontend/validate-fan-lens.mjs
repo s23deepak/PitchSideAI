@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 // Fan Lens Redesign Validation - Story 5-4 Acceptance Criteria
-// Reference: .bmad/screens/fan-lens-broadcast.html
+// Reference: Fan Lens Midnight Stadium acceptance criteria
 
 test.describe('Fan Lens Redesign - Story 5-4', () => {
 
@@ -15,13 +15,13 @@ test.describe('Fan Lens Redesign - Story 5-4', () => {
   test.describe('Desktop Viewport (1920x1080)', () => {
     test.use({ viewport: { width: 1920, height: 1080 } });
 
-    test('TopNavBar is visible with PITCH AI logo', async ({ page }) => {
+    test('TopNavBar is visible with PITCHSIDEAI logo', async ({ page }) => {
       const navBar = page.locator('.top-nav-bar');
       await expect(navBar).toBeVisible();
 
       const logo = page.locator('.top-nav-logo');
       await expect(logo).toBeVisible();
-      await expect(logo).toContainText('PITCH AI');
+      await expect(logo).toContainText('PITCHSIDEAI');
     });
 
     test('Video canvas occupies majority of viewport', async ({ page }) => {

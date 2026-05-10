@@ -31,7 +31,7 @@ export default function ControlsTray({
 
     // Load seen-tooltip state from localStorage
     useEffect(() => {
-        const stored = localStorage.getItem('pitchai-controls-tooltip-seen')
+        const stored = localStorage.getItem('pitchsideai-controls-tooltip-seen')
         if (stored === 'true') {
             setHasSeenTooltip(true)
         }
@@ -80,7 +80,7 @@ export default function ControlsTray({
         onSettingsChange?.(message)
 
         // Also dispatch custom event for parent to handle
-        window.dispatchEvent(new CustomEvent('pitchai:settings', { detail: message }))
+        window.dispatchEvent(new CustomEvent('pitchsideai:settings', { detail: message }))
     }
 
     // Handle language toggle
@@ -98,7 +98,7 @@ export default function ControlsTray({
         onLanguageChange?.({ language: newLanguage })
 
         // Dispatch custom event
-        window.dispatchEvent(new CustomEvent('pitchai:language', {
+        window.dispatchEvent(new CustomEvent('pitchsideai:language', {
             detail: { language: newLanguage }
         }))
     }
@@ -207,7 +207,7 @@ export default function ControlsTray({
         if (!hasSeenTooltip) {
             setShowTooltip(control)
             shownTooltipsRef.current.add(control)
-            localStorage.setItem('pitchai-controls-tooltip-seen', 'true')
+            localStorage.setItem('pitchsideai-controls-tooltip-seen', 'true')
             setHasSeenTooltip(true)
         }
     }

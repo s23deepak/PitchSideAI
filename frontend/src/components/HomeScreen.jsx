@@ -31,7 +31,7 @@ export default function HomeScreen({ onStartMatch }) {
                 {/* Hero Section */}
                 <div className="hero-section">
                     <div className="hero-icon">⚽</div>
-                    <h1 className="hero-title">PitchSide AI</h1>
+                    <h1 className="hero-title">PitchSideAI</h1>
                     <p className="hero-subtitle">
                         Your intelligent football companion for the 2026 FIFA World Cup
                     </p>

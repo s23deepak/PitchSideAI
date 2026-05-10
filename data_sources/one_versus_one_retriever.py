@@ -1,5 +1,5 @@
 """
-OneVersusOne.com Retriever — PitchAI
+OneVersusOne.com Retriever — PitchSideAI
 Premium football player stats and comparison data via authenticated scraping.
 
 Unique metrics available:

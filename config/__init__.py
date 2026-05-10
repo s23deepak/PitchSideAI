@@ -1,5 +1,5 @@
 """
-Configuration package for PitchSide AI.
+Configuration package for PitchSideAI.
 
 Non-secret defaults live in config/defaults.py (safe to commit).
 Secrets and deployment overrides come from .env (never commit).

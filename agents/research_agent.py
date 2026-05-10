@@ -370,7 +370,7 @@ Answer:
 
     async def _get_team_wikipedia_wikitext(self, team_name: str) -> Optional[str]:
         """Fetch a team's Wikipedia page source as wikitext."""
-        headers = {"User-Agent": "PitchAI/1.0 (local-dev)"}
+        headers = {"User-Agent": "PitchSideAI/1.0 (local-dev)"}
         search_params = {
             "action": "query",
             "list": "search",

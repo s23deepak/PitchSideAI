@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Chaos Testing for PitchAI
+Chaos Testing for PitchSideAI
 
 Tests system resilience under adverse conditions:
 1. Event flood (10 events in 5 seconds)
@@ -41,7 +41,7 @@ class ChaosTestResult:
 
 
 class ChaosTestRunner:
-    """Chaos test runner for PitchAI resilience validation."""
+    """Chaos test runner for PitchSideAI resilience validation."""
 
     SCENARIOS = {
         'flood': {
@@ -554,7 +554,7 @@ class ChaosTestRunner:
                 f.write("\n\n" + section)
         else:
             with open(output_path, 'w') as f:
-                f.write("# PitchAI Validation Report\n\n")
+                f.write("# PitchSideAI Validation Report\n\n")
                 f.write(f"**Generated:** {timestamp}\n\n")
                 f.write(section)
 
@@ -562,7 +562,7 @@ class ChaosTestRunner:
 
 
 async def main():
-    parser = argparse.ArgumentParser(description="PitchAI Chaos Testing")
+    parser = argparse.ArgumentParser(description="PitchSideAI Chaos Testing")
     parser.add_argument("--scenario", choices=list(ChaosTestRunner.SCENARIOS.keys()),
                         help="Run specific chaos scenario")
     parser.add_argument("--all", action="store_true", help="Run all chaos scenarios")

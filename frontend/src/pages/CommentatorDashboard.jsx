@@ -1,14 +1,13 @@
 /**
- * CommentatorDashboard — matches .bmad/screens/commentator-dashboard.html
+ * CommentatorDashboard — Midnight Stadium broadcast dashboard
  *
  * Adds to CommentatorLayout:
- *   - Video header: LIVE • dot + match time + score (MCI 2 - 1 ARS)
+ *   - Video header: LIVE • dot + match time + score from live game state
  *   - Stats strip: Possession % | Shots (on target) | xG Momentum
  *   - Gold-highlighted active teleprompter line (passed through to Teleprompter)
  */
 import { useState, useEffect } from 'react'
 import { useLiveSession } from '@/contexts/LiveSessionContext'
-import TopNavBar from '@/components/TopNavBar'
 import VideoCanvas from '@/components/VideoCanvas'
 import Teleprompter from '@/components/Teleprompter'
 import { CommentatorLayout } from '../layouts/CommentatorLayout'
@@ -16,7 +15,6 @@ import { CommentatorLayout } from '../layouts/CommentatorLayout'
 const FONT_MONO = "'Space Grotesk', monospace"
 const FONT_UI   = "'Inter', system-ui, sans-serif"
 const LIME      = '#c3f400'
-const GOLD      = '#e9c400'
 
 export default function CommentatorDashboard() {
   const {
@@ -27,7 +25,7 @@ export default function CommentatorDashboard() {
     addCommentaryItem, updateDetection,
   } = useLiveSession()
 
-  const [matchTime, setMatchTime] = useState('67:12')
+  const [matchTime, setMatchTime] = useState(null)
   const [homeScore, setHomeScore] = useState(0)
   const [awayScore, setAwayScore] = useState(0)
 
@@ -39,7 +37,7 @@ export default function CommentatorDashboard() {
     if (!gs) return
     if (typeof gs.home_score === 'number') setHomeScore(gs.home_score)
     if (typeof gs.away_score === 'number') setAwayScore(gs.away_score)
-    if (gs.match_minute != null) setMatchTime(`${gs.match_minute}:00`)
+    if (gs.match_minute != null) setMatchTime(`${gs.match_minute}'`)
   }, [liveCommentary])
 
   const short = (t, fallback) => (t || fallback).slice(0, 3).toUpperCase()
@@ -63,9 +61,11 @@ export default function CommentatorDashboard() {
         <span style={{ fontFamily: FONT_MONO, fontSize: '12px', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#e5e2e1' }}>
           Live
         </span>
-        <span style={{ fontFamily: FONT_MONO, fontSize: '14px', color: 'rgba(197,201,174,0.8)', marginLeft: '8px' }}>
-          {matchTime}
-        </span>
+        {matchTime && (
+          <span style={{ fontFamily: FONT_MONO, fontSize: '14px', color: 'rgba(197,201,174,0.8)', marginLeft: '8px' }}>
+            {matchTime}
+          </span>
+        )}
       </div>
 
       {/* Score pill */}
@@ -75,68 +75,50 @@ export default function CommentatorDashboard() {
         padding: '4px 12px', fontFamily: FONT_MONO, fontSize: '14px', fontWeight: 500,
       }}>
         <span style={{ fontWeight: 700, color: '#e5e2e1' }}>{short(homeTeam, 'HME')}</span>
-        <span style={{ color: '#e5e2e1', margin: '0 6px' }}>{homeScore} - {awayScore}</span>
+        <span style={{ color: '#e5e2e1', margin: '0 6px' }}>
+          {homeScore ?? 0} - {awayScore ?? 0}
+        </span>
         <span style={{ fontWeight: 700, color: '#e5e2e1' }}>{short(awayTeam, 'AWY')}</span>
       </div>
     </div>
   )
 
-  // ── Stats strip below video ───────────────────────────────────────────────
-  const statsStrip = (
-    <div style={{
-      height: '56px', background: 'rgba(53,53,53,0.50)',
-      borderTop: '1px solid rgba(255,255,255,0.05)',
-      display: 'flex', alignItems: 'center', justifyContent: 'space-around', padding: '0 16px',
-    }}>
-      {[
-        { label: 'Possession', value: `${homeScore > awayScore ? 62 : 45}% - ${homeScore > awayScore ? 38 : 55}%` },
-        { label: 'Shots (Target)', value: '14(6) - 8(3)' },
-        { label: 'xG Momentum', value: homeScore > awayScore ? `${short(homeTeam, 'HME')} Surge` : 'Even', color: GOLD },
-      ].map(({ label, value, color }) => (
-        <div key={label} style={{ textAlign: 'center' }}>
-          <div style={{ fontFamily: FONT_MONO, fontSize: '10px', letterSpacing: '0.1em', textTransform: 'uppercase', color: 'rgba(197,201,174,0.8)', marginBottom: '2px' }}>
-            {label}
-          </div>
-          <div style={{ fontFamily: FONT_MONO, fontSize: '14px', fontWeight: 500, color: color || LIME }}>
-            {value}
-          </div>
-        </div>
-      ))}
-    </div>
-  )
-
   return (
-    <>
-      <TopNavBar />
-      <CommentatorLayout
-        liveHeader={liveHeader}
-        statsStrip={statsStrip}
-        videoCanvas={
-          <VideoCanvas
-            matchSession={matchSession}
-            homeTeam={homeTeam}
-            awayTeam={awayTeam}
-            sport={sport}
-            onTacticalDetection={(analysis) => {
-              updateDetection(analysis)
-              sendTacticalDetection(analysis)
-            }}
-            onCommentary={(msg) => {
-              if (msg.type === 'commentary') addCommentaryItem(msg)
-            }}
-          />
-        }
-        teleprompter={
-          <Teleprompter
-            notesData={commentaryData}
-            buildingNotes={buildingNotes}
-            buildProgress={buildProgress}
-            buildStatus={buildStatus}
-            onGenerateNotes={prepareNotes}
-            liveDetection={detection}
-          />
-        }
-      />
-    </>
+    <CommentatorLayout
+      liveHeader={liveHeader}
+      videoCanvas={
+        <VideoCanvas
+          matchSession={matchSession}
+          homeTeam={homeTeam}
+          awayTeam={awayTeam}
+          sport={sport}
+          surfaceLabel="Broadcast Studio"
+          uploadDescription="Upload footage you have the right to use. Broadcast Studio will pair the clip with generated notes."
+          startLabel="Start Broadcast Analysis"
+          onTacticalDetection={(analysis) => {
+            updateDetection(analysis)
+            sendTacticalDetection(analysis)
+          }}
+          onCommentary={(msg) => {
+            if (msg.type === 'commentary') addCommentaryItem(msg)
+          }}
+        />
+      }
+      teleprompter={
+        <Teleprompter
+          notesData={commentaryData}
+          buildingNotes={buildingNotes}
+          buildProgress={buildProgress}
+          buildStatus={buildStatus}
+          onGenerateNotes={() => prepareNotes(homeTeam, awayTeam)}
+          liveDetection={detection}
+          generateLabel="Prepare Broadcast Sheet"
+          progressTitle="Preparing Broadcast Sheet"
+          emptyKicker="Broadcast Sheet"
+          emptyTitle="Prepare the live sheet"
+          emptyDescription="Build the compact sheet this studio uses during clip analysis: narrative beats, player context, tactical cues, and lines worth surfacing live."
+        />
+      }
+    />
   )
 }

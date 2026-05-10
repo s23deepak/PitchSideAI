@@ -1,5 +1,5 @@
 """
-config.py — Runtime configuration for PitchSide AI.
+config.py — Runtime configuration for PitchSideAI.
 
 Loads non-secret defaults from config/defaults.py, then overlays
 secrets and deployment-specific values from .env (via python-dotenv).

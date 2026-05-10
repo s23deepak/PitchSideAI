@@ -1,7 +1,7 @@
 /**
- * shadcn/ui Components - PitchAI Midnight Stadium Theme
+ * shadcn/ui Components - PitchSideAI Midnight Stadium Theme
  *
- * All components are themed to PitchAI design tokens (UX-DR23)
+ * All components are themed to PitchSideAI design tokens (UX-DR23)
  * Colors use CSS custom properties for consistency
  *
  * Components:

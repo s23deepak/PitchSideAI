@@ -1,7 +1,7 @@
-# PitchAI — HF Space Deployment Validation Report
+# PitchSideAI — HF Space Deployment Validation Report
 
 **Generated:** 2026-05-06  
-**Space URL:** https://huggingface.co/spaces/deepu/PitchAI  
+**Space URL:** https://huggingface.co/spaces/deepu/PitchSideAI
 **Deployment Script:** `scripts/deploy_hf.sh`  
 **Docker SDK:** `docker` (multi-stage build)
 
@@ -9,7 +9,7 @@
 
 ## Executive Summary
 
-PitchAI has been validated for production deployment on Hugging Face Spaces. All critical NFRs have been tested and verified. The deployment is ready for the hackathon demo.
+PitchSideAI has been validated for production deployment on Hugging Face Spaces. All critical NFRs have been tested and verified. The deployment is ready for the hackathon demo.
 
 | Category | Status | Notes |
 |----------|--------|-------|

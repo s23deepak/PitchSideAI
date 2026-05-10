@@ -272,13 +272,13 @@ export default function MicButton({
             setShowTooltip(true)
             tooltipShownRef.current = true
             // Persist to localStorage
-            localStorage.setItem('pitchai-mic-tooltip-shown', 'true')
+            localStorage.setItem('pitchsideai-mic-tooltip-shown', 'true')
         }
     }, [state])
 
     // Check localStorage on mount
     useEffect(() => {
-        const hasShown = localStorage.getItem('pitchai-mic-tooltip-shown')
+        const hasShown = localStorage.getItem('pitchsideai-mic-tooltip-shown')
         if (hasShown === 'true') {
             tooltipShownRef.current = true
         }

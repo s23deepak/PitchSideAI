@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react'
 /**
  * FanLensLayout — Midnight Stadium design system
  *
- * Matches .bmad/screens/fan-lens-broadcast.html exactly:
+ * Fan Lens broadcast layout:
  * - bg-[#121212] full-bleed background
  * - Full-screen video main area with vignette overlay
  * - Scoreboard pill + language toggle floating over video (top)
@@ -83,19 +83,21 @@ export function FanLensLayout({
             left: isMobile ? '8px' : '24px',
             right: isMobile ? '8px' : '24px',
             display: 'flex',
+            flexDirection: isMobile ? 'column' : 'row',
             justifyContent: 'space-between',
-            alignItems: 'flex-end',
+            alignItems: isMobile ? 'stretch' : 'flex-end',
+            gap: isMobile ? '10px' : 0,
             zIndex: 20,
             pointerEvents: 'none',
           }}
         >
           {/* Bottom-left: Trivia card w-80 */}
-          <div style={{ pointerEvents: 'auto', width: isMobile ? '100%' : '320px', maxWidth: '320px' }}>
+          <div style={{ pointerEvents: 'auto', width: isMobile ? '100%' : '320px', maxWidth: isMobile ? '100%' : '320px' }}>
             {triviaCards}
           </div>
 
           {/* Bottom-right: Broadcast Engine + Mic */}
-          <div style={{ pointerEvents: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '12px' }}>
+          <div style={{ pointerEvents: 'auto', display: 'flex', flexDirection: 'column', alignItems: isMobile ? 'stretch' : 'flex-end', gap: '12px', width: isMobile ? '100%' : 'auto' }}>
             {broadcastEngine}
           </div>
         </div>

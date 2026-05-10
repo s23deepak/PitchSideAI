@@ -3,7 +3,7 @@ import * as TabsPrimitive from '@radix-ui/react-tabs'
 import { cn } from '@/lib/utils'
 
 /**
- * Tabs Component - PitchAI Midnight Stadium Theme
+ * Tabs Component - PitchSideAI Midnight Stadium Theme
  *
  * Usage: Teleprompter section tabs (Match Info, Home, Away, Tactical, Historical)
  * Style: Underlined or pills variant

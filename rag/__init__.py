@@ -1,5 +1,5 @@
 """
-Advanced RAG strategies for PitchSide AI.
+Advanced RAG strategies for PitchSideAI.
 Implements hybrid search, semantic reranking, and multi-strategy retrieval.
 """
 import logging

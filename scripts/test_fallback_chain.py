@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Fallback Chain Validation for PitchAI
+Fallback Chain Validation for PitchSideAI
 
 Tests the 4-level fallback chain:
 - Level 1: SGLang + StreamingVLM (full capability)
@@ -39,7 +39,7 @@ class FallbackTestResult:
 
 
 class FallbackChainTester:
-    """Test suite for PitchAI 4-level fallback chain."""
+    """Test suite for PitchSideAI 4-level fallback chain."""
 
     # Expected capabilities per level
     EXPECTED_CAPABILITIES = {
@@ -342,7 +342,7 @@ class FallbackChainTester:
                 f.write("\n\n" + section)
         else:
             with open(output_path, 'w') as f:
-                f.write("# PitchAI Validation Report\n\n")
+                f.write("# PitchSideAI Validation Report\n\n")
                 f.write(f"**Generated:** {timestamp}\n\n")
                 f.write(section)
 
@@ -350,7 +350,7 @@ class FallbackChainTester:
 
 
 async def main():
-    parser = argparse.ArgumentParser(description="PitchAI Fallback Chain Validation")
+    parser = argparse.ArgumentParser(description="PitchSideAI Fallback Chain Validation")
     parser.add_argument("--level", type=int, choices=[1, 2, 3, 4],
                         help="Test specific fallback level")
     parser.add_argument("--all", action="store_true", help="Test all fallback levels")

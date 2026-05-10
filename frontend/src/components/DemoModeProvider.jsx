@@ -23,7 +23,7 @@ export function DemoModeProvider({ children }) {
     // Initialize demo state
     useEffect(() => {
         // Check if first visit has been seen
-        const firstVisitSeen = localStorage.getItem('pitchai_first_visit_seen') === 'true'
+        const firstVisitSeen = localStorage.getItem('pitchsideai_first_visit_seen') === 'true'
         setHasSeenFirstVisit(firstVisitSeen)
 
         // Initialize trivia queue (reset _shown flags)

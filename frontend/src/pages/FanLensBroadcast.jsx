@@ -1,5 +1,5 @@
 /**
- * FanLensBroadcast — matches .bmad/screens/fan-lens-broadcast.html exactly
+ * FanLensBroadcast — Midnight Stadium broadcast screen
  *
  * Midnight Stadium tokens used directly:
  *   background:           #121212
@@ -169,8 +169,8 @@ export default function FanLensBroadcast() {
         browserVoice.speak(answerText)
       }
     }
-    window.addEventListener('pitchai:qa_answer', handle)
-    return () => window.removeEventListener('pitchai:qa_answer', handle)
+    window.addEventListener('pitchsideai:qa_answer', handle)
+    return () => window.removeEventListener('pitchsideai:qa_answer', handle)
   }, [browserVoice, isDismissing])
 
   const handleDismiss = useCallback(() => {
@@ -178,7 +178,7 @@ export default function FanLensBroadcast() {
     setSplitActive(false)
     setQaAnswer(null)
     browserVoice.cancel()
-    window.dispatchEvent(new CustomEvent('pitchai:split_resolved', { detail: { dismissed: true } }))
+    window.dispatchEvent(new CustomEvent('pitchsideai:split_resolved', { detail: { dismissed: true } }))
     setTimeout(() => setIsDismissing(false), 300)
   }, [browserVoice])
 
@@ -189,7 +189,7 @@ export default function FanLensBroadcast() {
       pendingQuestionRef.current = text
       setQaAnswer({ text: 'Watching the current video moment...', source: 'video_qa', analyzing: true, question: text })
       setSplitActive(true)
-      window.dispatchEvent(new CustomEvent('pitchai:streaming_query', { detail: { text } }))
+      window.dispatchEvent(new CustomEvent('pitchsideai:streaming_query', { detail: { text } }))
       return
     }
     setQaAnswer({

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# deploy.sh — PitchSide AI: Automated Cloud Run + Firebase Hosting Deployment
+# deploy.sh — PitchSideAI: Automated Cloud Run + Firebase Hosting Deployment
 # Usage: ./deploy.sh
 # Requirements: gcloud CLI authenticated, firebase CLI installed
 # ─────────────────────────────────────────────────────────────────────────────
@@ -14,7 +14,7 @@ REGION="${GOOGLE_CLOUD_LOCATION:-us-central1}"
 SERVICE_NAME="pitchside-ai"
 IMAGE="gcr.io/${PROJECT}/${SERVICE_NAME}"
 
-echo "🏟️  PitchSide AI — Deploying to Google Cloud"
+echo "🏟️  PitchSideAI — Deploying to Google Cloud"
 echo "   Project : ${PROJECT}"
 echo "   Region  : ${REGION}"
 echo "   Image   : ${IMAGE}"
@@ -66,7 +66,7 @@ FRONTEND_URL="https://${PROJECT}.web.app"
 
 echo ""
 echo "────────────────────────────────────────────────────────────────────────"
-echo "🎉 PitchSide AI is live!"
+echo "🎉 PitchSideAI is live!"
 echo "   Frontend : ${FRONTEND_URL}"
 echo "   Backend  : ${BACKEND_URL}"
 echo "   Health   : ${BACKEND_URL}/health"

@@ -1,8 +1,8 @@
 """
-Streaming Vision Bridge — connects PitchAI to streaming VLM inference.
+Streaming Vision Bridge — connects PitchSideAI to streaming VLM inference.
 
 Two backends:
-- vllm_backend: Uses PitchAI's existing vLLM + Qwen2.5-VL-3B-AWQ (RTX 5060, 8GB)
+- vllm_backend: Uses PitchSideAI's existing vLLM + Qwen2.5-VL-3B-AWQ (RTX 5060, 8GB)
 - streaming_vlm_backend: Full StreamingVLM patches on unquantized model (MI300X, 192GB)
 
 Both expose the same StreamingVisionProtocol so the pipeline is backend-agnostic.
@@ -29,7 +29,7 @@ if os.path.isdir(_STREAMING_VLM_PATH) and _STREAMING_VLM_PATH not in sys.path:
 from streaming.frame_buffer import FrameBuffer, FrameBufferConfig, VideoChunk
 from streaming.kv_cache_manager import KVCacheManager, KVCacheConfig, KVCacheState
 
-logger = logging.getLogger("pitchai.streaming")
+logger = logging.getLogger("pitchsideai.streaming")
 
 
 def clean_model_answer(text: Any) -> str:
@@ -356,7 +356,7 @@ class StreamingVLMBackend(StreamingBackend):
     - KV-cache pruning between chunks
     - SDPA attention (ROCm-compatible, no flash-attn dependency)
 
-    Package: /home/deepu/PitchAI/streaming-vlm-qwen3-rocm
+    Package: /home/deepu/PitchSideAI/streaming-vlm-qwen3-rocm
     Model: Qwen/Qwen3-VL-4B-Instruct (override via STREAMING_VLM_MODEL env var)
     """
 
@@ -702,7 +702,7 @@ class StreamingBridgeConfig:
 
 class StreamingVisionBridge:
     """
-    Main entry point for streaming vision in PitchAI.
+    Main entry point for streaming vision in PitchSideAI.
 
     Manages:
     - Frame buffering and chunk formation

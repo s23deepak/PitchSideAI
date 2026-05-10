@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react'
 /**
  * CommentatorLayout — Midnight Stadium design system
  *
- * Matches .bmad/screens/commentator-dashboard.html exactly:
+ * Commentator dashboard layout:
  *   - bg-[#131313] background
  *   - glass-card: rgba(26,26,26,0.6) backdrop-blur-xl border-white/10
  *   - ai-glow-border: inset 0 0 0 1px #c3f400 + 0 0 8px rgba(195,244,0,0.3)

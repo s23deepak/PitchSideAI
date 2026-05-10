@@ -5,12 +5,12 @@ export default function FirstVisitOverlay() {
     const [visible, setVisible] = useState(false)
 
     useEffect(() => {
-        const hasSeen = localStorage.getItem('pitchai_first_visit_seen')
+        const hasSeen = localStorage.getItem('pitchsideai_first_visit_seen')
 
         if (!hasSeen) {
             // First visit - show overlay
             setVisible(true)
-            localStorage.setItem('pitchai_first_visit_seen', 'true')
+            localStorage.setItem('pitchsideai_first_visit_seen', 'true')
 
             // Auto-hide after 4 seconds
             const timer = setTimeout(() => {
@@ -74,7 +74,7 @@ export default function FirstVisitOverlay() {
         >
             <div className="first-visit-overlay-content">
                 <h2 id="overlay-title" className="first-visit-overlay-title">
-                    PitchAI — Your AI Broadcast Companion
+                    PitchSideAI — Your AI Broadcast Companion
                 </h2>
                 <p className="first-visit-overlay-description">
                     Trivia cards explain the action. Hold the mic to ask questions.

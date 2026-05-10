@@ -215,7 +215,7 @@ function AppContent() {
                         if (msg.beat_indices && msg.beat_indices.length > 0) {
                             const bestBeatIdx = msg.beat_indices[0]
                             const bestConfidence = msg.confidence || 0.8
-                            window.dispatchEvent(new CustomEvent('pitchai:beat_highlight', {
+                            window.dispatchEvent(new CustomEvent('pitchsideai:beat_highlight', {
                                 detail: {
                                     beatIndex: bestBeatIdx,
                                     confidence: bestConfidence,
@@ -225,7 +225,7 @@ function AppContent() {
                         }
                     } else if (msg.type === 'beat_highlight') {
                         // Story 3.2: Direct beat highlight message
-                        window.dispatchEvent(new CustomEvent('pitchai:beat_highlight', {
+                        window.dispatchEvent(new CustomEvent('pitchsideai:beat_highlight', {
                             detail: {
                                 beatIndex: msg.beat_index,
                                 confidence: msg.confidence,
@@ -301,12 +301,12 @@ function AppContent() {
             }
         }
 
-        window.addEventListener('pitchai:settings', handleSettingsUpdate)
-        window.addEventListener('pitchai:language', handleLanguageSwitch)
+        window.addEventListener('pitchsideai:settings', handleSettingsUpdate)
+        window.addEventListener('pitchsideai:language', handleLanguageSwitch)
 
         return () => {
-            window.removeEventListener('pitchai:settings', handleSettingsUpdate)
-            window.removeEventListener('pitchai:language', handleLanguageSwitch)
+            window.removeEventListener('pitchsideai:settings', handleSettingsUpdate)
+            window.removeEventListener('pitchsideai:language', handleLanguageSwitch)
         }
     }, [])
 

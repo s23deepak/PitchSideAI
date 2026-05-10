@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Latency Benchmarking for PitchAI NFR Validation
+Latency Benchmarking for PitchSideAI NFR Validation
 
 Measures:
 - NFR-1: Audio Q&A response time (< 3.5s end-to-end, P95)
@@ -49,7 +49,7 @@ class BenchmarkResult:
 
 
 class LatencyBenchmarker:
-    """Benchmarking suite for PitchAI latency NFRs."""
+    """Benchmarking suite for PitchSideAI latency NFRs."""
 
     def __init__(self, runs: int = 100):
         self.runs = runs
@@ -380,7 +380,7 @@ class LatencyBenchmarker:
 
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-        report = f"""# PitchAI Validation Report
+        report = f"""# PitchSideAI Validation Report
 
 **Date:** {timestamp}
 **Report Type:** Latency Benchmark
@@ -429,7 +429,7 @@ class LatencyBenchmarker:
 
 
 async def main():
-    parser = argparse.ArgumentParser(description="PitchAI Latency Benchmarking")
+    parser = argparse.ArgumentParser(description="PitchSideAI Latency Benchmarking")
     parser.add_argument("--nfr", choices=["NFR-1", "NFR-2", "NFR-3", "NFR-4", "NFR-5"],
                         help="Run specific NFR benchmark")
     parser.add_argument("--all", action="store_true", help="Run all NFR benchmarks")

@@ -1,5 +1,5 @@
 """
-Agent Package — Multi-agent system for PitchSide AI.
+Agent Package — Multi-agent system for PitchSideAI.
 
 Provides specialized agents for sports analysis:
 - ResearchAgent: Pre-match research and live Q&A

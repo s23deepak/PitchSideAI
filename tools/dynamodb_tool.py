@@ -1,5 +1,5 @@
 """
-DynamoDB Tool — PitchSide AI
+DynamoDB Tool — PitchSideAI
 Writes tactical events and retrieves recent match context from Amazon DynamoDB.
 Replaces the previous Firestore implementation.
 """

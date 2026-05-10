@@ -83,14 +83,14 @@ export default function MatchDashboard({
             knowledge_depth: message.knowledge_depth,
         })
         // Send to WebSocket (will be handled by parent App component)
-        window.dispatchEvent(new CustomEvent('pitchai:settings', { detail: message }))
+        window.dispatchEvent(new CustomEvent('pitchsideai:settings', { detail: message }))
     }
 
     // Handle language change (Story 3.4)
     const handleLanguageChange = ({ language: newLanguage }) => {
         console.log('[MatchDashboard] Language switch:', newLanguage)
         setLanguage(newLanguage)
-        window.dispatchEvent(new CustomEvent('pitchai:language', { detail: { language: newLanguage } }))
+        window.dispatchEvent(new CustomEvent('pitchsideai:language', { detail: { language: newLanguage } }))
     }
 
     // Handle view toggle
@@ -102,7 +102,7 @@ export default function MatchDashboard({
     const handleBeatChange = ({ beatIndex, confidence, nextIndices }) => {
         console.log('[MatchDashboard] Beat changed:', { beatIndex, confidence, nextIndices })
         // Forward to Teleprompter via custom event
-        window.dispatchEvent(new CustomEvent('pitchai:beat_highlight', {
+        window.dispatchEvent(new CustomEvent('pitchsideai:beat_highlight', {
             detail: { beatIndex, confidence, nextIndices }
         }))
     }

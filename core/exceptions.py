@@ -4,7 +4,7 @@ Error handling and custom exceptions.
 
 
 class PitchSideAIException(Exception):
-    """Base exception for PitchSide AI."""
+    """Base exception for PitchSideAI."""
 
     def __init__(self, message: str, error_code: str = "UNKNOWN", details: dict = None):
         self.message = message

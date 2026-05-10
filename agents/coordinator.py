@@ -13,7 +13,7 @@ import asyncio
 import logging
 import time
 
-logger = logging.getLogger("pitchai.agents.coordinator")
+logger = logging.getLogger("pitchsideai.agents.coordinator")
 
 
 # ── Agent Coordination Types ─────────────────────────────────────────────────

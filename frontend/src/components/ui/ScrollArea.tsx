@@ -3,7 +3,7 @@ import * as ScrollAreaPrimitive from '@radix-ui/react-scroll-area'
 import { cn } from '@/lib/utils'
 
 /**
- * ScrollArea Component - PitchAI Midnight Stadium Theme
+ * ScrollArea Component - PitchSideAI Midnight Stadium Theme
  *
  * Usage: Teleprompter long-sheet scrolling
  * Style: Custom scrollbar with dark theme

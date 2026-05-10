@@ -1,5 +1,5 @@
 """
-Transfermarkt Retriever — PitchAI
+Transfermarkt Retriever — PitchSideAI
 Player market values, stats, and profile data scraped from Transfermarkt.
 
 Uses httpx with proper headers to avoid bot detection.

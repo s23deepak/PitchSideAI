@@ -2,9 +2,9 @@
 set -e
 
 # =============================================================================
-# PitchAI - Hugging Face Spaces Deployment Script
+# PitchSideAI - Hugging Face Spaces Deployment Script
 # =============================================================================
-# Usage: HF_SPACE_REPO=username/PitchAI ./deploy_hf.sh
+# Usage: HF_SPACE_REPO=username/PitchSideAI ./deploy_hf.sh
 #
 # Prerequisites:
 #   1. HF Space created at https://huggingface.co/new-space (SDK: Docker)
@@ -19,17 +19,17 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 echo "========================================"
-echo "🎙️  PitchAI HF Space Deployment"
+echo "🎙️  PitchSideAI HF Space Deployment"
 echo "========================================"
 
 # Validate environment
 if [ -z "$HF_SPACE_REPO" ]; then
     echo -e "${RED}Error: HF_SPACE_REPO not set${NC}"
     echo ""
-    echo "Usage: HF_SPACE_REPO=username/PitchAI ./deploy_hf.sh"
+    echo "Usage: HF_SPACE_REPO=username/PitchSideAI ./deploy_hf.sh"
     echo ""
     echo "Example:"
-    echo "  export HF_SPACE_REPO=deepu/PitchAI"
+    echo "  export HF_SPACE_REPO=deepu/PitchSideAI"
     echo "  ./scripts/deploy_hf.sh"
     exit 1
 fi
@@ -59,7 +59,7 @@ fi
 echo ""
 echo -e "${GREEN}🔨 Building Docker image locally for verification...${NC}"
 if command -v docker &> /dev/null; then
-    docker build -t pitchai:hf-test . || {
+    docker build -t pitchsideai:hf-test . || {
         echo -e "${RED}❌ Docker build failed. Fix errors before deploying.${NC}"
         exit 1
     }

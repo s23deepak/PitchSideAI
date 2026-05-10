@@ -1,7 +1,7 @@
 /**
  * Midnight Stadium Design Tokens
  *
- * Reference: .bmad/midnight-stadium-design.md
+ * Reference: in-repo Midnight Stadium token set
  *
  * Design Philosophy:
  * - Bloomberg Terminal meets F1 telemetry — functional, dense, professional
@@ -189,7 +189,7 @@
 }
 
 /* =============================================
-   DARK MODE (default for PitchAI)
+   DARK MODE (default for PitchSideAI)
    ============================================= */
 .dark {
   /* Inherits all :root tokens above */

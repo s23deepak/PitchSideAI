@@ -476,7 +476,7 @@ class VisionAgent(BaseVisionAgent):
         )
         step_ms = max(window_ms - overlap_ms, 250)
 
-        with tempfile.TemporaryDirectory(prefix="pitchai-video-") as temp_dir:
+        with tempfile.TemporaryDirectory(prefix="pitchsideai-video-") as temp_dir:
             input_path = os.path.join(
                 temp_dir,
                 f"input.{self._get_input_video_extension(video_format)}",

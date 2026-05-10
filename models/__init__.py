@@ -1,4 +1,4 @@
-"""Game models for PitchAI."""
+"""Game models for PitchSideAI."""
 
 from models.game_state import GameState, GameEvent, MatchPhase
 from models.narrative_beat import NarrativeBeat

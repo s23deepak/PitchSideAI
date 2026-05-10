@@ -1,11 +1,24 @@
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 /* ── LandingPage — Midnight Stadium Design (UX Spec v2) ─────────────────────── */
 export default function LandingPage() {
     const navigate = useNavigate()
+    const [homeTeam, setHomeTeam] = useState('')
+    const [awayTeam, setAwayTeam] = useState('')
+    const [competition, setCompetition] = useState('')
 
-    const handleEnterLiveStream = () => {
-        navigate('/live?tab=fan-lens')
+    const openFanLens = (home = homeTeam, away = awayTeam, comp = competition) => {
+        const params = new URLSearchParams({ tab: 'fan-lens' })
+        if (home.trim()) params.set('home', home.trim())
+        if (away.trim()) params.set('away', away.trim())
+        if (comp.trim()) params.set('competition', comp.trim())
+        navigate(`/live?${params.toString()}`)
+    }
+
+    const handleMatchSetup = (event) => {
+        event.preventDefault()
+        openFanLens()
     }
 
     const handleWatchDemo = () => {
@@ -13,10 +26,11 @@ export default function LandingPage() {
         navigate('/watch')
     }
 
-    const handleFixtureClick = (home, away) => {
-        const encodedHome = encodeURIComponent(home)
-        const encodedAway = encodeURIComponent(away)
-        navigate(`/live?tab=fan-lens&home=${encodedHome}&away=${encodedAway}`)
+    const handleFixtureClick = (fixture) => {
+        setHomeTeam(fixture.home)
+        setAwayTeam(fixture.away)
+        setCompetition(fixture.competition)
+        openFanLens(fixture.home, fixture.away, fixture.competition)
     }
 
     const presetFixtures = [
@@ -32,10 +46,10 @@ export default function LandingPage() {
         <div className="landing-page-v2">
             {/* Top Navigation Bar */}
             <header className="landing-header">
-                <div className="landing-logo">PITCH AI</div>
+                <div className="landing-logo">PITCHSIDEAI</div>
                 <nav className="landing-nav">
                     <button onClick={() => navigate('/live?tab=fan-lens')} className="nav-link">Fan Lens</button>
-                    <button onClick={() => navigate('/live?tab=commentator')} className="nav-link">Commentator</button>
+                    <button onClick={() => navigate('/live?tab=commentator')} className="nav-link">Broadcast Studio</button>
                     <button onClick={() => navigate('/live?tab=notes')} className="nav-link">Notes Hub</button>
                 </nav>
                 <div className="landing-actions">
@@ -56,35 +70,80 @@ export default function LandingPage() {
                     {/* Live Badge */}
                     <div className="live-badge">
                         <span className="badge-dot" />
-                        Live Broadcast Companion
+                        AI Match Companion
                     </div>
 
-                    {/* Headline - "PitchAI: The Future of" + "Football Intelligence" in green */}
+                    {/* Headline - "PitchSideAI: The Future of" + "Football Intelligence" in green */}
                     <h1 className="landing-hero-title">
-                        PitchAI: The Future of{' '}
+                        PitchSideAI: The Future of{' '}
                         <span className="landing-title-gradient">Football Intelligence</span>
                     </h1>
 
-                    {/* Subtitle */}
                     <p className="hero-subtitle">
-                        A Proactive AI Broadcast Companion for Fans and Commentators.
-                        Delivering real-time narrative intelligence, contextual stream Q&A,
-                        and cross-language mastery.
+                        Prepare match context, upload your own footage, and turn it into
+                        personalized Q&A, commentary, and broadcast-ready intelligence.
                     </p>
 
-                    {/* CTAs */}
-                    <div className="hero-ctas">
+                    <form className="match-context-panel" onSubmit={handleMatchSetup}>
+                        <div className="match-context-header">
+                            <span className="material-icons">sports_soccer</span>
+                            <span>Set Match Context</span>
+                        </div>
+                        <div className="match-context-grid">
+                            <label className="context-field">
+                                <span>Home Team</span>
+                                <input
+                                    value={homeTeam}
+                                    onChange={(event) => setHomeTeam(event.target.value)}
+                                    placeholder="e.g., Real Madrid"
+                                    autoComplete="off"
+                                />
+                            </label>
+                            <label className="context-field">
+                                <span>Away Team</span>
+                                <input
+                                    value={awayTeam}
+                                    onChange={(event) => setAwayTeam(event.target.value)}
+                                    placeholder="e.g., Barcelona"
+                                    autoComplete="off"
+                                />
+                            </label>
+                            <label className="context-field context-field-wide">
+                                <span>Competition</span>
+                                <input
+                                    value={competition}
+                                    onChange={(event) => setCompetition(event.target.value)}
+                                    placeholder="Optional"
+                                    autoComplete="off"
+                                />
+                            </label>
+                        </div>
+                        <p className="context-note">
+                            PitchSideAI prepares team intelligence here. Video-aware commentary and Q&A start after you upload footage you have the right to use.
+                        </p>
                         <button
-                            className="btn-primary"
-                            onClick={handleEnterLiveStream}
+                            className="btn-primary context-submit"
+                            type="submit"
+                            disabled={!homeTeam.trim() || !awayTeam.trim()}
                         >
                             <span className="btn-content">
-                                Enter Live Stream
-                                <span className="material-icons">sensors</span>
+                                Open Fan Lens
+                                <span className="material-icons">arrow_forward</span>
                             </span>
-                            <span className="btn-indicator">
-                                <span className="indicator-dot" />
-                            </span>
+                        </button>
+                    </form>
+
+                    <div className="hero-ctas secondary-ctas">
+                        <button
+                            className="btn-secondary"
+                            onClick={() => {
+                                setHomeTeam(presetFixtures[0].home)
+                                setAwayTeam(presetFixtures[0].away)
+                                setCompetition(presetFixtures[0].competition)
+                            }}
+                        >
+                            Use Sample Context
+                            <span className="material-icons">input</span>
                         </button>
 
                         <button
@@ -96,27 +155,26 @@ export default function LandingPage() {
                         </button>
                     </div>
 
-                    {/* Now Live Indicator */}
                     <div className="now-live-indicator">
                         <span className="live-dot" />
-                        Now Live: {presetFixtures[0].home} vs. {presetFixtures[0].away}
+                        Sample context: {presetFixtures[0].home} vs. {presetFixtures[0].away}
                     </div>
                 </div>
             </section>
 
-            {/* Quick Matches Section */}
+            {/* Matchup Presets Section */}
             <section className="quick-matches-section">
                 <div className="quick-matches-content">
-                    <h2 className="quick-matches-title">Quick Matches</h2>
+                    <h2 className="quick-matches-title">Matchup Presets</h2>
                     <p className="quick-matches-subtitle">
-                        Jump into classic fixtures and instant matchups
+                        Use these as team-context shortcuts. They do not include broadcast video.
                     </p>
                     <div className="fixture-grid">
                         {presetFixtures.map((fixture, index) => (
                             <button
                                 key={index}
                                 className="fixture-button"
-                                onClick={() => handleFixtureClick(fixture.home, fixture.away)}
+                                onClick={() => handleFixtureClick(fixture)}
                             >
                                 <div className="fixture-matchup">
                                     <span className="fixture-home">{fixture.home}</span>
@@ -125,7 +183,7 @@ export default function LandingPage() {
                                 </div>
                                 <div className="fixture-meta">
                                     <span className="fixture-competition">{fixture.competition}</span>
-                                    <span className="fixture-label">{fixture.label}</span>
+                                    <span className="fixture-label">{fixture.label} context</span>
                                 </div>
                             </button>
                         ))}
@@ -148,11 +206,11 @@ export default function LandingPage() {
                         <div className="pillar-icon">
                             <span className="material-icons">mic</span>
                         </div>
-                        <h3 className="pillar-title">Commentary Notes Engine</h3>
+                        <h3 className="pillar-title">Broadcast Notes Engine</h3>
                         <p className="pillar-description">
-                            Peter Drury-style narrative intelligence. AI agents analyze
-                            real-time play to surface compelling stats, historical context,
-                            and poetic phrasing directly to commentators.
+                            Multi-agent research builds the story before the clip starts:
+                            player context, tactical themes, rivalry history, and phrasing
+                            a commentator can actually use.
                         </p>
                     </div>
 
@@ -161,11 +219,10 @@ export default function LandingPage() {
                         <div className="pillar-icon">
                             <span className="material-icons">splitscreen</span>
                         </div>
-                        <h3 className="pillar-title">Contextual Stream Q&A</h3>
+                        <h3 className="pillar-title">Fan Lens Q&A</h3>
                         <p className="pillar-description">
-                            Split-screen temporal navigation with AI overlays. Ask questions
-                            about the live feed and receive instant, visually-grounded answers
-                            highlighting key players and movements.
+                            Upload your own footage, ask what happened, and get visually
+                            grounded answers with split-screen replay context and overlays.
                         </p>
                     </div>
 
@@ -174,11 +231,11 @@ export default function LandingPage() {
                         <div className="pillar-icon">
                             <span className="material-icons">translate</span>
                         </div>
-                        <h3 className="pillar-title">Cross-Language Commentary</h3>
+                        <h3 className="pillar-title">Personalized Commentary</h3>
                         <p className="pillar-description">
-                            Meaning-preserving translation that maintains the emotion,
-                            idioms, and pace of the original broadcast, ensuring a global
-                            audience feels the intensity.
+                            Tune bias, excitement, language, and knowledge depth so Fan
+                            Lens explains the same clip like a neutral analyst, a beginner
+                            guide, or a supporter beside you.
                         </p>
                     </div>
                 </div>
@@ -198,7 +255,7 @@ export default function LandingPage() {
                         </h2>
                         <p className="architecture-description">
                             Powered by the AMD MI300X GPU and StreamingVLM architecture,
-                            PitchAI processes high-frame-rate video streams with sub-second
+                            PitchSideAI processes high-frame-rate video streams with sub-second
                             latency. Our multi-agent pipeline parallelizes vision tasks,
                             narrative generation, and stat retrieval to deliver real-time
                             broadcast enhancements.
@@ -217,19 +274,19 @@ export default function LandingPage() {
 
                     {/* Architecture Diagram */}
                     <div className="architecture-diagram">
-                        <div className="diagram-row">
+                        <div className="diagram-row diagram-row-single">
                             <div className="diagram-node">
                                 Live Video Ingestion
                                 <span className="material-icons">videocam</span>
                             </div>
                         </div>
                         <div className="diagram-connector" />
-                        <div className="diagram-row">
+                        <div className="diagram-row diagram-row-agents">
                             <div className="diagram-node accent">Vision Agent (VLM)</div>
                             <div className="diagram-node">Data Agent (Stats)</div>
                         </div>
                         <div className="diagram-connector" />
-                        <div className="diagram-row">
+                        <div className="diagram-row diagram-row-single">
                             <div className="diagram-node full-width">
                                 Synthesis Engine (LLM)
                             </div>
@@ -241,7 +298,7 @@ export default function LandingPage() {
             {/* Footer */}
             <footer className="landing-footer">
                 <div className="footer-content">
-                    <h4 className="footer-logo">PITCH AI</h4>
+                    <h4 className="footer-logo">PITCHSIDEAI</h4>
                     <p className="footer-tagline">Built for the AMD Hackathon 2026</p>
                     <div className="footer-links">
                         <a href="#" className="footer-link">
@@ -254,7 +311,7 @@ export default function LandingPage() {
                         </a>
                     </div>
                     <div className="footer-divider" />
-                    <p className="footer-copyright">© 2026 PitchAI Team.</p>
+                    <p className="footer-copyright">© 2026 PitchSideAI Team.</p>
                 </div>
             </footer>
         </div>

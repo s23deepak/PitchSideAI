@@ -19,12 +19,17 @@ export default function TabbedLivePage() {
     const [searchParams, setSearchParams] = useSearchParams()
 
     const tab = searchParams.get('tab') || 'fan-lens'
-    const home = searchParams.get('home') || 'Barcelona'
-    const away = searchParams.get('away') || 'Real Madrid'
+    const home = searchParams.get('home') || 'Home Team'
+    const away = searchParams.get('away') || 'Away Team'
     const sport = searchParams.get('sport') || 'soccer'
 
     const handleTabChange = (newTab: string) => {
-        setSearchParams({ tab: newTab, home, away, sport }, { replace: true })
+        const next = new URLSearchParams(searchParams)
+        next.set('tab', newTab)
+        next.set('home', home)
+        next.set('away', away)
+        next.set('sport', sport)
+        setSearchParams(next, { replace: true })
     }
 
     return (

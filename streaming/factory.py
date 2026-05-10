@@ -28,7 +28,7 @@ from typing import Optional
 
 from streaming.streaming_bridge import StreamingBackend
 
-logger = logging.getLogger("pitchai.streaming.factory")
+logger = logging.getLogger("pitchsideai.streaming.factory")
 
 
 def get_streaming_backend(

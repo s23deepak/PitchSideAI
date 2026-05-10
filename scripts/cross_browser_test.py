@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Cross-Browser Compatibility Test Runner for PitchAI
+Cross-Browser Compatibility Test Runner for PitchSideAI
 
 Tests the following across Chrome, Firefox, and Edge:
 - Video autoplay
@@ -50,7 +50,7 @@ class CrossBrowserReport:
 
 
 class CrossBrowserTester:
-    """Cross-browser compatibility test suite for PitchAI."""
+    """Cross-browser compatibility test suite for PitchSideAI."""
 
     SUPPORTED_BROWSERS = ['chrome', 'firefox', 'edge']
 
@@ -431,7 +431,7 @@ class CrossBrowserTester:
                 f.write("\n\n" + section)
         else:
             with open(output_path, 'w') as f:
-                f.write("# PitchAI Validation Report\n\n")
+                f.write("# PitchSideAI Validation Report\n\n")
                 f.write(f"**Generated:** {report.timestamp}\n\n")
                 f.write(section)
 
@@ -439,7 +439,7 @@ class CrossBrowserTester:
 
 
 async def main():
-    parser = argparse.ArgumentParser(description="PitchAI Cross-Browser Testing")
+    parser = argparse.ArgumentParser(description="PitchSideAI Cross-Browser Testing")
     parser.add_argument("--browser", choices=CrossBrowserTester.SUPPORTED_BROWSERS,
                         help="Test specific browser")
     parser.add_argument("--all", action="store_true", help="Test all browsers")

@@ -1,5 +1,5 @@
 """
-Multi-Source Retriever — PitchAI
+Multi-Source Retriever — PitchSideAI
 Load-balanced soccer data retrieval with round-robin distribution.
 
 Distributes requests across multiple sources to avoid rate limits:

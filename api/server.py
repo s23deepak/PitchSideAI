@@ -1,5 +1,5 @@
 """
-Production-level FastAPI Server — PitchSide AI Backend
+Production-level FastAPI Server — PitchSideAI Backend
 Integrates orchestration, RAG, concurrency control, and monitoring.
 """
 import base64
@@ -167,7 +167,7 @@ async def get_or_init_streaming_backend(backend: str):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application startup and shutdown."""
-    logger.info("🏟️  PitchSide AI backend starting...")
+    logger.info("🏟️  PitchSideAI backend starting...")
 
     # Initialize orchestrator
     orchestrator = get_orchestrator(max_concurrent=20)
@@ -188,7 +188,7 @@ async def lifespan(app: FastAPI):
 
     # Cleanup
     task_processor.cancel()
-    logger.info("PitchSide AI backend shutting down.")
+    logger.info("PitchSideAI backend shutting down.")
 
 
 # ── Connection Manager ─────────────────────────────────────────────────────────
@@ -534,7 +534,7 @@ async def _periodic_commentary(
 # ── Create FastAPI App ─────────────────────────────────────────────────────────
 
 app = FastAPI(
-    title="PitchSide AI",
+    title="PitchSideAI",
     version="2.0.0",
     description="Production-grade multimodal sports AI assistant",
     lifespan=lifespan
@@ -625,9 +625,9 @@ if frontend_dist_exists and frontend_assets_exists:
 
         # Graceful degradation: return error page instead of raw JSON error
         return HTMLResponse(
-            content="""<!DOCTYPE html><html><head><title>PitchAI - Building</title></head>
+            content="""<!DOCTYPE html><html><head><title>PitchSideAI - Building</title></head>
             <body style="background:#020617;color:#f1f5f9;font-family:system-ui;padding:2rem;">
-            <h1>PitchAI is building...</h1>
+            <h1>PitchSideAI is building...</h1>
             <p>The frontend is being compiled. Please refresh in a few seconds.</p>
             <p style="color:#94a3b8;margin-top:2rem;">If this persists, check server logs or run: <code>npm run build</code> in frontend/</p>
             </body></html>""",
@@ -640,9 +640,9 @@ else:
     async def serve_index():
         """Return API-only mode notice."""
         return HTMLResponse(
-            content="""<!DOCTYPE html><html><head><title>PitchAI - API Mode</title></head>
+            content="""<!DOCTYPE html><html><head><title>PitchSideAI - API Mode</title></head>
             <body style="background:#020617;color:#f1f5f9;font-family:system-ui;padding:2rem;">
-            <h1>PitchAI API Server</h1>
+            <h1>PitchSideAI API Server</h1>
             <p>Frontend not built. Run <code>npm run build</code> in frontend/ directory.</p>
             <p style="color:#94a3b8;margin-top:2rem;">API endpoints available at /docs</p>
             </body></html>""",
@@ -673,7 +673,7 @@ async def health_check():
     from datetime import datetime
     return HealthResponse(
         status="healthy",
-        service="PitchSide AI",
+        service="PitchSideAI",
         version="2.0.0",
         timestamp=datetime.utcnow().isoformat()
     )

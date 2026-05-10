@@ -1,5 +1,5 @@
 """
-Data Retriever Factory — PitchAI
+Data Retriever Factory — PitchSideAI
 Dynamically routes data requests to the most specialized sports API available.
 Also manages singletons for shared search services.
 

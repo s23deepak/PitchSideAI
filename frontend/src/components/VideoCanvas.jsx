@@ -23,7 +23,9 @@ export default function VideoCanvas({
     homeTeam = 'Home',
     awayTeam = 'Away',
     sport = 'soccer',
-    startLabel = 'Start Video Analysis',
+    surfaceLabel = 'Fan Lens',
+    uploadDescription = 'Fan Lens analyzes video you provide. Presets only prepare the team context.',
+    startLabel = 'Start Fan Lens',
     onTacticalDetection,
     onCommentary,
     onVideoReady, // (objectUrl: string | null) => void — notifies parent when video loads/clears
@@ -120,7 +122,7 @@ export default function VideoCanvas({
                         break
 
                     case 'answer':
-                        window.dispatchEvent(new CustomEvent('pitchai:qa_answer', { detail: msg }))
+                        window.dispatchEvent(new CustomEvent('pitchsideai:qa_answer', { detail: msg }))
                         break
 
                     case 'trivia_card':
@@ -317,7 +319,7 @@ export default function VideoCanvas({
                 return
             }
             if (!videoFile || !videoReady) {
-                window.dispatchEvent(new CustomEvent('pitchai:qa_answer', {
+                window.dispatchEvent(new CustomEvent('pitchsideai:qa_answer', {
                     detail: {
                         type: 'answer',
                         text: 'Upload match footage first, then ask me about what is happening in the video.',
@@ -327,8 +329,8 @@ export default function VideoCanvas({
             }
         }
 
-        window.addEventListener('pitchai:streaming_query', handleStreamingQuery)
-        return () => window.removeEventListener('pitchai:streaming_query', handleStreamingQuery)
+        window.addEventListener('pitchsideai:streaming_query', handleStreamingQuery)
+        return () => window.removeEventListener('pitchsideai:streaming_query', handleStreamingQuery)
     }, [isStreaming, videoFile, videoReady, startStreaming])
 
     useEffect(() => {
@@ -518,7 +520,7 @@ export default function VideoCanvas({
                         {homeTeam} vs {awayTeam}
                     </h3>
                     <span style={{ fontSize: 10, color: 'var(--text-secondary)' }}>
-                        Fan Lens • {sport}
+                        {surfaceLabel} • {sport}
                     </span>
                 </div>
                 {framesSent > 0 && (
@@ -625,17 +627,21 @@ export default function VideoCanvas({
             {!videoFile ? (
                 /* No video loaded — show centred drop zone */
                 <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 5 }}>
-                    <label style={{
-                        border: '2px dashed var(--border)',
-                        borderRadius: 10,
-                        padding: '32px 48px',
+                    <label className="video-upload-dropzone" style={{
+                        width: 'min(92%, 460px)',
+                        border: '1px dashed rgba(195,244,0,0.42)',
+                        borderRadius: 8,
+                        padding: '28px 32px',
                         textAlign: 'center',
                         cursor: 'pointer',
                         transition: 'border-color 200ms',
-                        background: 'rgba(0,0,0,0.6)',
+                        background: 'rgba(32,32,31,0.78)',
+                        backdropFilter: 'blur(16px)',
+                        WebkitBackdropFilter: 'blur(16px)',
+                        boxShadow: '0 16px 48px rgba(0,0,0,0.36)',
                     }}
-                    onMouseOver={(e) => e.currentTarget.style.borderColor = 'var(--accent-interactive)'}
-                    onMouseOut={(e) => e.currentTarget.style.borderColor = 'var(--border)'}
+                    onMouseOver={(e) => e.currentTarget.style.borderColor = 'var(--accent-critical)'}
+                    onMouseOut={(e) => e.currentTarget.style.borderColor = 'rgba(195,244,0,0.42)'}
                     >
                         <input
                             type="file"
@@ -643,8 +649,26 @@ export default function VideoCanvas({
                             onChange={handleVideoSelect}
                             style={{ display: 'none' }}
                         />
-                        <span style={{ fontSize: 40 }}>📹</span>
-                        <div style={{ marginTop: 8, color: 'var(--text-muted)', fontSize: 14 }}>Upload match footage</div>
+                        <span className="material-icons" style={{ fontSize: 34, color: 'var(--accent-critical)' }}>upload_file</span>
+                        <div style={{ marginTop: 10, color: 'var(--text-primary)', fontSize: 16, fontWeight: 700 }}>Upload your match footage</div>
+                        <div style={{ marginTop: 6, color: 'var(--text-secondary)', fontSize: 13, lineHeight: 1.5 }}>
+                            {uploadDescription}
+                        </div>
+                        <div style={{
+                            marginTop: 14,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 6,
+                            color: 'var(--accent-critical)',
+                            fontFamily: 'var(--font-data-mono)',
+                            fontSize: 11,
+                            fontWeight: 700,
+                            letterSpacing: '0.08em',
+                            textTransform: 'uppercase',
+                        }}>
+                            <span className="material-icons" style={{ fontSize: 15 }}>video_file</span>
+                            Select Video
+                        </div>
                     </label>
                 </div>
             ) : videoReady && !isStreaming ? (
@@ -705,8 +729,9 @@ export default function VideoCanvas({
                             className="btn btn-secondary btn-sm"
                             onClick={togglePause}
                             style={{ padding: '4px 8px', fontSize: 12 }}
+                            aria-label={isPaused ? 'Play video' : 'Pause video'}
                         >
-                            {isPaused ? '▶️' : '⏸️'}
+                            <span className="material-icons" style={{ fontSize: 16 }}>{isPaused ? 'play_arrow' : 'pause'}</span>
                         </button>
                         <div style={{
                             flex: 1,
@@ -730,8 +755,9 @@ export default function VideoCanvas({
                             className="btn btn-danger btn-sm"
                             onClick={stopStreaming}
                             style={{ padding: '4px 8px', fontSize: 12 }}
+                            aria-label="Stop video analysis"
                         >
-                            ⏹️
+                            <span className="material-icons" style={{ fontSize: 16 }}>stop</span>
                         </button>
                     </div>
                 </div>

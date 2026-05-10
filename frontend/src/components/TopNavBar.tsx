@@ -11,31 +11,37 @@ export default function TopNavBar({ onSettingsClick, onAccountClick }: TopNavBar
 
     const isActive = (tab: string) => {
         if (location.pathname === `/${tab}`) return true
-        return location.pathname === '/live' && location.search === `?tab=${tab}`
+        return location.pathname === '/live' && new URLSearchParams(location.search).get('tab') === tab
+    }
+
+    const navigateToTab = (tab: string) => {
+        const params = new URLSearchParams(location.search)
+        params.set('tab', tab)
+        navigate(`/live?${params.toString()}`)
     }
 
     return (
         <nav className="top-nav-bar">
             <div className="top-nav-logo" onClick={() => navigate('/')} style={{ cursor: 'pointer' }}>
-                PITCH AI
+                PITCHSIDEAI
             </div>
 
             <div className="top-nav-links">
                 <button
                     className={`top-nav-link ${isActive('fan-lens') ? 'active' : ''}`}
-                    onClick={() => navigate('/live?tab=fan-lens')}
+                    onClick={() => navigateToTab('fan-lens')}
                 >
                     Fan Lens
                 </button>
                 <button
                     className={`top-nav-link ${isActive('commentator') ? 'active' : ''}`}
-                    onClick={() => navigate('/live?tab=commentator')}
+                    onClick={() => navigateToTab('commentator')}
                 >
-                    Commentator
+                    Broadcast Studio
                 </button>
                 <button
                     className={`top-nav-link ${isActive('notes') ? 'active' : ''}`}
-                    onClick={() => navigate('/live?tab=notes')}
+                    onClick={() => navigateToTab('notes')}
                 >
                     Notes Hub
                 </button>

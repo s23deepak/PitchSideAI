@@ -1,5 +1,5 @@
 """
-AMD MI300X Production Configuration for PitchAI + StreamingVLM.
+AMD MI300X Production Configuration for PitchSideAI + StreamingVLM.
 
 Usage:
   Set ENVIRONMENT=production_amd
@@ -71,7 +71,7 @@ STREAMING_CHUNK_INTERVAL = int(os.environ.get("STREAMING_CHUNK_INTERVAL", "5"))
 # ── SFT Configuration (Track 2) ───────────────────────────────────────────────
 SFT_MODEL_PATH = os.environ.get("SFT_MODEL_PATH", "Qwen/Qwen3-VL-2B-Instruct")
 SFT_DATASET_PATH = os.environ.get("SFT_DATASET_PATH", "/mnt/data/sft/commentary_sft.jsonl")
-SFT_OUTPUT_DIR = os.environ.get("SFT_OUTPUT_DIR", "/mnt/data/checkpoints/pitchai-qwen3-rocm")
+SFT_OUTPUT_DIR = os.environ.get("SFT_OUTPUT_DIR", "/mnt/data/checkpoints/pitchsideai-qwen3-rocm")
 SFT_WINDOW_SIZE = 16
 SFT_CHUNK_DURATION = 1
 SFT_NUM_EPOCHS = 3

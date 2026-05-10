@@ -132,7 +132,7 @@ export function LiveSessionProvider({
                         if (msg.beat_indices && msg.beat_indices.length > 0) {
                             const bestBeatIdx = msg.beat_indices[0]
                             const bestConfidence = msg.confidence || 0.8
-                            window.dispatchEvent(new CustomEvent('pitchai:beat_highlight', {
+                            window.dispatchEvent(new CustomEvent('pitchsideai:beat_highlight', {
                                 detail: {
                                     beatIndex: bestBeatIdx,
                                     confidence: bestConfidence,
@@ -141,9 +141,9 @@ export function LiveSessionProvider({
                             }))
                         }
                     } else if (msg.type === 'trivia_card') {
-                        window.dispatchEvent(new CustomEvent('pitchai:trivia_card', { detail: msg }))
+                        window.dispatchEvent(new CustomEvent('pitchsideai:trivia_card', { detail: msg }))
                     } else if (msg.type === 'beat_highlight') {
-                        window.dispatchEvent(new CustomEvent('pitchai:beat_highlight', {
+                        window.dispatchEvent(new CustomEvent('pitchsideai:beat_highlight', {
                             detail: {
                                 beatIndex: msg.beat_index,
                                 confidence: msg.confidence,
@@ -151,7 +151,7 @@ export function LiveSessionProvider({
                             }
                         }))
                     } else if (msg.type === 'answer') {
-                        window.dispatchEvent(new CustomEvent('pitchai:qa_answer', { detail: msg }))
+                        window.dispatchEvent(new CustomEvent('pitchsideai:qa_answer', { detail: msg }))
                     } else if (msg.type === 'error' && !settled) {
                         settled = true
                         reject(new Error(msg.message || 'Live session failed'))

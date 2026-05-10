@@ -1,1 +1,1 @@
-"""PitchSide AI — Tools package."""
+"""PitchSideAI — Tools package."""
