@@ -329,7 +329,7 @@ class LiveAgent(BaseLiveAgent):
             retrieved_beats (list of NarrativeBeat dicts), and trivia_formatted
         """
         self.log_event("commentary_generation_requested", {
-            "event": event_description[:100],
+            "match_event": event_description[:100],
             "vision_label": vision_tactical_label,
             "has_notes_store": self.notes_store is not None
         })
@@ -521,4 +521,3 @@ Commentary:"""
             "has_context": bool(self.match_context),
             "context_length": len(self.match_context)
         }
-
