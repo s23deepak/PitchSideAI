@@ -6,6 +6,7 @@ import base64
 import json
 import logging
 import asyncio
+import uuid
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -15,7 +16,7 @@ import httpx
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, HTTPException, Depends, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import StreamingResponse, HTMLResponse, FileResponse
+from fastapi.responses import StreamingResponse, HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from pydantic import BaseModel, Field
@@ -176,6 +177,13 @@ async def lifespan(app: FastAPI):
     # Start task queue processor
     task_processor = asyncio.create_task(orchestrator.process_task_queue())
 
+    try:
+        from models.notes_jobs import init_notes_job_db
+        await init_notes_job_db()
+        logger.info("Notes job tables ready.")
+    except Exception as exc:
+        logger.warning(f"Notes job database initialization failed: {exc}")
+
     # Pre-warm the streaming VLM backend so first video Q&A request is fast
     if STREAMING_BACKEND == "streaming_vlm" or STREAMING_BACKEND == "auto":
         try:
@@ -312,6 +320,33 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+async def load_notes_store_for_session(match_session: str) -> Optional[Any]:
+    """Load NotesStore from hot cache, then durable Postgres storage."""
+    notes_store = manager.get_notes(match_session)
+    if notes_store is not None:
+        return notes_store
+    try:
+        from models.notes_jobs import NotesJobRepository, notes_store_from_result
+        repo = NotesJobRepository()
+        result = await repo.get_latest_result_for_session(match_session)
+        if result is not None:
+            notes_store = notes_store_from_result(result)
+            manager.store_notes(match_session, notes_store)
+            return notes_store
+    except Exception as exc:
+        logger.warning(f"notes_store_postgres_load_failed: {exc}")
+    return None
+
+
+async def refresh_agent_notes_store(agent: Any, match_session: str) -> None:
+    """Attach newly completed notes to a live agent without blocking commentary."""
+    if getattr(agent, "notes_store", None) is not None:
+        return
+    notes_store = await load_notes_store_for_session(match_session)
+    if notes_store is not None:
+        agent.notes_store = notes_store
+
+
 # ── Story 2.2 + 2.4: Parallel Q&A Handler ──────────────────────────────────────
 
 async def _handle_fan_query_parallel(
@@ -357,6 +392,14 @@ async def _handle_fan_query_parallel(
             "temporal_context": "full",
             "source": "fallback_live_agent",
         }
+
+    settings = manager.get_settings(match_session)
+    if hasattr(runner, "set_commentary_settings"):
+        runner.set_commentary_settings(
+            bias=settings.get("bias", 0),
+            excitement=settings.get("excitement", 0.7),
+            knowledge_depth=settings.get("knowledge_depth", 1),
+        )
 
     # Use parallel runner with vision context
     result = await runner.handle_fan_question(
@@ -545,11 +588,13 @@ async def _periodic_commentary(
                 if ctx:
                     seed = f"{ctx}\n{seed}"
 
+            await refresh_agent_notes_store(agent, match_session)
             # Call LiveAgent (no vision label for timer-based commentary)
             result = await agent.generate_live_commentary(
                 event_description=seed,
                 vision_tactical_label=None,
                 game_state=game_state,
+                settings=manager.get_settings(match_session),
             )
 
             broadcast_msg = {
@@ -1210,7 +1255,7 @@ async def live_audio_ws(websocket: WebSocket):
         await manager.connect(workflow_id, websocket)
 
         # Load NotesStore if available from pre-match generation
-        notes_store = manager.get_notes(match_session)
+        notes_store = await load_notes_store_for_session(match_session)
 
         # Story 2.2 + 2.4: Initialize parallel Q&A runner
         from agents.qa_runner import QARunner
@@ -1248,6 +1293,7 @@ async def live_audio_ws(websocket: WebSocket):
                     qa_runner.initialize_session(
                         home_team=home_team,
                         away_team=away_team,
+                        match_session=match_session,
                         notes_store=notes_store,
                     ),
                     timeout=30.0,
@@ -1318,10 +1364,12 @@ async def live_audio_ws(websocket: WebSocket):
                     elif "offside" in desc_lower:
                         event_type = "offside"
 
+                    await refresh_agent_notes_store(agent, match_session)
                     result = await agent.generate_live_commentary(
                         event_description=seed,
                         vision_tactical_label=event_type,
                         game_state=game_state,
+                        settings=manager.get_settings(match_session),
                     )
 
                     broadcast_msg = {
@@ -1427,6 +1475,7 @@ async def live_audio_ws(websocket: WebSocket):
                         # Fix #1: Get settings and inject into commentary generation
                         settings = manager.get_settings(match_session)
 
+                        await refresh_agent_notes_store(agent, match_session)
                         # Call LiveAgent with vision label for NotesStore lookup
                         result = await agent.generate_live_commentary(
                             event_description=full_seed,
@@ -1531,6 +1580,13 @@ async def live_audio_ws(websocket: WebSocket):
                         "knowledge_depth": knowledge,
                     }
                     manager.store_settings(match_session, settings)
+                    runner = manager.get_qa_runner(match_session)
+                    if runner and hasattr(runner, "set_commentary_settings"):
+                        runner.set_commentary_settings(
+                            bias=settings["bias"],
+                            excitement=settings["excitement"],
+                            knowledge_depth=settings["knowledge_depth"],
+                        )
                     logger.log_event("settings_updated", {
                         "match_session": match_session,
                         "settings": settings,
@@ -1811,6 +1867,7 @@ async def _process_video_chunk(
                     if ctx:
                         seed = f"{ctx}\n{seed}"
 
+                await refresh_agent_notes_store(live_agent, match_session)
                 commentary_text = await live_agent.generate_live_commentary(seed)
 
                 await manager.send(websocket, {
@@ -2042,6 +2099,7 @@ async def streaming_video_ws(websocket: WebSocket):
                     ctx = game_state.to_context_string()
                     if ctx:
                         seed = f"{ctx}\n{description}"
+                    await refresh_agent_notes_store(live_agent, match_session)
                     text = await live_agent.generate_live_commentary(seed)
                     await manager.broadcast(workflow_id, {
                         "type": "commentary",
@@ -2192,186 +2250,133 @@ async def _periodic_streaming_stats(workflow_id: str, bridge: StreamingVisionBri
 # ── Commentary Notes Endpoint ──────────────────────────────────────────────────
 
 @app.post("/api/v1/commentary/prepare-notes", dependencies=[Depends(rate_limit_check)])
-async def prepare_commentary_notes(req: CommentaryNotesRequest, request: Request) -> StreamingResponse:
+async def prepare_commentary_notes(req: CommentaryNotesRequest, request: Request) -> JSONResponse:
     """
     Prepare professional Peter Drury-style commentary notes.
-    Streams SSE progress events, then the final result as the last event.
+    Enqueues a durable background job and returns job metadata.
     """
+    from jobs.notes_tasks import enqueue_commentary_notes_job
+    from models.notes_jobs import NotesJobRepository, job_to_dict
+
+    canonical_match_session_key = build_match_session_key(req.home_team, req.away_team, req.sport)
+    job_id = str(uuid.uuid4())
+    repo = NotesJobRepository()
+    job, created = await repo.create_or_get_active_job(
+        job_id=job_id,
+        match_session=canonical_match_session_key,
+        home_team=req.home_team,
+        away_team=req.away_team,
+        sport=req.sport,
+    )
+
+    if created:
+        enqueue_commentary_notes_job(job.job_id)
+
     logger.log_event("commentary_notes_requested", {
         "home_team": req.home_team,
         "away_team": req.away_team,
         "sport": req.sport,
-        "venue": req.venue
+        "venue": req.venue,
+        "job_id": job.job_id,
+        "created": created,
     })
 
+    payload = job_to_dict(job)
+    payload.update({
+        "status_url": f"/api/v1/commentary/notes-jobs/{job.job_id}",
+        "events_url": f"/api/v1/commentary/notes-jobs/{job.job_id}/events",
+        "created": created,
+    })
+    return JSONResponse(payload, status_code=202)
+
+
+@app.get("/api/v1/commentary/notes-jobs/{job_id}")
+async def get_commentary_notes_job(job_id: str):
+    """Return durable commentary-notes job state and result when complete."""
+    from models.notes_jobs import NotesJobRepository, job_to_dict, notes_store_from_result, result_to_response
+
+    repo = NotesJobRepository()
+    job = await repo.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Notes job not found")
+
+    payload = job_to_dict(job)
+    result = await repo.get_result(job_id)
+    if result is not None:
+        notes_store = notes_store_from_result(result)
+        manager.store_notes(result.match_session, notes_store)
+        result_payload = result_to_response(result)
+        result_payload.update({
+            "match": f"{job.home_team} vs {job.away_team}",
+            "sport": job.sport,
+        })
+        payload["result"] = result_payload
+    return payload
+
+
+@app.get("/api/v1/commentary/notes-jobs/{job_id}/events")
+async def stream_commentary_notes_job_events(job_id: str, request: Request):
+    """Stream commentary-notes job progress from Redis, with DB polling fallback."""
+    import json as _json
+    import redis.asyncio as redis
+    from config import REDIS_URL
+    from jobs.notes_events import notes_job_channel
+    from models.notes_jobs import NotesJobRepository, job_to_dict, result_to_response
+
     async def generate():
-        import json as _json
+        repo = NotesJobRepository()
+        job = await repo.get_job(job_id)
+        if job is None:
+            yield f"data: {_json.dumps({'phase': 'error', 'message': 'Notes job not found', 'done': True})}\n\n"
+            return
+
+        yield f"data: {_json.dumps({'phase': job.phase, 'message': job.status, 'progress': job.progress, 'done': job.status in ('succeeded', 'failed', 'cancelled')})}\n\n"
+        if job.status == "succeeded":
+            result = await repo.get_result(job_id)
+            if result:
+                result_payload = result_to_response(result)
+                result_payload.update({"match": f"{job.home_team} vs {job.away_team}", "sport": job.sport})
+                yield f"data: {_json.dumps({'phase': 'complete', 'message': 'Done', 'progress': 1.0, 'done': True, 'result': result_payload})}\n\n"
+            return
+        if job.status in ("failed", "cancelled"):
+            yield f"data: {_json.dumps({'phase': 'error', 'message': job.error or job.status, 'done': True})}\n\n"
+            return
+
+        client = redis.from_url(REDIS_URL, decode_responses=True)
+        pubsub = client.pubsub()
         try:
-            from workflows import CommentaryNotesState, create_workflow
-
-            workflow_state = CommentaryNotesState(
-                match_id=f"{req.home_team}_{req.away_team}_{req.match_datetime}",
-                home_team=req.home_team,
-                away_team=req.away_team,
-                sport=req.sport,
-                match_datetime=req.match_datetime,
-                venue=req.venue,
-                venue_lat=req.venue_lat,
-                venue_lon=req.venue_lon,
-            )
-
-            # Phase-to-progress mapping (float 0.0 to 1.0)
-            PROGRESS_MAP = {
-                "initialize": 0.05,
-                "initial_context": 0.20,
-                "squad_research": 0.45,
-                "form_analysis": 0.70,
-                "synthesis": 0.90,
-            }
-
-            async def on_progress(phase: str, message: str, extra: dict):
-                progress = PROGRESS_MAP.get(phase, 0.0)
-                if extra.get("done", False):
-                    # Bump progress slightly when phase completes
-                    progress = min(1.0, progress + 0.05)
-                event = {
-                    "phase": phase,
-                    "message": message,
-                    "progress": progress,
-                    "done": extra.get("done", False)
-                }
-                yield f"data: {_json.dumps(event)}\n\n"
-
-            workflow = create_workflow()
-
-            # We need a workaround: run_workflow calls on_progress which yields,
-            # but we can't yield from inside the callback. Use a queue instead.
-            progress_queue: asyncio.Queue = asyncio.Queue()
-
-            async def _queue_progress(phase: str, message: str, extra: dict):
-                progress = PROGRESS_MAP.get(phase, 0.0)
-                if extra.get("done", False):
-                    progress = min(1.0, progress + 0.05)
-                await progress_queue.put({
-                    "phase": phase,
-                    "message": message,
-                    "progress": progress,
-                    "done": extra.get("done", False)
-                })
-
-            async def _run():
-                try:
-                    result = await workflow.run_workflow(workflow_state, on_progress=_queue_progress)
-                    await progress_queue.put(("__done__", result))
-                except Exception as exc:
-                    await progress_queue.put(("__error__", exc))
-
-            task = asyncio.create_task(_run())
-
-            try:
-                while True:
-                    if await request.is_disconnected():
-                        logger.info("commentary_notes_client_disconnected")
+            await pubsub.subscribe(notes_job_channel(job_id))
+            while True:
+                if await request.is_disconnected():
+                    return
+                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                if message and message.get("data"):
+                    yield f"data: {message['data']}\n\n"
+                    try:
+                        event = _json.loads(message["data"])
+                    except Exception:
+                        event = {}
+                    if event.get("done"):
                         return
-
-                    try:
-                        item = await asyncio.wait_for(progress_queue.get(), timeout=1.0)
-                    except asyncio.TimeoutError:
-                        continue  # re-check disconnect
-
-                    if isinstance(item, tuple):
-                        tag, payload = item
-                        if tag == "__done__":
-                            completed_state = payload
-                            break
-                        elif tag == "__error__":
-                            yield f"data: {_json.dumps({'phase': 'error', 'message': str(payload), 'done': True})}\n\n"
-                            return
-                    else:
-                        yield f"data: {_json.dumps(item)}\n\n"
-            finally:
-                if not task.done():
-                    task.cancel()
-                    try:
-                        await task
-                    except asyncio.CancelledError:
-                        logger.info("commentary_notes_workflow_cancelled")
-
-            await task  # ensure cleanup (already done if cancelled)
-
-            duration_ms = (completed_state.end_time - completed_state.start_time).total_seconds() * 1000 if completed_state.end_time else 0
-
-            # Store NotesStore for live session usage
-            if completed_state.notes_store:
-                match_session_key = f"{req.home_team}_{req.away_team}"
-                canonical_match_session_key = build_match_session_key(req.home_team, req.away_team, req.sport)
-                manager.store_notes(match_session_key, completed_state.notes_store)
-                manager.store_notes(canonical_match_session_key, completed_state.notes_store)
-                logger.log_event("notes_store_cached", {
-                    "match_session": canonical_match_session_key,
-                    "beat_count": len(completed_state.notes_store.beats),
-                    "lookup_tags": len(completed_state.notes_store.lookup)
-                })
-
-                # Story 2.2 + 2.4: Pre-load Q&A cache from notes
-                # Create Q&A runner and populate cache with pre-computed Q&A pairs
-                from agents.qa_runner import QARunner
-                qa_runner = QARunner(sport=req.sport)
-                await qa_runner.initialize_session(
-                    home_team=req.home_team,
-                    away_team=req.away_team,
-                    notes_store=completed_state.notes_store,
-                )
-                manager.store_qa_runner(match_session_key, qa_runner)
-                manager.store_qa_runner(canonical_match_session_key, qa_runner)
-                logger.log_event("qa_runner_initialized", {
-                    "match_session": canonical_match_session_key,
-                    "qa_cache_size": len(qa_runner.qa_agent.qa_cache),
-                })
-
-            response = {
-                "status": "success",
-                "workflow_id": completed_state.workflow_id,
-                "match": f"{req.home_team} vs {req.away_team}",
-                "sport": req.sport,
-                "markdown_notes": completed_state.markdown_notes or "",
-                "beats": [
-                    {
-                        "text": beat.text,
-                        "event_tags": beat.event_tags,
-                        "players": beat.players,
-                        "section": beat.section,
-                        "source": beat.source,
-                        "source_urls": beat.source_urls,
-                        "source_attribution": beat.source_attribution,
-                        "confidence": beat.confidence,
-                    }
-                    for beat in completed_state.notes_store.beats
-                ] if completed_state.notes_store and completed_state.notes_store.beats else [],
-                "preparation_time_ms": duration_ms,
-                "agents_completed": len(completed_state.completed_agents),
-                "errors": completed_state.errors,
-                "warnings": completed_state.warnings,
-                "beat_count": len(completed_state.notes_store.beats) if completed_state.notes_store else 0,
-            }
-
-            if req.include_embedded_json:
-                response["json_structure"] = completed_state.json_structure or {}
-
-            logger.log_event("commentary_notes_generated", {
-                "workflow_id": completed_state.workflow_id,
-                "preparation_time_ms": duration_ms,
-                "agents": len(completed_state.completed_agents),
-                "notes_length": len(completed_state.markdown_notes or ""),
-                "beat_count": len(completed_state.notes_store.beats) if completed_state.notes_store else 0
-            })
-
-            yield f"data: {_json.dumps({'phase': 'complete', 'message': 'Done', 'progress': 1.0, 'done': True, 'result': response})}\n\n"
-
-        except Exception as exc:
-            error_msg = f"Commentary preparation failed: {str(exc)}"
-            logger.error("commentary_notes_failed", error=error_msg, exc_info=True)
-            yield f"data: {_json.dumps({'phase': 'error', 'message': error_msg, 'done': True})}\n\n"
+                else:
+                    job = await repo.get_job(job_id)
+                    if job is None:
+                        return
+                    if job.status == "succeeded":
+                        result = await repo.get_result(job_id)
+                        if result:
+                            result_payload = result_to_response(result)
+                            result_payload.update({"match": f"{job.home_team} vs {job.away_team}", "sport": job.sport})
+                            yield f"data: {_json.dumps({'phase': 'complete', 'message': 'Done', 'progress': 1.0, 'done': True, 'result': result_payload})}\n\n"
+                        return
+                    if job.status in ("failed", "cancelled"):
+                        yield f"data: {_json.dumps({'phase': 'error', 'message': job.error or job.status, 'done': True})}\n\n"
+                        return
+                    yield f"data: {_json.dumps({'phase': job.phase, 'message': job.status, 'progress': job.progress, 'done': False})}\n\n"
+        finally:
+            await pubsub.unsubscribe(notes_job_channel(job_id))
+            await pubsub.aclose()
+            await client.aclose()
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
@@ -2382,7 +2387,7 @@ async def get_commentary_notes(match_session: str):
     Poll endpoint for NotesGenerationHub to check if commentary notes are ready.
     Returns notes status and data if available.
     """
-    notes_store = manager.get_notes(match_session)
+    notes_store = await load_notes_store_for_session(match_session)
 
     if notes_store is None:
         # Notes not generated yet

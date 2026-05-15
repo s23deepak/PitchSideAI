@@ -131,7 +131,7 @@ export default function FanLensBroadcast() {
   // Sync settings to WS
   const pushSettings = useCallback((b, e, k) => {
     updateSettings({
-      bias: (b - 50) / 50,          // -1..+1
+      bias: (50 - b) / 50,          // -1 home .. +1 away
       excitement: e / 100,
       knowledge_depth: k / 100,
     })

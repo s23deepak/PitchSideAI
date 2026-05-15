@@ -6,6 +6,7 @@ secrets and deployment-specific values from .env (via python-dotenv).
 """
 import os
 from dotenv import load_dotenv
+import config.defaults as _d
 from config.defaults import *  # noqa: F401, F403 — import all defaults first
 
 load_dotenv()  # Secrets/overrides in .env win over module-level defaults
@@ -26,12 +27,13 @@ REDIS_HOST     = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT     = int(os.getenv("REDIS_PORT", 6379))
 REDIS_DB       = int(os.getenv("REDIS_DB", 0))
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "")
+REDIS_URL      = os.getenv("REDIS_URL", _d.REDIS_URL)
+DATABASE_URL   = os.getenv("DATABASE_URL", _d.DATABASE_URL)
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", _d.CELERY_BROKER_URL)
+CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", _d.CELERY_RESULT_BACKEND)
 
 # ── OpenAI API key (secret) ───────────────────────────────────────────────────
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-
-# ── Runtime overrides (allow .env to override defaults.py values) ─────────────
-import config.defaults as _d  # noqa: E402
 
 LLM_BACKEND    = os.getenv("LLM_BACKEND",    _d.LLM_BACKEND)
 VISION_LLM_BACKEND = os.getenv("VISION_LLM_BACKEND", _d.VISION_LLM_BACKEND)

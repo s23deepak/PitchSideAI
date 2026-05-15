@@ -17,8 +17,6 @@ langgraph>=0.0.50
 langchain>=0.1.0
 langchain-aws>=0.1.0
 langchain-community>=0.3.0
-crewai>=0.1.0
-crewai-tools>=0.1.0
 
 # Data Sources
 tavily-python>=0.5.0
@@ -29,6 +27,7 @@ firecrawl-py>=1.0.0
 # Concurrency & Performance
 aioredis>=2.0.1
 redis>=5.0.0
+celery>=5.3.0
 slowapi>=0.1.9
 tenacity>=8.2.3
 asyncio-contextmanager>=1.0.0

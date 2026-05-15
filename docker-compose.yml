@@ -13,11 +13,18 @@ services:
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
       - OPENSEARCH_ENDPOINT=${OPENSEARCH_ENDPOINT}
       - DYNAMODB_TABLE_NAME=${DYNAMODB_TABLE_NAME:-PitchSideMatchEvents}
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://pitchai:pitchai@postgres:5432/pitchai}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
       - LOG_LEVEL=INFO
     volumes:
       - ./logs:/app/logs
     networks:
       - pitchside
+    depends_on:
+      - redis
+      - postgres
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=5).read()"]
@@ -25,6 +32,31 @@ services:
       timeout: 10s
       retries: 3
       start_period: 5s
+
+  notes-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A jobs.celery_app.celery_app worker --loglevel=INFO --concurrency=2
+    environment:
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - OPENSEARCH_ENDPOINT=${OPENSEARCH_ENDPOINT}
+      - DYNAMODB_TABLE_NAME=${DYNAMODB_TABLE_NAME:-PitchSideMatchEvents}
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://pitchai:pitchai@postgres:5432/pitchai}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - pitchside
+    depends_on:
+      - redis
+      - postgres
+    restart: unless-stopped
 
   frontend:
     build:
@@ -51,9 +83,24 @@ services:
     volumes:
       - redis_data:/data
 
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-pitchai}
+      - POSTGRES_USER=${POSTGRES_USER:-pitchai}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-pitchai}
+    networks:
+      - pitchside
+    restart: unless-stopped
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
 networks:
   pitchside:
     driver: bridge
 
 volumes:
   redis_data:
+  postgres_data:

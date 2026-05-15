@@ -1,9 +1,8 @@
 """
-Workflows module - LangGraph + CrewAI orchestration for commentary notes preparation.
+Workflows module - production notes workflow orchestration.
 
 Provides:
 - LangGraph state machine for workflow orchestration
-- CrewAI task definitions and agent roles
 - Bridge to existing WorkflowOrchestrator for concurrency control
 - Configuration for commentary notes generation
 """
@@ -15,17 +14,6 @@ from workflows.commentary_notes_workflow import (
     build_langgraph,
     create_workflow,
 )
-from workflows.crewai_config import (
-    CREW_CONFIG,
-    TASKS,
-    PLAYER_RESEARCH_AGENT,
-    TEAM_FORM_AGENT,
-    HISTORICAL_CONTEXT_AGENT,
-    WEATHER_CONTEXT_AGENT,
-    MATCHUP_ANALYSIS_AGENT,
-    NEWS_AGENT,
-    NOTE_ORGANIZER_AGENT,
-)
 from workflows.orchestration_bridge import OrchestratorBridge
 
 __all__ = [
@@ -35,16 +23,6 @@ __all__ = [
     "WorkflowPhase",
     "build_langgraph",
     "create_workflow",
-    # CrewAI
-    "CREW_CONFIG",
-    "TASKS",
-    "PLAYER_RESEARCH_AGENT",
-    "TEAM_FORM_AGENT",
-    "HISTORICAL_CONTEXT_AGENT",
-    "WEATHER_CONTEXT_AGENT",
-    "MATCHUP_ANALYSIS_AGENT",
-    "NEWS_AGENT",
-    "NOTE_ORGANIZER_AGENT",
     # Bridge
     "OrchestratorBridge",
 ]

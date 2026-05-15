@@ -98,22 +98,21 @@ function AppContent() {
                 throw new Error(`HTTP ${res.status}: ${res.statusText}`)
             }
 
-            const reader = res.body.getReader()
-            const decoder = new TextDecoder()
-            let buffer = ''
+            const job = await res.json()
+            await new Promise((resolve, reject) => {
+                const eventsUrl = job.events_url?.startsWith('http')
+                    ? job.events_url
+                    : `${BACKEND}${job.events_url}`
+                const es = new EventSource(eventsUrl)
 
-            while (true) {
-                const { done, value } = await reader.read()
-                if (done) break
+                abortControllerRef.current.signal.addEventListener('abort', () => {
+                    es.close()
+                    reject(new DOMException('Commentary preparation cancelled', 'AbortError'))
+                }, { once: true })
 
-                buffer += decoder.decode(value, { stream: true })
-                const lines = buffer.split('\n')
-                buffer = lines.pop()
-
-                for (const line of lines) {
-                    if (!line.startsWith('data: ')) continue
+                es.onmessage = (message) => {
                     try {
-                        const event = JSON.parse(line.slice(6))
+                        const event = JSON.parse(message.data)
                         if (event.phase === 'complete' && event.result) {
                             const data = event.result
                             setCommentaryData(data)
@@ -121,17 +120,25 @@ function AppContent() {
                             setMatchReady(true)
                             setBuildStatus('ready')
                             setBuildProgress('')
+                            es.close()
+                            resolve()
                         } else if (event.phase === 'error') {
-                            throw new Error(event.message)
+                            es.close()
+                            reject(new Error(event.message))
                         } else {
-                            setBuildProgress(event.message || event.phase)
+                            setBuildProgress(event.progress !== undefined ? event.progress : (event.message || event.phase))
                         }
                     } catch (parseErr) {
-                        if (parseErr.message && !parseErr.message.startsWith('Unexpected'))
-                            throw parseErr
+                        es.close()
+                        reject(parseErr)
                     }
                 }
-            }
+
+                es.onerror = () => {
+                    es.close()
+                    reject(new Error('Lost notes job event stream'))
+                }
+            })
         } catch (err) {
             // Don't show error if request was aborted (user cancelled)
             if (err.name === 'AbortError') {

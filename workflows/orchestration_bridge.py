@@ -1,7 +1,7 @@
 """
-Orchestration Bridge - Connect CrewAI to existing WorkflowOrchestrator.
+Orchestration Bridge - Connect workflow tasks to existing WorkflowOrchestrator.
 
-Provides adapters to submit CrewAI tasks to the existing orchestration system
+Provides adapters to submit workflow tasks to the existing orchestration system
 for concurrency control, rate limiting, and distributed execution.
 """
 
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 class OrchestratorBridge:
-    """Bridge between CrewAI tasks and WorkflowOrchestrator."""
+    """Bridge between workflow tasks and WorkflowOrchestrator."""
 
     def __init__(self, orchestrator=None):
         """

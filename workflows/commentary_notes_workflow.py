@@ -333,7 +333,6 @@ class CommentaryNotesWorkflow:
     ) -> CommentaryNotesState:
         """Execute workflow with maximum parallelization, emitting progress via callback."""
         logger.info("Starting commentary notes workflow (optimized)...")
-
         if use_langgraph and on_progress is None:
             graph = build_langgraph(self)
             if graph is not None:

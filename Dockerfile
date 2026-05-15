@@ -48,6 +48,7 @@ COPY api/ ./api/
 COPY config/ ./config/
 COPY core/ ./core/
 COPY data_sources/ ./data_sources/
+COPY jobs/ ./jobs/
 COPY models/ ./models/
 COPY orchestration/ ./orchestration/
 COPY rag/ ./rag/

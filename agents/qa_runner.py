@@ -81,6 +81,7 @@ class QARunner:
         self,
         home_team: str,
         away_team: str,
+        match_session: str = "demo_match",
         lineup_data: Optional[Dict[str, Any]] = None,
         notes_store: Optional[NotesStore] = None,
     ) -> None:
@@ -90,10 +91,12 @@ class QARunner:
         Args:
             home_team: Home team name
             away_team: Away team name
+            match_session: Session identifier for persistence and cache lookup
             lineup_data: Starting XI + substitutes from data sources
             notes_store: Pre-computed commentary notes from Story 1.3 pipeline
         """
         logger.info(f"Initializing session: {home_team} vs {away_team}")
+        self.match_session = match_session
 
         # Initialize Q&A agent with pre-computed notes cache
         await self.qa_agent.start_session(
@@ -116,6 +119,19 @@ class QARunner:
             logger.info(f"Loaded {len(self.qa_agent.qa_cache)} Q&A pairs from notes")
 
         logger.info("Session initialized")
+
+    def set_commentary_settings(
+        self,
+        bias: float = 0,
+        excitement: float = 0.7,
+        knowledge_depth: float = 1,
+    ) -> None:
+        """Update Q&A commentary settings for this session."""
+        self.qa_agent.set_commentary_settings(
+            bias=bias,
+            excitement=excitement,
+            knowledge_depth=knowledge_depth,
+        )
 
     def _detect_player_reference(self, question: str) -> bool:
         """

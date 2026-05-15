@@ -30,7 +30,7 @@ Built for the **AMD Developer Hackathon (May 2026)**. PitchSideAI gives fans and
 
 **For commentators (Dashboard mode):** A teleprompter populated with pre-computed narrative beats, color-coded by confidence. Beats highlight in real-time as vision detects matching events on the pitch.
 
-**For preparation (Notes Hub):** Enter two teams, click Generate. A 7-agent pipeline runs player research, team form analysis, head-to-head history, weather context, and current news in parallel, then synthesizes everything into structured commentary notes in the Peter Drury style.
+**For preparation (Notes Hub):** Enter two teams, click Generate. The backend creates a durable notes job, a Celery worker runs the 7-agent research pipeline, and progress streams back from Redis while final notes are stored in Postgres.
 
 ---
 
@@ -67,20 +67,22 @@ Browser (React / Vite)
   Commentator Dashboard ────────┤
   Notes Generation Hub ─────────┤
                                 │ WebSocket /ws/live
-                                │ SSE   /api/v1/commentary/prepare-notes
+                                │ HTTP  /api/v1/commentary/prepare-notes
+                                │ SSE   /api/v1/commentary/notes-jobs/{job_id}/events
                                 │ HTTP  /api/v1/frame/analyze
                                 ▼
               FastAPI Backend  (api/server.py)
                     │
         ┌───────────┼───────────────────────┐
         │           │                       │
-   LiveAgent    7-Agent Notes           VisionAgent
-   + QAAgent    Pipeline                (Qwen2.5-VL)
+   LiveAgent    Notes Job Queue         VisionAgent
+   + QAAgent    Redis + Celery          (Qwen2.5-VL)
         │           │                       │
-        │    ┌──────┴───────┐         Streaming
-        │    │ Round-Robin  │         Fallback
-        │    │ 5 Sources    │         Chain (L1→L2)
-        │    └──────────────┘
+        │           ▼                  Streaming
+        │    7-Agent Notes             Fallback
+        │    Worker Pipeline           Chain (L1→L2)
+        │           │
+        │       Postgres
         │           │
         └─── LLM Backend (openai / vllm)
 ```
@@ -107,35 +109,29 @@ Cinematic full-viewport video with overlaid UI elements:
 
 ### Notes Generation Hub
 
-- Enter home + away team → SSE stream shows agent progress in real time
+- Enter home + away team → backend enqueues a notes job, then SSE streams job progress in real time
 - Output: structured markdown with player profiles, tactical analysis, historical context, H2H records, weather, current news
 - Takes 60–120s depending on LLM backend and data source speed
 
 ---
 
-## 7-Agent Notes Pipeline
+## Production Notes Pipeline
 
 ```
-Round 1 (sequential)
-  └── initialize_workflow()  →  ESPN squad + fixture fetch
-
-Round 2 (parallel, asyncio.gather)
-  ├── gather_initial_context()
-  │     ├── NewsAgent
-  │     ├── WeatherContextAgent
-  │     └── HistoricalContextAgent
-  └── research_squads()
-        └── PlayerResearchAgent
-
-Round 3 (parallel)
-  ├── TeamFormAgent
-  └── MatchupAnalysisAgent
-
-Round 4 (sequential)
-  └── NoteOrganizer  →  synthesizes all research into narrative beats
+Generate Notes
+  └── POST /api/v1/commentary/prepare-notes
+        ├── notes_jobs row (queued) in Postgres
+        └── Celery task on Redis
+              ├── initialize_workflow()
+              ├── NewsAgent + WeatherContextAgent + HistoricalContextAgent
+              ├── PlayerResearchAgent + TeamFormAgent
+              ├── MatchupAnalysisAgent
+              └── NoteOrganizer → NotesStore
+                    ├── notes_results row in Postgres
+                    └── Redis progress events for SSE
 ```
 
-Each agent extends `BaseAgent` and calls `call_llm()` via `httpx.AsyncClient` — fully async, no event loop blocking.
+Each agent extends `BaseAgent` and calls `call_llm()` via `httpx.AsyncClient` — fully async, no event loop blocking. LangGraph remains available as an internal helper for non-streaming workflow runs, but production Generate Notes uses the native async workflow inside a Celery worker.
 
 ---
 
@@ -221,6 +217,10 @@ AUDIO_MODEL=Qwen/Qwen2-Audio-7B-Instruct
 ```env
 # Required
 LLM_BACKEND=vllm                            # openai | vllm
+DATABASE_URL=postgresql+asyncpg://pitchai:pitchai@localhost:5432/pitchai
+REDIS_URL=redis://localhost:6379/0
+CELERY_BROKER_URL=redis://localhost:6379/0
+CELERY_RESULT_BACKEND=redis://localhost:6379/0
 
 # vLLM (self-hosted)
 VLLM_BASE_URL=http://localhost:8001
@@ -262,11 +262,16 @@ PitchSideAI/
 │       ├── weather_context_agent.py
 │       └── note_organizer_agent.py
 ├── workflows/
-│   ├── commentary_notes_workflow.py  # 7-agent 3-round orchestration (LangGraph)
-│   └── crewai_config.py              # CrewAI agent role personas
+│   ├── commentary_notes_workflow.py  # 7-agent notes workflow
+│   └── orchestration_bridge.py       # Optional internal workflow bridge
+├── jobs/
+│   ├── celery_app.py                 # Celery app configuration
+│   ├── notes_tasks.py                # Durable notes-generation worker task
+│   └── notes_events.py               # Redis progress event helpers
 ├── models/
 │   ├── game_state.py                 # LiveMatchState: score, minute, phase, event log
 │   ├── notes_store.py                # NotesStore: O(1) beat lookup by event tag
+│   ├── notes_jobs.py                 # Postgres notes job/result repository
 │   └── narrative_beat.py             # NarrativeBeat dataclass
 ├── data_sources/
 │   ├── factory.py                    # MultiSourceRetriever entry point

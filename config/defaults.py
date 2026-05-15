@@ -66,6 +66,12 @@ RATE_LIMIT_BURST = 10
 MAX_CONCURRENT_TASKS = 20
 REQUEST_TIMEOUT_SECONDS = 300
 
+# ── Production Notes Jobs ─────────────────────────────────────────────────────
+REDIS_URL = "redis://localhost:6379/0"
+DATABASE_URL = "postgresql+asyncpg://pitchai:pitchai@localhost:5432/pitchai"
+CELERY_BROKER_URL = REDIS_URL
+CELERY_RESULT_BACKEND = REDIS_URL
+
 # ── Audio / Vision ────────────────────────────────────────────────────────────
 AUDIO_SAMPLE_RATE = 16000   # Hz
 FRAME_SAMPLE_INTERVAL = 5   # seconds

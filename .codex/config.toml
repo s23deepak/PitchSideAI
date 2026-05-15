@@ -1,0 +1,19 @@
+[tui]
+notifications = false
+
+# Notification mechanism for terminal alerts: auto | osc9 | bel. Default: "auto"
+# notification_method = "auto"
+
+# When notifications fire: unfocused (default) | always
+# notification_condition = "unfocused"
+
+# Enables welcome/status/spinner animations. Default: true
+animations = true
+
+# Show onboarding tooltips in the welcome screen. Default: true
+show_tooltips = true
+
+[features]
+shell_snapshot = true   
+memories = true
+multi_agent = true

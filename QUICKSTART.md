@@ -138,13 +138,16 @@ curl http://localhost:8080/api/v1/events?n=10
 
 ### Prepare Commentary Notes
 ```bash
-curl -X POST http://localhost:8080/api/v1/commentary/prepare-notes \
+JOB_ID=$(curl -s -X POST http://localhost:8080/api/v1/commentary/prepare-notes \
   -H "Content-Type: application/json" \
   -d '{
     "home_team": "Manchester United",
     "away_team": "Liverpool",
     "sport": "soccer"
-  }'
+  }' | python3 -c 'import json,sys; print(json.load(sys.stdin)["job_id"])')
+
+curl http://localhost:8080/api/v1/commentary/notes-jobs/$JOB_ID
+curl -N http://localhost:8080/api/v1/commentary/notes-jobs/$JOB_ID/events
 ```
 
 ---
@@ -165,6 +168,12 @@ OPENSEARCH_ENDPOINT=your-endpoint.aoss.amazonaws.com
 # Concurrency
 MAX_CONCURRENT_TASKS=20  # 1-50 recommended
 RATE_LIMIT_RPM=100       # Requests per minute
+
+# Notes jobs
+DATABASE_URL=postgresql+asyncpg://pitchai:pitchai@localhost:5432/pitchai
+REDIS_URL=redis://localhost:6379/0
+CELERY_BROKER_URL=redis://localhost:6379/0
+CELERY_RESULT_BACKEND=redis://localhost:6379/0
 
 # Models
 RESEARCH_MODEL=amazon.nova-pro-v2:0
