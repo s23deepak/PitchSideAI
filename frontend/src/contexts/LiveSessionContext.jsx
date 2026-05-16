@@ -39,6 +39,8 @@ export function LiveSessionProvider({
     const [detection, setDetection] = useState(null)
     const [isConnected, setIsConnected] = useState(false)
     const [liveSessionReady, setLiveSessionReady] = useState(false)
+    const [connectionState, setConnectionState] = useState('idle')
+    const [connectionError, setConnectionError] = useState(null)
 
     // WebSocket ref
     const wsRef = useRef(null)
@@ -46,6 +48,7 @@ export function LiveSessionProvider({
     const activeSessionKeyRef = useRef(null)
     const abortControllerRef = useRef(null)
     const reconnectTimerRef = useRef(null)
+    const shouldReconnectRef = useRef(true)
 
     // Pending settings/language queue (for when WS isn't ready)
     const pendingSettingsRef = useRef(null)
@@ -63,6 +66,7 @@ export function LiveSessionProvider({
 
         // Close old WS if matchSession changed
         if (activeSessionKeyRef.current && activeSessionKeyRef.current !== matchSession) {
+            shouldReconnectRef.current = false
             wsRef.current?.close()
             wsRef.current = null
             setLiveSessionReady(false)
@@ -84,6 +88,9 @@ export function LiveSessionProvider({
         const ws = new WebSocket(wsUrl)
         wsRef.current = ws
         activeSessionKeyRef.current = matchSession
+        shouldReconnectRef.current = true
+        setConnectionState('connecting')
+        setConnectionError(null)
 
         sessionPromiseRef.current = new Promise((resolve, reject) => {
             let settled = false
@@ -120,12 +127,14 @@ export function LiveSessionProvider({
                     if (msg.type === 'ready') {
                         setLiveSessionReady(true)
                         setIsConnected(true)
+                        setConnectionState('ready')
+                        setConnectionError(null)
                         if (!settled) {
                             settled = true
                             resolve(true)
                         }
                     } else if (msg.type === 'status') {
-                        setLiveSessionReady(false)
+                        setConnectionState((current) => current === 'ready' ? 'ready' : 'initializing')
                     } else if (msg.type === 'commentary') {
                         setLiveCommentary((prev) => [msg, ...prev].slice(0, 100))
                         // Forward beat highlight
@@ -152,9 +161,14 @@ export function LiveSessionProvider({
                         }))
                     } else if (msg.type === 'answer') {
                         window.dispatchEvent(new CustomEvent('pitchsideai:qa_answer', { detail: msg }))
-                    } else if (msg.type === 'error' && !settled) {
-                        settled = true
-                        reject(new Error(msg.message || 'Live session failed'))
+                    } else if (msg.type === 'error') {
+                        const message = msg.message || 'Live session failed'
+                        setConnectionState('error')
+                        setConnectionError(message)
+                        if (!settled) {
+                            settled = true
+                            reject(new Error(message))
+                        }
                     }
                 } catch {
                     // ignore malformed frames
@@ -162,9 +176,12 @@ export function LiveSessionProvider({
             }
 
             ws.onerror = (err) => {
+                if (wsRef.current !== ws) return
                 console.warn('[LiveSession] WS error:', err)
                 setIsConnected(false)
                 setLiveSessionReady(false)
+                setConnectionState('error')
+                setConnectionError('Live session connection failed')
                 if (!settled) {
                     settled = true
                     reject(new Error('Live session connection failed'))
@@ -172,12 +189,14 @@ export function LiveSessionProvider({
             }
 
             ws.onclose = () => {
+                if (wsRef.current !== ws) return
                 wsRef.current = null
                 sessionPromiseRef.current = null
                 setIsConnected(false)
                 setLiveSessionReady(false)
+                setConnectionState(shouldReconnectRef.current ? 'reconnecting' : 'idle')
                 // Schedule reconnect so the mic/AI-ready state recovers automatically
-                if (reconnectTimerRef.current === null) {
+                if (shouldReconnectRef.current && reconnectTimerRef.current === null) {
                     reconnectTimerRef.current = setTimeout(() => {
                         reconnectTimerRef.current = null
                         ensureLiveSession().catch(() => {})
@@ -214,6 +233,7 @@ export function LiveSessionProvider({
 
         return () => {
             cancelled = true
+            shouldReconnectRef.current = false
             if (reconnectTimerRef.current) {
                 clearTimeout(reconnectTimerRef.current)
                 reconnectTimerRef.current = null
@@ -229,6 +249,7 @@ export function LiveSessionProvider({
                 abortControllerRef.current.abort()
             }
             // Close WebSocket
+            shouldReconnectRef.current = false
             wsRef.current?.close()
         }
     }, [])
@@ -421,6 +442,8 @@ export function LiveSessionProvider({
         detection,
         isConnected,
         liveSessionReady,
+        connectionState,
+        connectionError,
 
         // Actions
         prepareNotes,

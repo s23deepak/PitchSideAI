@@ -47,6 +47,7 @@ from models.game_state import GameState
 from models.session_persistence import SessionPersistence
 from streaming import StreamingVisionBridge
 from streaming.streaming_bridge import StreamingBridgeConfig, clean_model_answer
+from api.live_contract import parse_live_init_message
 
 # Setup production logging
 setup_logging(level=LOG_LEVEL, json_logs=True)
@@ -1235,11 +1236,20 @@ async def live_audio_ws(websocket: WebSocket):
     try:
         # Step 1: Init message
         init_data = await websocket.receive_text()
-        init = json.loads(init_data)
+        try:
+            init = parse_live_init_message(json.loads(init_data))
+        except (json.JSONDecodeError, ValueError) as exc:
+            await manager.send(websocket, {
+                "type": "error",
+                "message": "Invalid live session init payload",
+            })
+            await websocket.close(code=1008)
+            logger.warning("live_session_invalid_init", error=str(exc))
+            return
 
-        home_team = init.get("home_team", "Home Team")
-        away_team = init.get("away_team", "Away Team")
-        sport = init.get("sport", "soccer")
+        home_team = init.home_team
+        away_team = init.away_team
+        sport = init.sport
         match_session = build_match_session_key(home_team, away_team, sport)
         game_state = GameState(home_team=home_team, away_team=away_team)
 
