@@ -119,6 +119,7 @@ export default function FanLensBroadcast() {
   })
 
   const pendingQuestionRef = useRef(null)
+  const pendingQuestionTimeoutRef = useRef(null)
   const lastSpokenAnswerRef = useRef(null)
   const browserVoice = useBrowserSpeechSynthesis({
     enabled: voiceEnabled,
@@ -153,11 +154,22 @@ export default function FanLensBroadcast() {
     const handle = (e) => {
       if (isDismissing) return
       const detail = { ...e.detail }
+      if (
+        pendingQuestionRef.current?.requestId &&
+        detail.request_id &&
+        detail.request_id !== pendingQuestionRef.current.requestId
+      ) {
+        return
+      }
+      if (pendingQuestionTimeoutRef.current) {
+        clearTimeout(pendingQuestionTimeoutRef.current)
+        pendingQuestionTimeoutRef.current = null
+      }
       if (detail.source === 'streaming_vlm') {
         detail.source = 'video_qa'
       }
-      if (!detail.question && pendingQuestionRef.current) {
-        detail.question = pendingQuestionRef.current
+      if (!detail.question && pendingQuestionRef.current?.text) {
+        detail.question = pendingQuestionRef.current.text
       }
       detail.analyzing = false
       pendingQuestionRef.current = null
@@ -173,6 +185,14 @@ export default function FanLensBroadcast() {
     return () => window.removeEventListener('pitchsideai:qa_answer', handle)
   }, [browserVoice, isDismissing])
 
+  useEffect(() => {
+    return () => {
+      if (pendingQuestionTimeoutRef.current) {
+        clearTimeout(pendingQuestionTimeoutRef.current)
+      }
+    }
+  }, [])
+
   const handleDismiss = useCallback(() => {
     setIsDismissing(true)
     setSplitActive(false)
@@ -186,10 +206,27 @@ export default function FanLensBroadcast() {
     const text = q.trim()
     if (!text) return
     if (streamingStatus.hasVideo || streamingStatus.videoReady || streamingStatus.wsReady) {
-      pendingQuestionRef.current = text
-      setQaAnswer({ text: 'Watching the current video moment...', source: 'video_qa', analyzing: true, question: text })
+      const requestId = `fanlens-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      pendingQuestionRef.current = { text, requestId }
+      if (pendingQuestionTimeoutRef.current) {
+        clearTimeout(pendingQuestionTimeoutRef.current)
+      }
+      pendingQuestionTimeoutRef.current = setTimeout(() => {
+        const pending = pendingQuestionRef.current
+        if (!pending || pending.requestId !== requestId) return
+        pendingQuestionRef.current = null
+        pendingQuestionTimeoutRef.current = null
+        setQaAnswer({
+          text: 'Fan Lens did not receive a video answer in time. Keep the clip playing and ask again on the exact moment.',
+          source: 'video_qa',
+          analyzing: false,
+          question: text,
+          request_id: requestId,
+        })
+      }, 30000)
+      setQaAnswer({ text: 'Watching the current video moment...', source: 'video_qa', analyzing: true, question: text, request_id: requestId })
       setSplitActive(true)
-      window.dispatchEvent(new CustomEvent('pitchsideai:streaming_query', { detail: { text } }))
+      window.dispatchEvent(new CustomEvent('pitchsideai:streaming_query', { detail: { text, requestId } }))
       return
     }
     setQaAnswer({

@@ -60,6 +60,36 @@ export default function VideoCanvas({
     const pendingQueryRef = useRef(null)
     const framesSentRef = useRef(0)
 
+    const sendPendingQuery = useCallback(() => {
+        const pending = pendingQueryRef.current
+        if (!pending || wsRef.current?.readyState !== WebSocket.OPEN) return false
+        const timestampMs = Math.floor((videoRef.current?.currentTime || 0) * 1000)
+        wsRef.current.send(JSON.stringify({
+            type: 'query',
+            text: pending.text,
+            request_id: pending.requestId,
+            timestamp_ms: timestampMs,
+        }))
+        pendingQueryRef.current = null
+        return true
+    }, [])
+
+    const failPendingQuery = useCallback((message) => {
+        const pending = pendingQueryRef.current
+        if (!pending) return
+        pendingQueryRef.current = null
+        window.dispatchEvent(new CustomEvent('pitchsideai:qa_answer', {
+            detail: {
+                type: 'answer',
+                text: message,
+                source: 'video_qa',
+                question: pending.text,
+                request_id: pending.requestId,
+                timestamp_ms: Math.floor((videoRef.current?.currentTime || 0) * 1000),
+            },
+        }))
+    }, [])
+
     // Connect to video streaming WebSocket (separate from LiveSession /ws/live)
     const connectWebSocket = useCallback(() => {
         const wsUrl = backendWsUrl('/ws/video/streaming')
@@ -162,6 +192,7 @@ export default function VideoCanvas({
                     case 'error':
                         console.error('VideoCanvas error:', msg.message)
                         setConnectionState('disconnected')
+                        failPendingQuery(msg.message || 'Video analysis failed before the question could be answered.')
                         break
 
                     case 'ping':
@@ -177,6 +208,7 @@ export default function VideoCanvas({
             setConnectionState('disconnected')
             setIsStreaming(false)
             setWsReady(false)
+            failPendingQuery('Fan Lens lost the video analysis connection before it could answer.')
         }
 
         ws.onclose = () => {
@@ -184,7 +216,7 @@ export default function VideoCanvas({
             setWsReady(false)
             setConnectionState('disconnected')
         }
-    }, [homeTeam, awayTeam, sport, backend, chunkInterval, targetFps, onTacticalDetection, onCommentary])
+    }, [homeTeam, awayTeam, sport, backend, chunkInterval, targetFps, onTacticalDetection, onCommentary, failPendingQuery])
 
     useEffect(() => {
         onStreamingStatus?.({
@@ -229,14 +261,13 @@ export default function VideoCanvas({
                 framesSentRef.current = nextFramesSent
                 setFramesSent(nextFramesSent)
                 if (pendingQueryRef.current && nextFramesSent >= 2) {
-                    wsRef.current.send(JSON.stringify({ type: 'query', text: pendingQueryRef.current }))
-                    pendingQueryRef.current = null
+                    sendPendingQuery()
                 }
             }
         } catch (err) {
             console.error('Frame capture error:', err)
         }
-    }, [isPaused, videoReady, targetFps])
+    }, [isPaused, videoReady, targetFps, sendPendingQuery])
 
     const handleVideoSelect = (e) => {
         const file = e.target.files?.[0]
@@ -245,7 +276,7 @@ export default function VideoCanvas({
         setVideoReady(false)
         setFramesSent(0)
         framesSentRef.current = 0
-        pendingQueryRef.current = null
+        failPendingQuery('The selected video changed before Fan Lens could answer.')
 
         const url = URL.createObjectURL(file)
         if (videoRef.current) {
@@ -255,9 +286,13 @@ export default function VideoCanvas({
         onVideoReady?.(url) // notify parent so SplitScreen can mirror the video
     }
 
-    const startStreaming = () => {
+    const startStreaming = useCallback(() => {
         if (!videoRef.current || !videoFile) return
 
+        if (captureInterval.current) {
+            clearInterval(captureInterval.current)
+            captureInterval.current = null
+        }
         connectWebSocket()
         setIsStreaming(true)
         setIsPaused(false)
@@ -266,7 +301,7 @@ export default function VideoCanvas({
 
         const intervalMs = Math.round(1000 / targetFps)
         captureInterval.current = setInterval(captureLoop, intervalMs)
-    }
+    }, [captureLoop, connectWebSocket, targetFps, videoFile])
 
     const stopStreaming = () => {
         setIsStreaming(false)
@@ -277,7 +312,7 @@ export default function VideoCanvas({
         setConnectionState('disconnected')
         setFramesSent(0)
         framesSentRef.current = 0
-        pendingQueryRef.current = null
+        failPendingQuery('Video analysis stopped before Fan Lens could answer.')
 
         if (captureInterval.current) {
             clearInterval(captureInterval.current)
@@ -308,10 +343,13 @@ export default function VideoCanvas({
         const handleStreamingQuery = (event) => {
             const text = event.detail?.text?.trim()
             if (!text) return
-            pendingQueryRef.current = text
+            if (!videoFile && !videoReady) return
+            pendingQueryRef.current = {
+                text,
+                requestId: event.detail?.requestId,
+            }
             if (wsRef.current?.readyState === WebSocket.OPEN && framesSentRef.current >= 2) {
-                wsRef.current.send(JSON.stringify({ type: 'query', text }))
-                pendingQueryRef.current = null
+                sendPendingQuery()
                 return
             }
             if (!isStreaming && videoRef.current && videoFile && videoReady) {
@@ -324,7 +362,7 @@ export default function VideoCanvas({
 
         window.addEventListener('pitchsideai:streaming_query', handleStreamingQuery)
         return () => window.removeEventListener('pitchsideai:streaming_query', handleStreamingQuery)
-    }, [isStreaming, videoFile, videoReady, startStreaming])
+    }, [isStreaming, videoFile, videoReady, startStreaming, sendPendingQuery])
 
     useEffect(() => {
         return () => {

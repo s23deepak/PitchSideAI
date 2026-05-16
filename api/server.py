@@ -2214,6 +2214,8 @@ async def streaming_video_ws(websocket: WebSocket):
                     query_text = data.get("text", "").strip()
                     if not query_text:
                         continue
+                    request_id = data.get("request_id")
+                    query_timestamp_ms = data.get("timestamp_ms")
                     result = None
                     backend_source = "system"
                     if bridge:
@@ -2259,6 +2261,13 @@ async def streaming_video_ws(websocket: WebSocket):
                         "backend_source": backend_source,
                         "result": result,
                         "question": query_text,
+                        "request_id": request_id,
+                        "timestamp_ms": (
+                            result.get("end_timestamp_ms")
+                            if result and result.get("end_timestamp_ms") is not None
+                            else query_timestamp_ms
+                        ),
+                        "temporal_context": "limited",
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                     })
 
