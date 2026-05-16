@@ -1,6 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-
-const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
+import { backendWsUrl } from '@/lib/backend-url'
 
 /**
  * MatchInsight — Fan Lens trivia cards and guided Q&A discovery.
@@ -53,7 +52,7 @@ export default function MatchInsight({
 
     // Connect to WebSocket for trivia/answer updates
     const connectWebSocket = useCallback(() => {
-        const wsUrl = BACKEND.replace(/^http/, 'ws') + '/ws/live'
+        const wsUrl = backendWsUrl('/ws/live')
         const ws = new WebSocket(wsUrl)
         wsRef.current = ws
 

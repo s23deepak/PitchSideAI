@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-
-const BACKEND = import.meta.env.VITE_BACKEND_URL || ''
+import { backendUrl } from '@/lib/backend-url'
 
 const EVENT_ICONS = {
     tactical_detection: '🔍',
@@ -32,7 +31,7 @@ export default function EventFeed({ matchSession }) {
             params.set('match_session', matchSession)
         }
 
-        const es = new EventSource(`${BACKEND}/api/v1/events/stream?${params.toString()}`)
+        const es = new EventSource(backendUrl(`/api/v1/events/stream?${params.toString()}`))
         esRef.current = es
 
         es.onopen = () => setConnected(true)

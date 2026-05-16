@@ -10,8 +10,7 @@
  *   Level 2: vLLM frame-by-frame (always active with vLLM at localhost:8000)
  */
 import { useState, useCallback, useRef } from 'react'
-
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+import { backendUrl } from '@/lib/backend-url'
 
 function cleanAnswerText(text) {
     if (!text) return ''
@@ -98,7 +97,7 @@ export function useVideoQA() {
             formData.append('sport', sport)
             // Backend decides level — no user-facing selection
 
-            const response = await fetch(`${API_BASE}/api/v1/video/qa`, {
+            const response = await fetch(backendUrl('/api/v1/video/qa'), {
                 method: 'POST',
                 body: formData,
                 signal: controller.signal,

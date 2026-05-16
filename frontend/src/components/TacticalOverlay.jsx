@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-
-const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
+import { backendUrl } from '@/lib/backend-url'
 const MIN_FALLBACK_VIDEO_SAMPLES = 8
 const MAX_FALLBACK_FRAME_DIMENSION = 960
 const FALLBACK_FRAME_QUALITY = 0.72
@@ -231,7 +230,7 @@ export default function TacticalOverlay({ sport, matchSession, detection, setDet
     }
 
     const analyzeFrameB64 = async (frameB64, timestamp = null) => {
-        const res = await fetch(`${BACKEND}/api/v1/frame/analyze`, {
+        const res = await fetch(backendUrl('/api/v1/frame/analyze'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ frame_b64: frameB64, sport, timestamp, match_session: matchSession }),
@@ -270,7 +269,7 @@ export default function TacticalOverlay({ sport, matchSession, detection, setDet
         const mimeType = frames.file.type || 'video/mp4'
         const inferredFormat = mimeType.split('/')[1]?.replace('3gpp', 'three_gp') || 'mp4'
 
-        const res = await fetch(`${BACKEND}/api/v1/video/analyze`, {
+        const res = await fetch(backendUrl('/api/v1/video/analyze'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({

@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-
-const BACKEND = import.meta.env.VITE_BACKEND_URL || ''
+import { backendUrl, backendWsUrl } from '@/lib/backend-url'
 
 /* ── Push-to-Talk Component ─────────────────────────────────────────────────── */
 export default function PushToTalk({ matchReady, homeTeam, awayTeam, sport }) {
@@ -16,9 +15,7 @@ export default function PushToTalk({ matchReady, homeTeam, awayTeam, sport }) {
     useEffect(() => () => wsRef.current?.close(), [])
 
     const connectWS = () => {
-        const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
-        const host = BACKEND.replace(/^https?:\/\//, '') || window.location.host
-        const ws = new WebSocket(`${proto}://${host}/ws/live`)
+        const ws = new WebSocket(backendWsUrl('/ws/live'))
         wsRef.current = ws
 
         ws.onopen = () => {
@@ -90,7 +87,7 @@ export default function PushToTalk({ matchReady, homeTeam, awayTeam, sport }) {
         if (!transcript) return
         setStatus('speaking')
         try {
-            const res = await fetch(`${BACKEND}/api/v1/query`, {
+            const res = await fetch(backendUrl('/api/v1/query'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ query: transcript, home_team: homeTeam, away_team: awayTeam, sport }),

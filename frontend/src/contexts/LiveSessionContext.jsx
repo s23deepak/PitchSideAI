@@ -1,6 +1,5 @@
 import { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react'
-
-const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
+import { backendUrl, backendWsUrl } from '@/lib/backend-url'
 
 function buildMatchSessionKey(homeTeam, awayTeam, sport = 'soccer') {
     const slugify = (value) =>
@@ -84,7 +83,7 @@ export function LiveSessionProvider({
             return sessionPromiseRef.current
         }
 
-        const wsUrl = BACKEND.replace(/^http/, 'ws') + '/ws/live'
+        const wsUrl = backendWsUrl('/ws/live')
         const ws = new WebSocket(wsUrl)
         wsRef.current = ws
         activeSessionKeyRef.current = matchSession
@@ -277,7 +276,7 @@ export function LiveSessionProvider({
         }
 
         try {
-            const res = await fetch(`${BACKEND}/api/v1/commentary/prepare-notes`, {
+            const res = await fetch(backendUrl('/api/v1/commentary/prepare-notes'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -298,7 +297,7 @@ export function LiveSessionProvider({
             await new Promise((resolve, reject) => {
                 const eventsUrl = job.events_url?.startsWith('http')
                     ? job.events_url
-                    : `${BACKEND}${job.events_url}`
+                    : backendUrl(job.events_url)
                 const es = new EventSource(eventsUrl)
 
                 abortControllerRef.current.signal.addEventListener('abort', () => {

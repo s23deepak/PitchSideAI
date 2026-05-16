@@ -1,6 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-
-const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
+import { backendWsUrl } from '@/lib/backend-url'
 
 /* ── LiveVideoPlayer — Chunked Video Streaming ─────────────────────────────── */
 export default function LiveVideoPlayer({ matchSession, onChunkAnalyzed, onCommentary }) {
@@ -21,7 +20,7 @@ export default function LiveVideoPlayer({ matchSession, onChunkAnalyzed, onComme
 
     // Connect to WebSocket for chunked streaming
     const connectWebSocket = useCallback(() => {
-        const wsUrl = BACKEND.replace(/^http/, 'ws') + '/ws/video/stream'
+        const wsUrl = backendWsUrl('/ws/video/stream')
         const ws = new WebSocket(wsUrl)
         wsRef.current = ws
 

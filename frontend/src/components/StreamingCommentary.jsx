@@ -1,6 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-
-const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
+import { backendWsUrl } from '@/lib/backend-url'
 
 /**
  * StreamingCommentary — Hackathon Track 3 component.
@@ -40,7 +39,7 @@ export default function StreamingCommentary({
 
     // Connect to StreamingVisionBridge WebSocket
     const connectWebSocket = useCallback(() => {
-        const wsUrl = BACKEND.replace(/^http/, 'ws') + '/ws/video/streaming'
+        const wsUrl = backendWsUrl('/ws/video/streaming')
         const ws = new WebSocket(wsUrl)
         wsRef.current = ws
 

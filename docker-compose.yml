@@ -17,7 +17,13 @@ services:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      - LLM_BACKEND=${LLM_BACKEND:-vllm}
+      - VISION_LLM_BACKEND=${VISION_LLM_BACKEND:-vllm}
+      - COMMENTARY_NOTES_LLM_BACKEND=${COMMENTARY_NOTES_LLM_BACKEND:-vllm}
+      - VLLM_BASE_URL=${VLLM_BASE_URL:-http://host.docker.internal:8001}
       - LOG_LEVEL=INFO
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./logs:/app/logs
     networks:
@@ -27,11 +33,11 @@ services:
       - postgres
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=5).read()"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/ready', timeout=5).read()"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 5s
+      start_period: 30s
 
   notes-worker:
     build:
@@ -48,7 +54,13 @@ services:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      - LLM_BACKEND=${LLM_BACKEND:-vllm}
+      - VISION_LLM_BACKEND=${VISION_LLM_BACKEND:-vllm}
+      - COMMENTARY_NOTES_LLM_BACKEND=${COMMENTARY_NOTES_LLM_BACKEND:-vllm}
+      - VLLM_BASE_URL=${VLLM_BASE_URL:-http://host.docker.internal:8001}
       - LOG_LEVEL=INFO
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./logs:/app/logs
     networks:
@@ -60,12 +72,13 @@ services:
 
   frontend:
     build:
-      context: ./frontend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        VITE_BACKEND_URL: ""
+        VITE_API_URL: ""
     ports:
-      - "5173:5173"
-    environment:
-      - VITE_API_URL=http://backend:8080
+      - "3000:3000"
     networks:
       - pitchside
     depends_on:

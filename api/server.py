@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import Optional, Any, List, Dict
 import httpx
 
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, HTTPException, Depends, UploadFile, File, Form
+from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect, HTTPException, Depends, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import StreamingResponse, HTMLResponse, FileResponse, JSONResponse
@@ -27,6 +27,8 @@ from config import (
     AWS_REGION,
     LOG_LEVEL,
     PORT,
+    RATE_LIMIT_BURST,
+    RATE_LIMIT_RPM,
     STREAMING_BACKEND,
     VLLM_BASE_URL,
     VLLM_VISION_MODEL,
@@ -130,11 +132,39 @@ class HealthResponse(BaseModel):
     timestamp: str
 
 
+class ReadinessResponse(BaseModel):
+    """Readiness check response."""
+    status: str
+    service: str
+    version: str
+    timestamp: str
+    checks: Dict[str, Dict[str, Any]]
+
+
 # ── Dependency Injection ───────────────────────────────────────────────────────
 
-async def rate_limit_check(client_id: str = "anonymous") -> None:
-    """Rate limiting dependency."""
-    rate_limiter = get_rate_limiter(RateLimitConfig(requests_per_minute=100))
+def _client_id_from_request(request: Request) -> str:
+    api_key = request.headers.get("x-api-key")
+    if api_key:
+        return f"api-key:{api_key}"
+
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        return f"ip:{forwarded_for.split(',')[0].strip()}"
+
+    if request.client and request.client.host:
+        return f"ip:{request.client.host}"
+
+    return "anonymous"
+
+
+async def rate_limit_check(request: Request) -> None:
+    """Rate limit by API key when present, otherwise by client IP."""
+    client_id = _client_id_from_request(request)
+    rate_limiter = get_rate_limiter(RateLimitConfig(
+        requests_per_minute=RATE_LIMIT_RPM,
+        burst_size=RATE_LIMIT_BURST,
+    ))
     allowed, error_msg = await rate_limiter.check_rate_limit(client_id)
 
     if not allowed:
@@ -759,6 +789,66 @@ async def health_check():
         service="PitchSideAI",
         version="2.0.0",
         timestamp=datetime.utcnow().isoformat()
+    )
+
+
+@app.get("/ready", response_model=ReadinessResponse)
+async def readiness_check(response: Response):
+    """Readiness check for dependencies required to serve production traffic."""
+    import redis.asyncio as redis
+    from sqlalchemy import text
+    from config import LLM_BACKEND, OPENAI_API_KEY, REDIS_URL, VLLM_BASE_URL
+    from models.notes_jobs import engine
+
+    async def check_postgres() -> Dict[str, Any]:
+        try:
+            async with engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+            return {"status": "ready"}
+        except Exception as exc:
+            return {"status": "unready", "error": str(exc)}
+
+    async def check_redis() -> Dict[str, Any]:
+        client = redis.from_url(REDIS_URL, decode_responses=True)
+        try:
+            await client.ping()
+            return {"status": "ready"}
+        except Exception as exc:
+            return {"status": "unready", "error": str(exc)}
+        finally:
+            await client.aclose()
+
+    async def check_llm() -> Dict[str, Any]:
+        if LLM_BACKEND == "openai":
+            return {"status": "ready" if bool(OPENAI_API_KEY) else "unready", "backend": "openai"}
+        if LLM_BACKEND == "vllm":
+            try:
+                async with httpx.AsyncClient(timeout=2.0) as client:
+                    llm_response = await client.get(f"{VLLM_BASE_URL}/v1/models")
+                return {
+                    "status": "ready" if llm_response.status_code < 500 else "unready",
+                    "backend": "vllm",
+                    "status_code": llm_response.status_code,
+                }
+            except Exception as exc:
+                return {"status": "unready", "backend": "vllm", "error": str(exc)}
+        return {"status": "unready", "backend": LLM_BACKEND, "error": "Unsupported LLM_BACKEND"}
+
+    checks = {
+        "postgres": await check_postgres(),
+        "redis": await check_redis(),
+        "llm": await check_llm(),
+    }
+    is_ready = all(check["status"] == "ready" for check in checks.values())
+    if not is_ready:
+        response.status_code = 503
+
+    return ReadinessResponse(
+        status="ready" if is_ready else "unready",
+        service="PitchSideAI",
+        version="2.0.0",
+        timestamp=datetime.utcnow().isoformat(),
+        checks=checks,
     )
 
 

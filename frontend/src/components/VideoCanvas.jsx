@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
+import { backendWsUrl } from '@/lib/backend-url'
 
-const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
 const FAN_LENS_BACKENDS = new Set(['vllm', 'streaming_vlm', 'auto'])
 const DEFAULT_FAN_LENS_BACKEND = FAN_LENS_BACKENDS.has(import.meta.env.VITE_FAN_LENS_BACKEND)
     ? import.meta.env.VITE_FAN_LENS_BACKEND
@@ -62,7 +62,7 @@ export default function VideoCanvas({
 
     // Connect to video streaming WebSocket (separate from LiveSession /ws/live)
     const connectWebSocket = useCallback(() => {
-        const wsUrl = BACKEND.replace(/^http/, 'ws') + '/ws/video/streaming'
+        const wsUrl = backendWsUrl('/ws/video/streaming')
         const ws = new WebSocket(wsUrl)
         wsRef.current = ws
 
