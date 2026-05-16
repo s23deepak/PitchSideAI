@@ -2496,6 +2496,7 @@ async def get_commentary_notes(match_session: str):
     # Convert NotesStore to dict for frontend
     notes_data = {
         "status": "ready",
+        "markdown_notes": getattr(notes_store, "raw_markdown", "") or "",
         "notes": {
             "beats": [
                 {

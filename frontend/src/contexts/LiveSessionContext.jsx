@@ -32,6 +32,7 @@ export function LiveSessionProvider({
     const [buildStatus, setBuildStatus] = useState(null)
     const [buildProgress, setBuildProgress] = useState('')
     const [liveLogs, setLiveLogs] = useState([])
+    const [notesJob, setNotesJob] = useState(null)
 
     // Live session state
     const [liveCommentary, setLiveCommentary] = useState([])
@@ -53,11 +54,53 @@ export function LiveSessionProvider({
     const pendingSettingsRef = useRef(null)
     const pendingLanguageRef = useRef(null)
 
+    const addLog = useCallback((message, type = 'info') => {
+        const now = new Date()
+        const time = now.toLocaleTimeString('en-GB', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
+        setLiveLogs(prev => [...prev, { time, message, type }])
+    }, [])
+
+    const applyNotesResult = useCallback((data, message = 'Commentary notes ready for review.') => {
+        const normalized = {
+            ...data,
+            beats: data.beats || data.notes?.beats || [],
+            beat_count: data.beat_count ?? data.notes?.beats?.length ?? 0,
+            markdown_notes: data.markdown_notes || '',
+        }
+        setCommentaryData(normalized)
+        setBuildStatus('ready')
+        setBuildProgress(1.0)
+        addLog(`COMPLETE: ${message}`, 'success')
+    }, [addLog])
+
     // Initialize match session when teams change
     useEffect(() => {
         const key = buildMatchSessionKey(homeTeam, awayTeam, sport)
         setMatchSession(key)
     }, [homeTeam, awayTeam, sport])
+
+    const loadPreparedNotes = useCallback(async (sessionKey = matchSession) => {
+        if (!sessionKey) return false
+
+        try {
+            const res = await fetch(backendUrl(`/api/notes/${encodeURIComponent(sessionKey)}`))
+            if (res.status === 404) return false
+            if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+            const data = await res.json()
+            if (data?.status === 'ready') {
+                applyNotesResult(data, 'Recovered prepared notes from durable storage.')
+                return true
+            }
+        } catch (err) {
+            console.warn('[LiveSession] Prepared notes recovery failed:', err)
+        }
+        return false
+    }, [applyNotesResult, matchSession])
+
+    useEffect(() => {
+        if (!matchSession || buildingNotes || commentaryData) return
+        loadPreparedNotes(matchSession)
+    }, [matchSession, buildingNotes, commentaryData, loadPreparedNotes])
 
     // Ensure live WebSocket session
     const ensureLiveSession = useCallback(async () => {
@@ -260,6 +303,7 @@ export function LiveSessionProvider({
         setBuildProgress('Starting...')
         setCommentaryData(null)
         setLiveLogs([])
+        setNotesJob(null)
 
         // Cancel any previous request
         if (abortControllerRef.current) {
@@ -269,11 +313,7 @@ export function LiveSessionProvider({
         // Create new abort controller
         abortControllerRef.current = new AbortController()
 
-        const addLog = (message, type = 'info') => {
-            const now = new Date()
-            const time = now.toLocaleTimeString('en-GB', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
-            setLiveLogs(prev => [...prev, { time, message, type }])
-        }
+        let queuedJob = null
 
         try {
             const res = await fetch(backendUrl('/api/v1/commentary/prepare-notes'), {
@@ -292,6 +332,8 @@ export function LiveSessionProvider({
             }
 
             const job = await res.json()
+            queuedJob = job
+            setNotesJob(job)
             addLog(`QUEUED: Notes job ${job.job_id}`, job.created ? 'success' : 'info')
 
             await new Promise((resolve, reject) => {
@@ -309,11 +351,7 @@ export function LiveSessionProvider({
                     try {
                         const event = JSON.parse(message.data)
                         if (event.phase === 'complete' && event.result) {
-                            const data = event.result
-                            setCommentaryData(data)
-                            setBuildStatus('ready')
-                            setBuildProgress(1.0)
-                            addLog('COMPLETE: Commentary notes ready for review.', 'success')
+                            applyNotesResult(event.result)
                             es.close()
                             resolve()
                         } else if (event.phase === 'error') {
@@ -343,6 +381,20 @@ export function LiveSessionProvider({
                 addLog('Cancelled by user', 'info')
             } else {
                 console.error('[LiveSession] Notes generation failed:', err)
+                if (queuedJob?.status_url) {
+                    try {
+                        const statusRes = await fetch(backendUrl(queuedJob.status_url))
+                        if (statusRes.ok) {
+                            const status = await statusRes.json()
+                            if (status.result) {
+                                applyNotesResult(status.result, 'Recovered completed notes after stream interruption.')
+                                return
+                            }
+                        }
+                    } catch (statusErr) {
+                        console.warn('[LiveSession] Notes job status recovery failed:', statusErr)
+                    }
+                }
                 setBuildStatus('error')
                 setBuildProgress(err.message || 'Generation failed')
                 addLog(`FAILED: ${err.message}`, 'error')
@@ -350,7 +402,7 @@ export function LiveSessionProvider({
         } finally {
             setBuildingNotes(false)
         }
-    }, [sport])
+    }, [addLog, applyNotesResult, sport])
 
     // Send match event
     const sendMatchEvent = useCallback(async (description) => {
@@ -435,6 +487,7 @@ export function LiveSessionProvider({
         buildStatus,
         buildProgress,
         liveLogs,
+        notesJob,
 
         // Live session
         liveCommentary,
@@ -446,6 +499,7 @@ export function LiveSessionProvider({
 
         // Actions
         prepareNotes,
+        loadPreparedNotes,
         sendMatchEvent,
         sendTacticalDetection,
         sendQuery,

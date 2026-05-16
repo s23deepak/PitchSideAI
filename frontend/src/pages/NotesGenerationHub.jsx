@@ -359,7 +359,9 @@ export default function NotesGenerationHub() {
                             <div className="notes-hub-meta">
                                 <span className="notes-hub-meta-item">
                                     <span className="material-icons">schedule</span>
-                                    {(notes.preparation_time_ms / 1000).toFixed(1)}s
+                                    {Number.isFinite(notes.preparation_time_ms)
+                                        ? `${(notes.preparation_time_ms / 1000).toFixed(1)}s`
+                                        : 'Recovered'}
                                 </span>
                                 <span className="notes-hub-meta-item">
                                     <span className="material-icons">format_list_numbered</span>
