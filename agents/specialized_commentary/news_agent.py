@@ -11,7 +11,8 @@ import asyncio
 import logging
 from agents.base import BaseAgent
 from data_sources import DataCache
-from data_sources.factory import get_retriever, get_search_service
+from data_sources.factory import get_brightdata_mcp_retriever, get_retriever, get_search_service
+from quality.evidence import filter_allowed_search_results
 
 logger = logging.getLogger(__name__)
 
@@ -55,8 +56,8 @@ class NewsAgent(BaseAgent):
 
         # Gather news for both teams in parallel
         home_news, away_news = await asyncio.gather(
-            self.get_team_news(home_team),
-            self.get_team_news(away_team),
+            self.get_team_news(home_team, opponent=away_team),
+            self.get_team_news(away_team, opponent=home_team),
         )
 
         duration_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
@@ -83,7 +84,7 @@ class NewsAgent(BaseAgent):
             "timestamp": datetime.utcnow().isoformat(),
         }
 
-    async def get_team_news(self, team_name: str) -> Dict[str, Any]:
+    async def get_team_news(self, team_name: str, opponent: str = "") -> Dict[str, Any]:
         """
         Get comprehensive team news from real sources.
 
@@ -109,27 +110,60 @@ class NewsAgent(BaseAgent):
             if item.get("headline")
         ]
 
-        # Fetch team news via Tavily search
+        rejected_evidence: list[dict[str, Any]] = []
+        brightdata_status = {"available": False, "degraded_count": 0, "reason": ""}
+
+        # Fetch team news via Tavily search, then scrape only allowlisted URLs.
         if self.search_service and self.search_service.is_available:
             try:
                 search_result = await self.search_service.search_team_news(
                     team_name, self.sport
                 )
                 if search_result.get("results"):
+                    accepted_results, rejected = filter_allowed_search_results(
+                        search_result.get("results", []),
+                        home_team=team_name,
+                        away_team=opponent,
+                        topic="team_news",
+                        max_results=4,
+                    )
+                    rejected_evidence.extend(item.to_dict() for item in rejected)
+                    brightdata = get_brightdata_mcp_retriever()
+                    scrape_result = await brightdata.scrape_search_results(
+                        accepted_results,
+                        home_team=team_name,
+                        away_team=opponent,
+                        topic="team_news",
+                        limit=2,
+                    )
+                    brightdata_status = {
+                        "available": scrape_result.get("available", False),
+                        "degraded_count": len(scrape_result.get("degraded", [])),
+                        "reason": (scrape_result.get("degraded") or [{}])[0].get("reason", ""),
+                    }
+                    rejected_evidence.extend(scrape_result.get("rejected_evidence", []))
+
+                    scraped_by_url = {
+                        item.get("url"): item
+                        for item in scrape_result.get("scraped", [])
+                        if item.get("url")
+                    }
                     tavily_items = [
                         {
                             "title": r.get("title", ""),
-                            "content": r.get("content", "")[:200],
+                            "content": (scraped_by_url.get(r.get("url"), {}).get("content") or r.get("content", ""))[:500],
                             "source": r.get("source", ""),
                             "url": r.get("url", ""),
+                            "data_source": "brightdata_mcp" if r.get("url") in scraped_by_url else "tavily_search",
+                            "validation_status": "accepted",
                         }
-                        for r in search_result.get("results", [])[:5]
+                        for r in accepted_results
                     ]
                     news_items = self._dedupe_news(news_items + tavily_items)
             except Exception as exc:
                 logger.warning("Tavily news search failed for %s: %s", team_name, exc)
 
-        lineup_status = await self._get_lineup_confirmation_status(team_name)
+        lineup_status = await self._get_lineup_confirmation_status(team_name, opponent)
 
         # Synthesize into news report
         news_synthesis_prompt = f"""As an elite {self.sport} analyst, create a concise team news summary for {team_name}:
@@ -148,11 +182,13 @@ Provide:
 
 Keep to 3-4 sentences."""
 
-        synthesis = await self.call_llm(
-            prompt=news_synthesis_prompt,
-            temperature=0.2,
-            max_tokens=120,
-        )
+        synthesis = ""
+        if news_items or injuries:
+            synthesis = await self.call_llm(
+                prompt=news_synthesis_prompt,
+                temperature=0.2,
+                max_tokens=120,
+            )
 
         return {
             "team_name": team_name,
@@ -163,6 +199,8 @@ Keep to 3-4 sentences."""
             "synthesis": synthesis,
             "last_updated": datetime.utcnow().isoformat(),
             "data_source": "combined" if news_items or injuries else "unavailable",
+            "brightdata_status": brightdata_status,
+            "rejected_evidence": rejected_evidence,
         }
 
     def _format_news_items(self, news_items: List[Dict[str, str]]) -> str:
@@ -186,11 +224,20 @@ Keep to 3-4 sentences."""
             for inj in injuries[:4]
         )
 
-    async def _get_lineup_confirmation_status(self, team_name: str) -> Dict[str, Any]:
+    async def _get_lineup_confirmation_status(self, team_name: str, opponent: str = "") -> Dict[str, Any]:
         """Infer lineup certainty from web search results."""
         if self.search_service and self.search_service.is_available:
             try:
                 search_result = await self.search_service.search_lineup(team_name, self.sport)
+                accepted_results, _ = filter_allowed_search_results(
+                    search_result.get("results", []) or [],
+                    home_team=team_name,
+                    away_team=opponent,
+                    topic="lineup",
+                    max_results=1,
+                )
+                if not accepted_results:
+                    return {"status": "unavailable", "summary": ""}
                 answer = (search_result.get("answer") or "").lower()
                 if answer:
                     if "confirmed" in answer or "official lineup" in answer:

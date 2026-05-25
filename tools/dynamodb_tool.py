@@ -24,9 +24,17 @@ def _slugify(value: str) -> str:
     return cleaned.strip("-") or "unknown"
 
 
-def build_match_session_key(home_team: str, away_team: str, sport: str = "soccer") -> str:
+def build_match_session_key(
+    home_team: str,
+    away_team: str,
+    sport: str = "soccer",
+    competition: str | None = None,
+) -> str:
     """Build a deterministic DynamoDB partition key for a match session."""
-    return f"{_slugify(sport)}#{_slugify(home_team)}#vs#{_slugify(away_team)}"
+    key = f"{_slugify(sport)}#{_slugify(home_team)}#vs#{_slugify(away_team)}"
+    if competition:
+        key = f"{key}#{_slugify(competition)}"
+    return key
 
 async def write_event(
     event_type: str,

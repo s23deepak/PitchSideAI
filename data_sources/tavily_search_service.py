@@ -14,6 +14,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 from data_sources.cache import DataCache
+from data_sources.retrieval_audit import audit_retrieval, monotonic_ms
 
 logger = logging.getLogger(__name__)
 
@@ -108,11 +109,46 @@ class TavilySearchService:
         cache_key = f"{query}|{search_depth}|{topic}"
         cached = self.cache.get(cache_namespace, cache_key)
         if cached:
-            return {**cached, "source": "cache"}
+            result = {**cached, "source": "cache"}
+            await audit_retrieval(
+                provider="tavily",
+                method="search",
+                params={
+                    "query": query,
+                    "search_depth": search_depth,
+                    "topic": topic,
+                    "max_results": max_results,
+                    "include_answer": include_answer,
+                    "cache_namespace": cache_namespace,
+                    "cache_hit": True,
+                },
+                result=result,
+                duration_ms=0,
+                source="search_service",
+            )
+            return result
 
         if not self._ensure_client():
-            return self._empty(query)
+            result = self._empty(query)
+            await audit_retrieval(
+                provider="tavily",
+                method="search",
+                params={
+                    "query": query,
+                    "search_depth": search_depth,
+                    "topic": topic,
+                    "max_results": max_results,
+                    "include_answer": include_answer,
+                    "cache_namespace": cache_namespace,
+                    "available": False,
+                },
+                result=result,
+                duration_ms=0,
+                source="search_service",
+            )
+            return result
 
+        start_ms = monotonic_ms()
         try:
             response = await asyncio.to_thread(
                 self._client.search,
@@ -129,10 +165,43 @@ class TavilySearchService:
                 "source": "tavily",
             }
             self.cache.set(cache_namespace, cache_key, result)
+            await audit_retrieval(
+                provider="tavily",
+                method="search",
+                params={
+                    "query": query,
+                    "search_depth": search_depth,
+                    "topic": topic,
+                    "max_results": max_results,
+                    "include_answer": include_answer,
+                    "cache_namespace": cache_namespace,
+                    "cache_hit": False,
+                },
+                result=result,
+                duration_ms=monotonic_ms() - start_ms,
+                source="search_service",
+            )
             return result
         except Exception as exc:
             logger.error("Tavily search failed for '%s': %s", query, exc)
-            return self._empty(query)
+            result = self._empty(query)
+            await audit_retrieval(
+                provider="tavily",
+                method="search",
+                params={
+                    "query": query,
+                    "search_depth": search_depth,
+                    "topic": topic,
+                    "max_results": max_results,
+                    "include_answer": include_answer,
+                    "cache_namespace": cache_namespace,
+                },
+                result=result,
+                error=exc,
+                duration_ms=monotonic_ms() - start_ms,
+                source="search_service",
+            )
+            return result
 
     async def search_langchain(
         self,
@@ -145,20 +214,54 @@ class TavilySearchService:
         """
         cached = self.cache.get(cache_namespace, query)
         if cached:
+            await audit_retrieval(
+                provider="tavily",
+                method="search_langchain",
+                params={"query": query, "cache_namespace": cache_namespace, "cache_hit": True},
+                result=cached,
+                duration_ms=0,
+                source="search_service",
+            )
             return cached
 
         tool = self._ensure_lc_tool()
         if not tool:
+            await audit_retrieval(
+                provider="tavily",
+                method="search_langchain",
+                params={"query": query, "cache_namespace": cache_namespace, "available": False},
+                result=[],
+                duration_ms=0,
+                source="search_service",
+            )
             return []
 
+        start_ms = monotonic_ms()
         try:
             results = await asyncio.to_thread(tool.invoke, query)
             if isinstance(results, str):
                 results = [{"content": results, "url": ""}]
             self.cache.set(cache_namespace, query, results)
+            await audit_retrieval(
+                provider="tavily",
+                method="search_langchain",
+                params={"query": query, "cache_namespace": cache_namespace, "cache_hit": False},
+                result=results,
+                duration_ms=monotonic_ms() - start_ms,
+                source="search_service",
+            )
             return results
         except Exception as exc:
             logger.error("LangChain Tavily search failed: %s", exc)
+            await audit_retrieval(
+                provider="tavily",
+                method="search_langchain",
+                params={"query": query, "cache_namespace": cache_namespace},
+                result=[],
+                error=exc,
+                duration_ms=monotonic_ms() - start_ms,
+                source="search_service",
+            )
             return []
 
     # ── domain-specific helpers ───────────────────────────────────────────────

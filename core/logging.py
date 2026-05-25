@@ -78,21 +78,31 @@ class AppLogger:
     def __init__(self, name: str):
         self.logger = structlog.get_logger(name)
 
-    def info(self, message: str, **kwargs):
+    def _format_message(self, message: str, args: tuple) -> str:
+        """Support stdlib-style positional log args without crashing structlog."""
+        if not args:
+            return message
+        try:
+            return message % args
+        except Exception:
+            joined = " ".join(str(arg) for arg in args)
+            return f"{message} {joined}".strip()
+
+    def info(self, message: str, *args, **kwargs):
         """Log info level message."""
-        self.logger.info(message, **kwargs)
+        self.logger.info(self._format_message(message, args), **kwargs)
 
-    def warning(self, message: str, **kwargs):
+    def warning(self, message: str, *args, **kwargs):
         """Log warning level message."""
-        self.logger.warning(message, **kwargs)
+        self.logger.warning(self._format_message(message, args), **kwargs)
 
-    def error(self, message: str, exc_info: bool = False, **kwargs):
+    def error(self, message: str, *args, exc_info: bool = False, **kwargs):
         """Log error level message."""
-        self.logger.error(message, exc_info=exc_info, **kwargs)
+        self.logger.error(self._format_message(message, args), exc_info=exc_info, **kwargs)
 
-    def debug(self, message: str, **kwargs):
+    def debug(self, message: str, *args, **kwargs):
         """Log debug level message."""
-        self.logger.debug(message, **kwargs)
+        self.logger.debug(self._format_message(message, args), **kwargs)
 
     def critical(self, message: str, **kwargs):
         """Log critical level message."""

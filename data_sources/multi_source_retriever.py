@@ -20,6 +20,7 @@ import os
 import time
 from typing import Any, Dict, List, Optional
 from data_sources.cache import DataCache
+from data_sources.retrieval_audit import audit_retrieval, monotonic_ms
 
 logger = logging.getLogger(__name__)
 
@@ -183,10 +184,29 @@ class MultiSourceRetriever:
     ):
         """Call a retriever method while respecting rate limits."""
         await rate_limiter.acquire()
+        start_ms = monotonic_ms()
+        params = {
+            "args": list(args),
+            "kwargs": kwargs,
+        }
         try:
             result = await getattr(retriever, method)(*args, **kwargs)
+            await audit_retrieval(
+                provider=name,
+                method=method,
+                params=params,
+                result=result,
+                duration_ms=monotonic_ms() - start_ms,
+            )
             return result
         except Exception as exc:
+            await audit_retrieval(
+                provider=name,
+                method=method,
+                params=params,
+                error=exc,
+                duration_ms=monotonic_ms() - start_ms,
+            )
             logger.warning("%s.%s failed: %s", name, method, exc)
             raise
 

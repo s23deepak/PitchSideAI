@@ -63,9 +63,8 @@ Screen references now live in the React layouts and Playwright coverage.
 
 ### LLM Backend
 Set `LLM_BACKEND` in `.env`:
-- `ollama` — local dev (qwen2.5:3b, qwen2.5vl:3b) — **default for development**
 - `openai` — cloud (gpt-4o-mini)
-- `vllm` — self-hosted (Qwen2.5-VL via `VLLM_BASE_URL`)
+- `vllm` — local/self-hosted default (Qwen2.5/Qwen2.5-VL via `VLLM_BASE_URL`)
 
 `COMMENTARY_NOTES_LLM_BACKEND` overrides for notes agents only.
 `VISION_LLM_BACKEND` overrides for vision agents only.
@@ -136,7 +135,7 @@ frontend/src/layouts/                 # Core screen layout references
 
 - All code changes validated by the relevant agent from `.Codex/agents/`
 - UI changes: always run `ui-design-auditor` after, `frontend-test-agent` to verify
-- No Bedrock/boto3 — use ollama/openai/vllm backends only
+- No Bedrock/boto3 — use openai/vllm backends only
 - No placeholder statistics in LLM prompts — enforced by guardrail in `agents/base.py`
 - `asyncio.gather()` for parallel agent execution — never block the event loop
 - `game_state.to_context_string()` prepended to every commentary LLM prompt

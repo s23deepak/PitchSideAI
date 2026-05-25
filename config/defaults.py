@@ -27,7 +27,7 @@ USE_JSON_LOGS = True
 LOG_FILE = "logs/pitchside.log"
 
 # ── LLM Backend ───────────────────────────────────────────────────────────────
-# Options: "openai", "vllm"
+# Options: "openai", "vllm", "wafer"
 # Streaming/video pipeline uses: "streaming_vlm", "vllm", "auto"
 LLM_BACKEND = "vllm"
 VISION_LLM_BACKEND = "vllm"
@@ -36,6 +36,14 @@ STREAMING_BACKEND = "vllm"  # Default video/streaming inference backend
 # ── OpenAI ────────────────────────────────────────────────────────────────────
 OPENAI_MODEL = "gpt-4o-mini"
 OPENAI_EMBED_MODEL = "text-embedding-3-small"
+
+# ── WAFER (OpenAI-compatible) ────────────────────────────────────────────────
+WAFER_BASE_URL = ""
+WAFER_MODEL = ""
+
+# ── BrightData MCP (remote scraping, token from .env only) ───────────────────
+BRIGHTDATA_MCP_BASE_URL = "https://mcp.brightdata.com/mcp"
+BRIGHTDATA_MCP_GROUPS = "advanced_scraping"
 
 # ── vLLM (Self-Hosted, OpenAI-compatible) ────────────────────────────────────
 # Point VLLM_BASE_URL at your running vLLM server
@@ -65,6 +73,16 @@ RATE_LIMIT_BURST = 10
 # ── Concurrency ───────────────────────────────────────────────────────────────
 MAX_CONCURRENT_TASKS = 20
 REQUEST_TIMEOUT_SECONDS = 300
+COMMENTARY_NOTES_WAFER_MAX_CONCURRENCY = 2
+
+# ── Retrieval / LLM Debug Audits ─────────────────────────────────────────────
+# Disabled by default. When enabled, writes per-provider retrieval responses and
+# LLM prompts/responses under RETRIEVAL_DEBUG_DIR for offline quality inspection.
+RETRIEVAL_DEBUG_DUMP = False
+LLM_DEBUG_DUMP = False
+RETRIEVAL_DEBUG_DIR = "debug/retrievals"
+RETRIEVAL_DEBUG_INCLUDE_RAW = True
+RETRIEVAL_DEBUG_MAX_STRING_CHARS = 20000
 
 # ── Production Notes Jobs ─────────────────────────────────────────────────────
 REDIS_URL = "redis://localhost:6379/0"

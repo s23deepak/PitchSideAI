@@ -38,8 +38,7 @@ Update: `/ws/live` now accepts explicit `tactical_detection` messages, broadcast
 Recommended model split:
 - Cloud production: Bedrock
 - Self-hosted production: vLLM with `Qwen/Qwen2.5-VL-7B-Instruct`
-- Lightweight local development: Ollama with `qwen2.5:3b` and `qwen2.5vl:3b`
-- Mixed local development: `COMMENTARY_NOTES_LLM_BACKEND=ollama`, `VISION_LLM_BACKEND=vllm`, `OLLAMA_MODEL=qwen2.5:3b`, `VLLM_BASE_URL=http://localhost:8000`, `VLLM_VISION_MODEL=Qwen/Qwen2.5-VL-3B-Instruct-AWQ`
+- Local/self-hosted development: vLLM with `VLLM_MODEL=Qwen/Qwen2.5-7B-Instruct`, `VISION_LLM_BACKEND=vllm`, `VLLM_BASE_URL=http://localhost:8000`, `VLLM_VISION_MODEL=Qwen/Qwen2.5-VL-3B-Instruct-AWQ`
 
 ### Option 1: Docker Compose (Local Development)
 

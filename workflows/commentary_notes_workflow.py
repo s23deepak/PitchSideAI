@@ -10,9 +10,22 @@ from typing import Dict, List, Any, Optional, Callable, Awaitable
 from datetime import datetime
 import asyncio
 import logging
+from pathlib import Path
+import sys
 from enum import Enum
 
 logger = logging.getLogger(__name__)
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+
+def _ensure_project_root_on_path() -> None:
+    project_root = str(PROJECT_ROOT)
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
 
 # Type alias for the optional progress callback
 ProgressCallback = Optional[Callable[[str, str, Dict[str, Any]], Awaitable[None]]]
@@ -43,6 +56,7 @@ class CommentaryNotesState:
     home_team: str
     away_team: str
     sport: str = "soccer"
+    competition: str = ""
     match_datetime: str = ""
     venue: str = ""
     venue_lat: float = 0.0
@@ -66,6 +80,11 @@ class CommentaryNotesState:
     markdown_notes: Optional[str] = None
     json_structure: Optional[Dict[str, Any]] = None
     notes_store: Optional[Any] = None  # NotesStore with O(1) lookup
+    source_provenance: Dict[str, Any] = field(default_factory=dict)
+    quality_report: Dict[str, Any] = field(default_factory=dict)
+    vlm_context: Dict[str, Any] = field(default_factory=dict)
+    notes_version: int = 0
+    vlm_context_version: int = 0
 
     # === Error Tracking ===
     errors: List[str] = field(default_factory=list)
@@ -85,6 +104,20 @@ class CommentaryNotesWorkflow:
     def __init__(self):
         """Initialize workflow."""
         self.state: Optional[CommentaryNotesState] = None
+        self._progress_callback: ProgressCallback = None
+
+    async def _emit(self, phase: str, message: str, **extra: Any) -> None:
+        if self._progress_callback:
+            await self._progress_callback(phase, message, extra)
+
+    def _ensure_cache(self):
+        from data_sources import DataCache
+
+        cache = getattr(self, "_cache", None)
+        if cache is None:
+            cache = DataCache(ttl_seconds=1800)
+            self._cache = cache
+        return cache
 
     async def initialize_workflow(self, state: CommentaryNotesState) -> CommentaryNotesState:
         """Initialize workflow state and extract final contextual parameters sequentially."""
@@ -98,6 +131,8 @@ class CommentaryNotesWorkflow:
         logger.info(
             f"Workflow {state.workflow_id} initialized for {state.home_team} vs {state.away_team}"
         )
+        await self._emit("initialize", "Fetching match schedule and venue...")
+        self._ensure_cache()
         
         # Sequentially populate missing venue and datetime data from ESPN before launching the parallel multi-agents
         if not state.match_datetime or not state.venue:
@@ -111,6 +146,7 @@ class CommentaryNotesWorkflow:
             )
             state.venue = state.venue or ctx.get("venue") or "Unknown"
 
+        await self._emit("initialize", "Match context ready", done=True)
         return state
 
     async def gather_initial_context(self, state: CommentaryNotesState) -> CommentaryNotesState:
@@ -120,17 +156,15 @@ class CommentaryNotesWorkflow:
         - WeatherContextAgent → weather_context
         - HistoricalContextAgent → historical_context
         """
+        _ensure_project_root_on_path()
         from agents.specialized_commentary.news_agent import NewsAgent
         from agents.specialized_commentary.weather_context_agent import WeatherContextAgent
         from agents.specialized_commentary.historical_context_agent import HistoricalContextAgent
-        from data_sources import DataCache
-
         logger.info(f"[{state.workflow_id}] Phase 1: Gathering initial context...")
         state.phase = WorkflowPhase.INITIAL_CONTEXT
         state.in_progress_agents = ["news", "weather", "historical"]
 
-        cache = DataCache(ttl_seconds=1800)
-        self._cache = cache  # share cache across phases
+        cache = self._ensure_cache()
 
         async def _fetch_news():
             try:
@@ -175,11 +209,56 @@ class CommentaryNotesWorkflow:
         logger.info(f"[{state.workflow_id}] Phase 1 complete")
         return state
 
+    async def parallel_research(self, state: CommentaryNotesState) -> CommentaryNotesState:
+        """LangGraph node: run independent notes research branches concurrently."""
+        await self._emit(
+            "parallel_phase",
+            "Running parallel research phase...",
+            agents=["news", "weather", "historical", "player_research", "team_form"],
+        )
+
+        async def _gather_context():
+            result = await self.gather_initial_context(state)
+            await self._emit("initial_context", "Initial context gathered (3 agents)", done=True)
+            return result
+
+        async def _research_squads():
+            result = await self.research_squads(state)
+            home_count = len(result.player_research.get("home_team", {}).get("players", []))
+            away_count = len(result.player_research.get("away_team", {}).get("players", []))
+            await self._emit(
+                "squad_research",
+                f"Squads researched ({home_count} + {away_count} players)",
+                done=True,
+            )
+            return result
+
+        async def _analyze_team_form():
+            _ensure_project_root_on_path()
+            from agents.specialized_commentary.team_form_agent import TeamFormAgent
+
+            try:
+                state.phase = WorkflowPhase.FORM_ANALYSIS
+                agent = TeamFormAgent(sport=state.sport, cache=self._ensure_cache())
+                state.team_form = await agent.analyze_both_teams(state.home_team, state.away_team)
+                state.completed_agents.append("team_form")
+                await self._emit("form_analysis", "Team form analyzed", done=True)
+            except Exception as e:
+                state.errors.append(f"TeamFormAgent: {e}")
+                state.warnings.append("Form data unavailable — skipping")
+                logger.warning(f"[{state.workflow_id}] TeamFormAgent failed: {e}")
+            return state
+
+        await asyncio.gather(_gather_context(), _research_squads(), _analyze_team_form())
+        await self._emit("parallel_phase", "Parallel research phase complete", done=True)
+        return state
+
     async def research_squads(self, state: CommentaryNotesState) -> CommentaryNotesState:
         """
         Phase 2: Research both squads in parallel.
         - PlayerResearchAgent.research_squad_pair(home, away) → player_research
         """
+        _ensure_project_root_on_path()
         from agents.specialized_commentary.player_research_agent import PlayerResearchAgent
 
         logger.info(f"[{state.workflow_id}] Phase 2: Researching squads...")
@@ -219,6 +298,7 @@ class CommentaryNotesWorkflow:
         Note: TeamForm can run immediately (only needs team names), but MatchupAnalysis
         must wait for player_research to complete (Phase 2).
         """
+        _ensure_project_root_on_path()
         from agents.specialized_commentary.team_form_agent import TeamFormAgent
         from agents.specialized_commentary.matchup_analysis_agent import MatchupAnalysisAgent
 
@@ -257,16 +337,38 @@ class CommentaryNotesWorkflow:
         state.in_progress_agents = []
         return state
 
+    async def analyze_matchups(self, state: CommentaryNotesState) -> CommentaryNotesState:
+        """LangGraph node: run matchup analysis after squad research is available."""
+        await self._emit("matchup_analysis", "Analyzing key matchups...", agents=["matchup_analysis"])
+        _ensure_project_root_on_path()
+        from agents.specialized_commentary.matchup_analysis_agent import MatchupAnalysisAgent
+
+        try:
+            state.phase = WorkflowPhase.TACTICAL_PREPARATION
+            home_players = state.player_research.get("home_team", {}).get("players", [])
+            away_players = state.player_research.get("away_team", {}).get("players", [])
+            agent = MatchupAnalysisAgent(sport=state.sport)
+            state.matchup_analysis = await agent.analyze_key_matchups(home_players, away_players)
+            state.completed_agents.append("matchup_analysis")
+            await self._emit("matchup_analysis", "Key matchups analyzed", done=True)
+        except Exception as e:
+            state.errors.append(f"MatchupAnalysisAgent: {e}")
+            state.warnings.append("Matchup analysis unavailable — skipping")
+            logger.warning(f"[{state.workflow_id}] MatchupAnalysisAgent failed: {e}")
+        return state
+
     async def synthesize_notes(self, state: CommentaryNotesState) -> CommentaryNotesState:
         """
         Phase 4: Synthesize all agent outputs into structured NotesStore.
         - CommentaryNoteOrganizerAgent.synthesize_to_notes_store(all_outputs)
         - NotesStore contains: raw_markdown, beats (List[NarrativeBeat]), lookup (O(1))
         """
+        _ensure_project_root_on_path()
         from agents.specialized_commentary.note_organizer_agent import CommentaryNoteOrganizerAgent
-        from models.notes_store import NotesStore
+        from quality.evidence import build_evidence_quality_report
 
         logger.info(f"[{state.workflow_id}] Phase 4: Synthesizing notes...")
+        await self._emit("synthesis", "Synthesizing commentary notes...")
         state.phase = WorkflowPhase.SYNTHESIS
         state.in_progress_agents = ["note_organizer"]
 
@@ -274,6 +376,7 @@ class CommentaryNotesWorkflow:
             "home_team": state.home_team,
             "away_team": state.away_team,
             "sport": state.sport,
+            "competition": state.competition,
             "match_datetime": state.match_datetime,
             "venue": state.venue,
             "player_research": state.player_research,
@@ -285,27 +388,92 @@ class CommentaryNotesWorkflow:
         }
 
         try:
+            evidence_report = build_evidence_quality_report(all_outputs, mutate=True)
+            state.quality_report = evidence_report
+            from agents.deep_notes_agent import DeepNotesResearchAgent
+
+            deep_notes = await DeepNotesResearchAgent().enrich(all_outputs)
+            all_outputs["deep_notes"] = deep_notes
+            if not deep_notes.get("enabled") and "package unavailable" in str(deep_notes.get("reason", "")):
+                state.warnings.append(f"Deep notes disabled: {deep_notes.get('reason', 'not configured')}")
             agent = CommentaryNoteOrganizerAgent(sport=state.sport)
             notes_store = await agent.synthesize_to_notes_store(all_outputs)
             state.notes_store = notes_store
             state.markdown_notes = notes_store.raw_markdown  # Backwards compat
+            state.source_provenance = self._build_source_provenance(all_outputs)
+            state.quality_report = {
+                **evidence_report,
+                "notes_metrics": self._build_quality_report(state, notes_store),
+            }
+            state.vlm_context = self._build_vlm_context(notes_store)
             state.completed_agents.append("note_organizer")
             logger.info(f"[{state.workflow_id}] Notes synthesized ({len(notes_store.raw_markdown)} chars, {len(notes_store.beats)} beats)")
         except Exception as e:
             state.errors.append(f"CommentaryNoteOrganizerAgent: {e}")
             logger.error(f"[{state.workflow_id}] Note synthesis failed: {e}")
-            # Best-effort fallback markdown
-            state.markdown_notes = (
-                f"# Commentary Notes: {state.home_team} vs {state.away_team}\n\n"
-                f"Synthesis failed: {e}\n\nRaw data available in all_outputs."
-            )
             state.json_structure = all_outputs
+            state.in_progress_agents = []
+            state.end_time = datetime.utcnow()
+            await self._emit("error", f"Note synthesis failed: {e}", done=True)
+            raise RuntimeError(f"Note synthesis failed: {e}") from e
 
         state.in_progress_agents = []
         state.phase = WorkflowPhase.COMPLETE
         state.end_time = datetime.utcnow()
+        await self._emit("synthesis", "Commentary notes ready", done=True)
         logger.info(f"[{state.workflow_id}] Workflow complete")
         return state
+
+    def _build_source_provenance(self, all_outputs: Dict[str, Any]) -> Dict[str, Any]:
+        provenance: Dict[str, Any] = {}
+        for key, value in all_outputs.items():
+            if isinstance(value, dict):
+                source = value.get("data_source") or value.get("source")
+                if source:
+                    provenance[key] = {"source": source}
+        quality_report = all_outputs.get("quality_report")
+        if isinstance(quality_report, dict):
+            provenance["evidence"] = {
+                "accepted_count": quality_report.get("accepted_evidence_count", 0),
+                "rejected_count": quality_report.get("rejected_evidence_count", 0),
+                "accepted_evidence": quality_report.get("accepted_evidence", [])[:20],
+            }
+        return provenance
+
+    def _build_quality_report(self, state: CommentaryNotesState, notes_store: Any) -> Dict[str, Any]:
+        from quality.notes_quality import score_notes
+
+        beats_payload = []
+        for beat in getattr(notes_store, "beats", []) or []:
+            if hasattr(beat, "to_dict"):
+                beats_payload.append(beat.to_dict())
+            else:
+                beats_payload.append({
+                    "source": getattr(beat, "source", ""),
+                    "source_urls": getattr(beat, "source_urls", []),
+                    "source_attribution": getattr(beat, "source_attribution", []),
+                })
+        quality_score = score_notes(
+            getattr(notes_store, "raw_markdown", "") or "",
+            {"beats": beats_payload},
+        ).to_dict()
+        return {
+            "warnings_count": len(state.warnings),
+            "errors_count": len(state.errors),
+            "beat_count": len(getattr(notes_store, "beats", []) or []),
+            "markdown_chars": len(getattr(notes_store, "raw_markdown", "") or ""),
+            "has_structured_lookup": bool(getattr(notes_store, "lookup", None)),
+            "professional_score": quality_score,
+        }
+
+    def _build_vlm_context(self, notes_store: Any, max_chars: int = 12000) -> Dict[str, Any]:
+        return {
+            "notes_version": 0,
+            "vlm_context_version": 0,
+            "markdown_context": getattr(notes_store, "raw_markdown", "")[:max_chars],
+            "beat_count": len(getattr(notes_store, "beats", []) or []),
+            "lookup_tags": sorted((getattr(notes_store, "lookup", {}) or {}).keys()),
+        }
 
     def get_duration_ms(self, state: CommentaryNotesState) -> float:
         """Calculate workflow duration."""
@@ -319,6 +487,7 @@ class CommentaryNotesWorkflow:
             "workflow_id": state.workflow_id,
             "phase": state.phase.value,
             "match": f"{state.home_team} vs {state.away_team}",
+            "competition": state.competition,
             "completed_agents": len(state.completed_agents),
             "in_progress": len(state.in_progress_agents),
             "errors": state.errors,
@@ -331,85 +500,20 @@ class CommentaryNotesWorkflow:
         on_progress: ProgressCallback = None,
         use_langgraph: bool = True,
     ) -> CommentaryNotesState:
-        """Execute workflow with maximum parallelization, emitting progress via callback."""
-        logger.info("Starting commentary notes workflow (optimized)...")
-        if use_langgraph and on_progress is None:
-            graph = build_langgraph(self)
-            if graph is not None:
-                logger.info("Running commentary notes workflow through LangGraph")
-                result = await graph.ainvoke(state)
-                return _coerce_commentary_state(result)
+        """Execute the production notes workflow through LangGraph."""
+        if not use_langgraph:
+            raise ValueError("Commentary notes generation is LangGraph-only in production.")
 
-        async def _emit(phase: str, message: str, **extra):
-            if on_progress:
-                await on_progress(phase, message, extra)
-
-        # Phase 1: Initialize (must be first - gets venue/datetime)
-        await _emit("initialize", "Fetching match schedule and venue...")
-        state = await self.initialize_workflow(state)
-        await _emit("initialize", "Match context ready", done=True)
-
-        # OPTIMIZATION 1: Run independent research branches together.
-        # Team form only needs team names, so it does not need to wait for squad research.
-        await _emit("parallel_phase", "Running parallel research phase...",
-                    agents=["news", "weather", "historical", "player_research", "team_form"])
-
-        async def _gather_context():
-            result = await self.gather_initial_context(state)
-            await _emit("initial_context", f"Initial context gathered (3 agents)", done=True)
-            return result
-
-        async def _research_squads():
-            result = await self.research_squads(state)
-            home_count = len(result.player_research.get("home_team", {}).get("players", []))
-            away_count = len(result.player_research.get("away_team", {}).get("players", []))
-            await _emit("squad_research", f"Squads researched ({home_count} + {away_count} players)", done=True)
-            return result
-
-        async def _analyze_team_form():
-            from agents.specialized_commentary.team_form_agent import TeamFormAgent
-
-            try:
-                state.phase = WorkflowPhase.FORM_ANALYSIS
-                cache = getattr(self, "_cache", None)
-                agent = TeamFormAgent(sport=state.sport, cache=cache)
-                state.team_form = await agent.analyze_both_teams(state.home_team, state.away_team)
-                state.completed_agents.append("team_form")
-                await _emit("form_analysis", "Team form analyzed", done=True)
-            except Exception as e:
-                state.errors.append(f"TeamFormAgent: {e}")
-                state.warnings.append("Form data unavailable — skipping")
-                logger.warning(f"[{state.workflow_id}] TeamFormAgent failed: {e}")
-            return state
-
-        # Execute independent branches in parallel
-        await asyncio.gather(_gather_context(), _research_squads(), _analyze_team_form())
-        await _emit("parallel_phase", "Parallel research phase complete", done=True)
-
-        # OPTIMIZATION 2: MatchupAnalysis MUST wait for player_research.
-        await _emit("matchup_analysis", "Analyzing key matchups...", agents=["matchup_analysis"])
-        from agents.specialized_commentary.matchup_analysis_agent import MatchupAnalysisAgent
-        try:
-            state.phase = WorkflowPhase.TACTICAL_PREPARATION
-            home_players = state.player_research.get("home_team", {}).get("players", [])
-            away_players = state.player_research.get("away_team", {}).get("players", [])
-            agent = MatchupAnalysisAgent(sport=state.sport)
-            state.matchup_analysis = await agent.analyze_key_matchups(home_players, away_players)
-            state.completed_agents.append("matchup_analysis")
-            await _emit("matchup_analysis", "Key matchups analyzed", done=True)
-        except Exception as e:
-            state.errors.append(f"MatchupAnalysisAgent: {e}")
-            state.warnings.append("Matchup analysis unavailable — skipping")
-            logger.warning(f"[{state.workflow_id}] MatchupAnalysisAgent failed: {e}")
-
-        # Phase 5: Synthesize
-        await _emit("synthesis", "Synthesizing commentary notes...")
-        state = await self.synthesize_notes(state)
-        await _emit("synthesis", "Commentary notes ready", done=True)
-
-        logger.info(f"Workflow complete: {self.get_status(state)}")
-
-        return state
+        logger.info("Starting commentary notes workflow through LangGraph...")
+        self._progress_callback = on_progress
+        graph = build_langgraph(self)
+        if graph is None:
+            raise RuntimeError("LangGraph is required for commentary notes generation.")
+        result = await graph.ainvoke(state)
+        completed = _coerce_commentary_state(result)
+        await self._emit("complete", "LangGraph notes workflow complete", done=True)
+        logger.info(f"Workflow complete: {self.get_status(completed)}")
+        return completed
 
 
 # ===== Workflow Factory =====
@@ -453,16 +557,14 @@ def build_langgraph(workflow: Optional[CommentaryNotesWorkflow] = None):
     graph = StateGraph(CommentaryNotesState)
 
     graph.add_node("initialize", runner.initialize_workflow)
-    graph.add_node("gather_context", runner.gather_initial_context)
-    graph.add_node("research_squads", runner.research_squads)
-    graph.add_node("analyze_form", runner.analyze_form)
+    graph.add_node("parallel_research", runner.parallel_research)
+    graph.add_node("matchup_analysis", runner.analyze_matchups)
     graph.add_node("synthesize", runner.synthesize_notes)
 
     graph.add_edge(START, "initialize")
-    graph.add_edge("initialize", "gather_context")
-    graph.add_edge("gather_context", "research_squads")
-    graph.add_edge("research_squads", "analyze_form")
-    graph.add_edge("analyze_form", "synthesize")
+    graph.add_edge("initialize", "parallel_research")
+    graph.add_edge("parallel_research", "matchup_analysis")
+    graph.add_edge("matchup_analysis", "synthesize")
     graph.add_edge("synthesize", END)
 
     return graph.compile()

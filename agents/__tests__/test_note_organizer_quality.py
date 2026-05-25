@@ -1,4 +1,105 @@
+import pytest
+
 from agents.specialized_commentary.note_organizer_agent import CommentaryNoteOrganizerAgent
+
+
+@pytest.mark.asyncio
+async def test_professional_final_notes_include_competition_frame_and_no_scaffold():
+    organizer = CommentaryNoteOrganizerAgent(sport="soccer")
+
+    notes = await organizer.synthesize_to_notes_store({
+        "home_team": "Arsenal",
+        "away_team": "Paris Saint-Germain",
+        "sport": "soccer",
+        "competition": "Champions League Final",
+        "match_datetime": "2026-05-30T20:00:00+01:00",
+        "venue": "Wembley Stadium",
+        "player_research": {
+            "home_team": {
+                "team_name": "Arsenal",
+                "players": [{
+                    "name": "Bukayo Saka",
+                    "position": "RW",
+                    "profile": "Bukayo Saka gives Arsenal a verified right-sided outlet.",
+                    "source_urls": ["https://example.com/saka"],
+                    "data_source": "test_source",
+                }],
+            },
+            "away_team": {
+                "team_name": "Paris Saint-Germain",
+                "players": [{
+                    "name": "Achraf Hakimi",
+                    "position": "RB",
+                    "profile": "Achraf Hakimi gives PSG a verified right-sided transition runner.",
+                    "source_urls": ["https://example.com/hakimi"],
+                    "data_source": "test_source",
+                }],
+            },
+        },
+        "team_form": {
+            "home_team": {
+                "team_name": "Arsenal",
+                "recent_form": {"record": {"wins": 4, "draws": 1, "losses": 0}, "form_string": "WWDWW"},
+                "comprehensive_analysis": "Arsenal arrive with controlled possession spells and a strong counter-press.",
+            },
+            "away_team": {
+                "team_name": "Paris Saint-Germain",
+                "recent_form": {"record": {"wins": 3, "draws": 1, "losses": 1}, "form_string": "WDWLW"},
+                "comprehensive_analysis": "Paris Saint-Germain carry transition speed and wide overload threat.",
+            },
+            "comparative_analysis": {
+                "comparative_assessment": "Both sides can control midfield, but the decisive question is transition protection.",
+            },
+        },
+        "matchups": {
+            "critical_matchups": [{
+                "player1": "Bukayo Saka",
+                "player2": "Achraf Hakimi",
+                "analysis": "This duel can decide whether Arsenal pin PSG back or PSG release pressure into transition.",
+                "source_urls": ["https://example.com/duel"],
+            }],
+            "tactical_implications": "Expect the right-sided duel and midfield counter-press to shape the match rhythm.",
+            "positional_strength": {},
+            "weak_points": {},
+        },
+        "historical": {
+            "h2h_history": {"team1_wins": 1, "team2_wins": 1, "draws": 2},
+            "narrative": "The verified historical frame is balanced, so the booth should focus on control and transitions.",
+        },
+        "weather": {
+            "current_conditions": {"temperature_c": 18, "conditions": "clear", "wind_kmh": 8},
+            "narrative": "Clear conditions should allow a quick passing tempo.",
+        },
+        "news": {
+            "home_team": {"synthesis": "Arsenal preparation notes point to a settled tactical focus.", "news_items": []},
+            "away_team": {"synthesis": "Paris Saint-Germain preparation notes point to a settled tactical focus.", "news_items": []},
+        },
+        "quality_report": {"strict_mode": True, "degraded_sections": [], "unavailable_facts": []},
+    })
+
+    markdown = notes.raw_markdown
+
+    assert "Champions League Final" in markdown
+    assert "## Match Frame" in markdown
+    assert "## Tactical Themes" in markdown
+    assert "## Key Player Battles" in markdown
+    assert "## Team News Caveats" in markdown
+    assert "## Live-Trigger Beats" in markdown
+    assert "## Halftime And Postgame Angles" in markdown
+    assert "Bukayo Saka vs Achraf Hakimi" in markdown
+    assert len(notes.beats) >= 3
+    for tag in ("goal", "substitution", "yellow_card", "red_card"):
+        assert tag in notes.lookup
+    banned = [
+        "No stadium-specific angle",
+        "No verified",
+        "Opening Shape Cues",
+        "balanced tactical battle",
+        "AI summary",
+        "placeholder",
+    ]
+    for phrase in banned:
+        assert phrase not in markdown
 
 
 def test_tactical_plan_replaces_numbered_unavailable_llm_stub():
@@ -268,10 +369,80 @@ def test_lineups_without_players_render_shape_cues_not_empty_table():
     assert "No active weather angle" in section
 
 
+def test_researched_players_are_not_rendered_as_probable_starters_without_confirmed_lineups():
+    organizer = CommentaryNoteOrganizerAgent(sport="soccer")
+
+    section = organizer._organize_lineups_section(
+        home_squad={"team_name": "Sunderland", "players": [{"name": "Player A", "position": "GK"}]},
+        away_squad={"team_name": "Chelsea", "players": [{"name": "Player B", "position": "GK"}]},
+        match_datetime="2026-05-24T16:00:00+01:00",
+        venue="Stadium of Light",
+        weather={"current_conditions": {}},
+        news={
+            "home_team": {"lineup_status": {"status": "reported"}},
+            "away_team": {"lineup_status": {"status": "unavailable"}},
+        },
+    )
+
+    assert "Probable Starters" not in section
+    assert "Confirmed Starters" not in section
+    assert "Opening Shape Cues" in section
+    assert "UTC+01:00" in section
+
+
+def test_confirmed_lineups_can_render_table_from_accepted_evidence():
+    organizer = CommentaryNoteOrganizerAgent(sport="soccer")
+
+    section = organizer._organize_lineups_section(
+        home_squad={"team_name": "Sunderland", "players": [{"name": "Player A", "position": "GK"}]},
+        away_squad={"team_name": "Chelsea", "players": [{"name": "Player B", "position": "GK"}]},
+        match_datetime="2026-05-24T16:00:00+01:00",
+        venue="Stadium of Light",
+        weather={"current_conditions": {}},
+        news={
+            "home_team": {"lineup_status": {"status": "confirmed"}},
+            "away_team": {"lineup_status": {"status": "confirmed"}},
+        },
+    )
+
+    assert "Confirmed Starters From Accepted Evidence" in section
+    assert "| Player A | GK | Player B |" in section
+
+
+def test_degraded_news_and_h2h_do_not_emit_false_claims():
+    organizer = CommentaryNoteOrganizerAgent(sport="soccer")
+
+    news = organizer._format_news(
+        {"validation_status": "degraded", "news_items": [], "injuries": [], "synthesis": ""},
+        team_name="Chelsea",
+        side_label="away",
+    )
+    tactical = organizer._organize_tactical_section(
+        home_team="Sunderland",
+        away_team="Chelsea",
+        tactical_brief=organizer._build_tactical_brief({
+            "home_team": "Sunderland",
+            "away_team": "Chelsea",
+            "team_form": {},
+            "matchups": {},
+            "historical": {"h2h_history": {"status": "unavailable"}},
+            "weather": {},
+        }),
+        matchups={},
+        historical={"h2h_history": {"status": "unavailable"}, "narrative": ""},
+        weather={},
+    )
+
+    assert "No verified Chelsea team-news update was accepted" in news
+    assert "rich rivalry history" not in tactical
+    assert "H2H Record: **Unavailable from trusted sources in this run**" in tactical
+    assert "0-0-0" not in tactical
+
+
 def test_unknown_venue_is_rendered_as_broadcast_angle_not_placeholder():
     organizer = CommentaryNoteOrganizerAgent(sport="soccer")
 
-    assert organizer._format_venue_summary("Unknown Venue") == "No stadium-specific angle in this run"
+    assert organizer._format_venue_summary("Unknown Venue") == "Stadium not verified in this run"
     assert organizer._format_venue_summary("Santiago Bernabeu") == "Santiago Bernabeu"
 
 

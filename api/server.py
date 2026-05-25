@@ -117,11 +117,32 @@ class CommentaryNotesRequest(BaseModel):
     home_team: str = Field(..., min_length=1, max_length=100)
     away_team: str = Field(..., min_length=1, max_length=100)
     sport: str = Field(default="soccer", pattern="^(soccer|cricket|basketball|rugby|tennis|hockey|baseball)$")
+    competition: Optional[str] = Field(default=None, max_length=160)
     match_datetime: Optional[str] = None
     venue: Optional[str] = None
     venue_lat: float = Field(default=0.0, description="Venue latitude")
     venue_lon: float = Field(default=0.0, description="Venue longitude")
     include_embedded_json: bool = Field(default=True)
+
+
+class MatchScheduleRequest(BaseModel):
+    home_team: str = Field(..., min_length=1, max_length=100)
+    away_team: str = Field(..., min_length=1, max_length=100)
+    sport: str = Field(default="soccer", pattern="^(soccer|football|cricket|basketball|rugby|tennis|hockey|baseball)$")
+    competition: Optional[str] = Field(default=None, max_length=160)
+    kickoff_at: Optional[str] = None
+    venue: Optional[str] = None
+    venue_lat: float = 0.0
+    venue_lon: float = 0.0
+
+
+class LiveEventIngestRequest(BaseModel):
+    event_type: str = Field(default="match_state", max_length=64)
+    source: str = Field(default="system", max_length=64)
+    description: str = Field(..., min_length=1)
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    idempotency_key: Optional[str] = None
 
 
 class HealthResponse(BaseModel):
@@ -357,8 +378,13 @@ async def load_notes_store_for_session(match_session: str) -> Optional[Any]:
     if notes_store is not None:
         return notes_store
     try:
-        from models.notes_jobs import NotesJobRepository, notes_store_from_result
+        from models.notes_jobs import NotesJobRepository, notes_store_from_result, notes_store_from_version
         repo = NotesJobRepository()
+        latest_version = await repo.get_latest_notes_version(match_session=match_session)
+        if latest_version is not None:
+            notes_store = notes_store_from_version(latest_version)
+            manager.store_notes(match_session, notes_store)
+            return notes_store
         result = await repo.get_latest_result_for_session(match_session)
         if result is not None:
             notes_store = notes_store_from_result(result)
@@ -367,6 +393,111 @@ async def load_notes_store_for_session(match_session: str) -> Optional[Any]:
     except Exception as exc:
         logger.warning(f"notes_store_postgres_load_failed: {exc}")
     return None
+
+
+def _parse_optional_datetime(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid datetime: {value}") from exc
+
+
+def _match_id_from_session(match_session: str) -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"pitchsideai:{match_session}"))
+
+
+def _infer_event_type(description: str, fallback: str = "match_state") -> str:
+    lowered = (description or "").lower()
+    if "red card" in lowered or "sent off" in lowered:
+        return "red_card"
+    if "yellow card" in lowered or "booking" in lowered:
+        return "yellow_card"
+    if "substitution" in lowered or " off for " in lowered or " on for " in lowered or "sub " in lowered:
+        return "substitution"
+    if "goal" in lowered or "scores" in lowered:
+        return "goal"
+    if "corner" in lowered:
+        return "corner"
+    if "offside" in lowered:
+        return "offside"
+    if "foul" in lowered:
+        return "foul"
+    return fallback
+
+
+def _json_safe_value(value: Any) -> Any:
+    if hasattr(value, "to_dict"):
+        return _json_safe_value(value.to_dict())
+    if isinstance(value, dict):
+        return {str(key): _json_safe_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_safe_value(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
+async def create_and_enqueue_live_notes_event(
+    *,
+    match_session: str,
+    home_team: str,
+    away_team: str,
+    sport: str,
+    description: str,
+    source: str,
+    event_type: Optional[str] = None,
+    confidence: float = 1.0,
+    payload: Optional[dict] = None,
+    idempotency_key: Optional[str] = None,
+) -> Optional[dict]:
+    """Persist a live event and enqueue a notes patch job if notes exist."""
+    try:
+        from jobs.notes_tasks import enqueue_live_notes_update
+        from models.notes_jobs import NotesJobRepository, match_to_dict
+
+        repo = NotesJobRepository()
+        match = await repo.get_match_by_session(match_session)
+        if match is None:
+            match_id = _match_id_from_session(match_session)
+            match = await repo.upsert_match(
+                match_id=match_id,
+                match_session=match_session,
+                home_team=home_team,
+                away_team=away_team,
+                sport=sport,
+            )
+        match_id = match.match_id
+        normalized_type = event_type or _infer_event_type(description)
+        event_key = idempotency_key or f"{source}:{normalized_type}:{description[:160]}"
+        event, created = await repo.create_live_event(
+            event_id=str(uuid.uuid4()),
+            match_id=match_id,
+            match_session=match_session,
+            event_type=normalized_type,
+            source=source,
+            description=description,
+            confidence=confidence,
+            payload=_json_safe_value(payload or {}),
+            idempotency_key=event_key,
+        )
+        if created:
+            has_notes = (
+                await repo.get_latest_notes_version(match_id=match_id)
+                or await repo.get_latest_result_for_session(match_session)
+            )
+            if has_notes:
+                enqueue_live_notes_update(match_id, event.event_id)
+        return {
+            "event_id": event.event_id,
+            "created": created,
+            "event_type": event.event_type,
+            "match": match_to_dict(match),
+        }
+    except Exception as exc:
+        logger.warning(f"live_notes_event_enqueue_failed: {exc}")
+        return None
 
 
 async def refresh_agent_notes_store(agent: Any, match_session: str) -> None:
@@ -797,7 +928,15 @@ async def readiness_check(response: Response):
     """Readiness check for dependencies required to serve production traffic."""
     import redis.asyncio as redis
     from sqlalchemy import text
-    from config import LLM_BACKEND, OPENAI_API_KEY, REDIS_URL, VLLM_BASE_URL
+    from config import (
+        COMMENTARY_NOTES_LLM_BACKEND,
+        LLM_BACKEND,
+        OPENAI_API_KEY,
+        REDIS_URL,
+        VLLM_BASE_URL,
+        WAFER_API_KEY,
+        WAFER_BASE_URL,
+    )
     from models.notes_jobs import engine
 
     async def check_postgres() -> Dict[str, Any]:
@@ -819,20 +958,29 @@ async def readiness_check(response: Response):
             await client.aclose()
 
     async def check_llm() -> Dict[str, Any]:
-        if LLM_BACKEND == "openai":
-            return {"status": "ready" if bool(OPENAI_API_KEY) else "unready", "backend": "openai"}
-        if LLM_BACKEND == "vllm":
+        notes_backend = COMMENTARY_NOTES_LLM_BACKEND or LLM_BACKEND
+        if notes_backend == "openai":
+            return {"status": "ready" if bool(OPENAI_API_KEY) else "unready", "backend": "openai", "scope": "commentary_notes"}
+        if notes_backend == "wafer":
+            return {
+                "status": "ready" if bool(WAFER_API_KEY and WAFER_BASE_URL) else "unready",
+                "backend": "wafer",
+                "scope": "commentary_notes",
+                "base_url_configured": bool(WAFER_BASE_URL),
+            }
+        if notes_backend == "vllm":
             try:
                 async with httpx.AsyncClient(timeout=2.0) as client:
                     llm_response = await client.get(f"{VLLM_BASE_URL}/v1/models")
                 return {
                     "status": "ready" if llm_response.status_code < 500 else "unready",
                     "backend": "vllm",
+                    "scope": "commentary_notes",
                     "status_code": llm_response.status_code,
                 }
             except Exception as exc:
                 return {"status": "unready", "backend": "vllm", "error": str(exc)}
-        return {"status": "unready", "backend": LLM_BACKEND, "error": "Unsupported LLM_BACKEND"}
+        return {"status": "unready", "backend": notes_backend, "error": "Unsupported commentary notes LLM backend"}
 
     checks = {
         "postgres": await check_postgres(),
@@ -1340,7 +1488,8 @@ async def live_audio_ws(websocket: WebSocket):
         home_team = init.home_team
         away_team = init.away_team
         sport = init.sport
-        match_session = build_match_session_key(home_team, away_team, sport)
+        competition = init.competition
+        match_session = build_match_session_key(home_team, away_team, sport, competition)
         game_state = GameState(home_team=home_team, away_team=away_team)
 
         context = WorkflowContext(
@@ -1442,6 +1591,17 @@ async def live_audio_ws(websocket: WebSocket):
                     if not description:
                         continue
                     game_state.update_from_event(description)
+                    asyncio.create_task(create_and_enqueue_live_notes_event(
+                        match_session=match_session,
+                        home_team=home_team,
+                        away_team=away_team,
+                        sport=sport,
+                        description=description,
+                        source="operator_match_event",
+                        event_type=_infer_event_type(description),
+                        confidence=1.0,
+                        payload={"game_state": game_state.to_dict()},
+                    ))
                     ctx = game_state.to_context_string()
                     seed = f"{ctx}\n{description}" if ctx else description
 
@@ -1506,6 +1666,25 @@ async def live_audio_ws(websocket: WebSocket):
                         continue
 
                     game_state.update_from_detection(analysis)
+                    observation = (
+                        analysis.get("sequence_summary")
+                        or analysis.get("actionable_insight")
+                        or analysis.get("key_observation")
+                        or analysis.get("tactical_label")
+                        or "Vision tactical detection"
+                    )
+                    asyncio.create_task(create_and_enqueue_live_notes_event(
+                        match_session=match_session,
+                        home_team=home_team,
+                        away_team=away_team,
+                        sport=sport,
+                        description=str(observation),
+                        source="vlm_detection",
+                        event_type=_infer_event_type(str(observation), analysis.get("tactical_label") or "vision_observation"),
+                        confidence=float(analysis.get("confidence", 0.0) or 0.0),
+                        payload=analysis,
+                        idempotency_key=f"vlm:{analysis.get('timestamp_ms')}:{analysis.get('tactical_label')}:{str(observation)[:80]}",
+                    ))
                     note_text = _format_tactical_commentary_note(analysis)
                     timestamp = datetime.now(timezone.utc).isoformat()
 
@@ -2154,6 +2333,25 @@ async def streaming_video_ws(websocket: WebSocket):
                             timestamp_ms=result.get("end_timestamp_ms"),
                         )
                         manager.store_vision_context(match_session, vision_ctx)
+                        observation = (
+                            result.get("sequence_summary")
+                            or result.get("actionable_insight")
+                            or result.get("key_observation")
+                            or result.get("tactical_label")
+                            or "Streaming VLM observation"
+                        )
+                        asyncio.create_task(create_and_enqueue_live_notes_event(
+                            match_session=match_session,
+                            home_team=home_team,
+                            away_team=away_team,
+                            sport=sport,
+                            description=str(observation),
+                            source="streaming_vlm",
+                            event_type=_infer_event_type(str(observation), result.get("tactical_label") or "vision_observation"),
+                            confidence=float(result.get("confidence", 0.0) or 0.0),
+                            payload=result,
+                            idempotency_key=f"streaming:{result.get('end_timestamp_ms')}:{result.get('tactical_label')}:{str(observation)[:80]}",
+                        ))
 
                         # Bridge formed a chunk and returned commentary
                         await _broadcast_streaming_result(
@@ -2184,6 +2382,25 @@ async def streaming_video_ws(websocket: WebSocket):
                                 timestamp_ms=result.get("end_timestamp_ms"),
                             )
                             manager.store_vision_context(match_session, vision_ctx)
+                            observation = (
+                                result.get("sequence_summary")
+                                or result.get("actionable_insight")
+                                or result.get("key_observation")
+                                or result.get("tactical_label")
+                                or "Streaming VLM observation"
+                            )
+                            asyncio.create_task(create_and_enqueue_live_notes_event(
+                                match_session=match_session,
+                                home_team=home_team,
+                                away_team=away_team,
+                                sport=sport,
+                                description=str(observation),
+                                source="streaming_vlm",
+                                event_type=_infer_event_type(str(observation), result.get("tactical_label") or "vision_observation"),
+                                confidence=float(result.get("confidence", 0.0) or 0.0),
+                                payload=result,
+                                idempotency_key=f"streaming:{result.get('end_timestamp_ms')}:{result.get('tactical_label')}:{str(observation)[:80]}",
+                            ))
 
                             await _broadcast_streaming_result(
                                 websocket, workflow_id, result,
@@ -2195,6 +2412,17 @@ async def streaming_video_ws(websocket: WebSocket):
                     if not description:
                         continue
                     game_state.update_from_event(description)
+                    asyncio.create_task(create_and_enqueue_live_notes_event(
+                        match_session=match_session,
+                        home_team=home_team,
+                        away_team=away_team,
+                        sport=sport,
+                        description=description,
+                        source="streaming_match_event",
+                        event_type=_infer_event_type(description),
+                        confidence=1.0,
+                        payload={"game_state": game_state.to_dict()},
+                    ))
                     seed = description
                     ctx = game_state.to_context_string()
                     if ctx:
@@ -2358,6 +2586,96 @@ async def _periodic_streaming_stats(workflow_id: str, bridge: StreamingVisionBri
 
 # ── Commentary Notes Endpoint ──────────────────────────────────────────────────
 
+@app.post("/api/v1/matches/schedule", dependencies=[Depends(rate_limit_check)])
+async def schedule_match_for_notes(req: MatchScheduleRequest):
+    """Register a match so Celery Beat can generate notes 12 hours before kickoff."""
+    from models.notes_jobs import NotesJobRepository, match_to_dict
+
+    match_session = build_match_session_key(req.home_team, req.away_team, req.sport, req.competition)
+    match_id = _match_id_from_session(match_session)
+    repo = NotesJobRepository()
+    match = await repo.upsert_match(
+        match_id=match_id,
+        match_session=match_session,
+        home_team=req.home_team,
+        away_team=req.away_team,
+        sport=req.sport,
+        competition=req.competition or "",
+        kickoff_at=_parse_optional_datetime(req.kickoff_at),
+        venue=req.venue or "",
+        venue_lat=req.venue_lat,
+        venue_lon=req.venue_lon,
+    )
+    return match_to_dict(match)
+
+
+@app.get("/api/v1/matches/{match_id}/notes/latest")
+async def get_latest_match_notes(match_id: str):
+    """Return the active versioned notes package for a match."""
+    from models.notes_jobs import NotesJobRepository, notes_version_to_response
+
+    repo = NotesJobRepository()
+    version = await repo.get_latest_notes_version(match_id=match_id)
+    if version is None:
+        raise HTTPException(status_code=404, detail="Notes not ready")
+    return notes_version_to_response(version)
+
+
+@app.get("/api/v1/matches/{match_id}/vlm-context")
+async def get_match_vlm_context(match_id: str):
+    """Return latest VLM-ready notes context, using Redis first and Postgres fallback."""
+    from jobs.notes_cache import cache_notes_version, get_cached_vlm_context
+    from models.notes_jobs import NotesJobRepository
+
+    cached = await get_cached_vlm_context(match_id)
+    if cached is not None:
+        return {"status": "ready", "source": "redis", "vlm_context": cached}
+
+    repo = NotesJobRepository()
+    version = await repo.get_latest_notes_version(match_id=match_id)
+    if version is None:
+        raise HTTPException(status_code=404, detail="VLM context not ready")
+    await cache_notes_version(version)
+    return {"status": "ready", "source": "postgres", "vlm_context": version.vlm_context_json}
+
+
+@app.post("/api/v1/matches/{match_id}/events", dependencies=[Depends(rate_limit_check)])
+async def ingest_live_match_event(match_id: str, req: LiveEventIngestRequest):
+    """Persist a live event and enqueue a LangGraph notes patch job."""
+    from jobs.notes_tasks import enqueue_live_notes_update
+    from models.notes_jobs import NotesJobRepository
+
+    repo = NotesJobRepository()
+    match = await repo.get_match(match_id)
+    if match is None:
+        raise HTTPException(status_code=404, detail="Match not found")
+    event, created = await repo.create_live_event(
+        event_id=str(uuid.uuid4()),
+        match_id=match.match_id,
+        match_session=match.match_session,
+        event_type=req.event_type or _infer_event_type(req.description),
+        source=req.source,
+        description=req.description,
+        confidence=req.confidence,
+        payload=req.payload,
+        idempotency_key=req.idempotency_key or f"{req.source}:{req.event_type}:{req.description[:160]}",
+    )
+    has_notes = None
+    if created:
+        has_notes = (
+            await repo.get_latest_notes_version(match_id=match.match_id)
+            or await repo.get_latest_result_for_session(match.match_session)
+        )
+        if has_notes:
+            enqueue_live_notes_update(match.match_id, event.event_id)
+    return {
+        "status": "queued" if created and has_notes else ("stored_waiting_for_notes" if created else "duplicate"),
+        "event_id": event.event_id,
+        "event_type": event.event_type,
+        "match_id": match.match_id,
+    }
+
+
 @app.post("/api/v1/commentary/prepare-notes", dependencies=[Depends(rate_limit_check)])
 async def prepare_commentary_notes(req: CommentaryNotesRequest, request: Request) -> JSONResponse:
     """
@@ -2367,24 +2685,42 @@ async def prepare_commentary_notes(req: CommentaryNotesRequest, request: Request
     from jobs.notes_tasks import enqueue_commentary_notes_job
     from models.notes_jobs import NotesJobRepository, job_to_dict
 
-    canonical_match_session_key = build_match_session_key(req.home_team, req.away_team, req.sport)
+    canonical_match_session_key = build_match_session_key(req.home_team, req.away_team, req.sport, req.competition)
+    match_id = _match_id_from_session(canonical_match_session_key)
     job_id = str(uuid.uuid4())
     repo = NotesJobRepository()
+    match = await repo.upsert_match(
+        match_id=match_id,
+        match_session=canonical_match_session_key,
+        home_team=req.home_team,
+        away_team=req.away_team,
+        sport=req.sport,
+        competition=req.competition or "",
+        kickoff_at=_parse_optional_datetime(req.match_datetime),
+        venue=req.venue or "",
+        venue_lat=req.venue_lat,
+        venue_lon=req.venue_lon,
+    )
     job, created = await repo.create_or_get_active_job(
         job_id=job_id,
         match_session=canonical_match_session_key,
         home_team=req.home_team,
         away_team=req.away_team,
         sport=req.sport,
+        competition=req.competition or "",
+        match_id=match.match_id,
+        idempotency_key=f"manual:{match.match_id}",
     )
 
     if created:
+        await repo.mark_match_notes_job(match.match_id, job.job_id)
         enqueue_commentary_notes_job(job.job_id)
 
     logger.log_event("commentary_notes_requested", {
         "home_team": req.home_team,
         "away_team": req.away_team,
         "sport": req.sport,
+        "competition": req.competition,
         "venue": req.venue,
         "job_id": job.job_id,
         "created": created,
@@ -2418,6 +2754,7 @@ async def get_commentary_notes_job(job_id: str):
         result_payload.update({
             "match": f"{job.home_team} vs {job.away_team}",
             "sport": job.sport,
+            "competition": job.competition,
         })
         payload["result"] = result_payload
     return payload
@@ -2444,7 +2781,7 @@ async def stream_commentary_notes_job_events(job_id: str, request: Request):
             result = await repo.get_result(job_id)
             if result:
                 result_payload = result_to_response(result)
-                result_payload.update({"match": f"{job.home_team} vs {job.away_team}", "sport": job.sport})
+                result_payload.update({"match": f"{job.home_team} vs {job.away_team}", "sport": job.sport, "competition": job.competition})
                 yield f"data: {_json.dumps({'phase': 'complete', 'message': 'Done', 'progress': 1.0, 'done': True, 'result': result_payload})}\n\n"
             return
         if job.status in ("failed", "cancelled"):
@@ -2475,7 +2812,7 @@ async def stream_commentary_notes_job_events(job_id: str, request: Request):
                         result = await repo.get_result(job_id)
                         if result:
                             result_payload = result_to_response(result)
-                            result_payload.update({"match": f"{job.home_team} vs {job.away_team}", "sport": job.sport})
+                            result_payload.update({"match": f"{job.home_team} vs {job.away_team}", "sport": job.sport, "competition": job.competition})
                             yield f"data: {_json.dumps({'phase': 'complete', 'message': 'Done', 'progress': 1.0, 'done': True, 'result': result_payload})}\n\n"
                         return
                     if job.status in ("failed", "cancelled"):
@@ -2496,6 +2833,16 @@ async def get_commentary_notes(match_session: str):
     Poll endpoint for NotesGenerationHub to check if commentary notes are ready.
     Returns notes status and data if available.
     """
+    from models.notes_jobs import NotesJobRepository, notes_version_to_response
+
+    repo = NotesJobRepository()
+    latest_version = await repo.get_latest_notes_version(match_session=match_session)
+    if latest_version is not None:
+        notes_store = await load_notes_store_for_session(match_session)
+        if notes_store is not None:
+            manager.store_notes(match_session, notes_store)
+        return notes_version_to_response(latest_version)
+
     notes_store = await load_notes_store_for_session(match_session)
 
     if notes_store is None:

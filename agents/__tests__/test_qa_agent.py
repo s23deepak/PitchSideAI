@@ -148,11 +148,12 @@ class TestAC3_KVCacheTemporalContext:
             },
         ]
 
-        result = await qa_agent.handle_query(
-            question="How did Haaland score goal?",
-            game_state=sample_game_state,
-            retained_frames=retained_frames,
-        )
+        with patch.object(qa_agent, 'call_llm', AsyncMock(return_value="He scored with a header.")):
+            result = await qa_agent.handle_query(
+                question="How did Haaland score goal?",
+                game_state=sample_game_state,
+                retained_frames=retained_frames,
+            )
 
         assert result["temporal_context"] == "full"
         assert result["timestamp_ms"] is not None
@@ -167,11 +168,12 @@ class TestAC3_KVCacheTemporalContext:
             },
         ]
 
-        result = await qa_agent.handle_query(
-            question="What just happened?",
-            game_state=sample_game_state,
-            retained_frames=retained_frames,
-        )
+        with patch.object(qa_agent, 'call_llm', AsyncMock(return_value="Limited context answer.")):
+            result = await qa_agent.handle_query(
+                question="What just happened?",
+                game_state=sample_game_state,
+                retained_frames=retained_frames,
+            )
 
         # Low similarity → limited context
         assert result["temporal_context"] == "limited"

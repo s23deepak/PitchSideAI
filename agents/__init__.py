@@ -12,14 +12,14 @@ Provides specialized agents for sports analysis:
 
 All agents support dynamic sport types (Soccer, Cricket, Basketball, etc.)
 """
-from agents.base import BaseAgent
-from agents.research_agent import ResearchAgent
-from agents.vision_agent import VisionAgent
-from agents.commentary_agent import CommentaryAgent
-from agents.live_agent import LiveAgent
-from agents.coordinator import AgentCoordinator, CoordinationContext
-from agents.qa_agent import QAAgent, QAPair, VisionTacticalContext
-from agents.player_id_agent import PlayerIDAgent, PlayerIdentification
+from .base import BaseAgent
+from .research_agent import ResearchAgent
+from .vision_agent import VisionAgent
+from .commentary_agent import CommentaryAgent
+from .live_agent import LiveAgent
+from .coordinator import AgentCoordinator, CoordinationContext
+from .qa_agent import QAAgent, QAPair, VisionTacticalContext
+from .player_id_agent import PlayerIDAgent, PlayerIdentification
 
 __all__ = [
     "BaseAgent",
@@ -35,5 +35,4 @@ __all__ = [
     "PlayerIDAgent",
     "PlayerIdentification",
 ]
-
 

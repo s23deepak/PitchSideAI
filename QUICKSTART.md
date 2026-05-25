@@ -11,8 +11,7 @@
 Recommended backend split:
 - Cloud: Bedrock
 - Self-hosted: vLLM with `Qwen/Qwen2.5-VL-7B-Instruct`
-- Lightweight local: Ollama with `qwen2.5:3b` and `qwen2.5vl:3b`
-- Mixed local: commentary notes on Ollama with `qwen2.5:3b`, video on vLLM with `Qwen/Qwen2.5-VL-3B-Instruct-AWQ`
+- Local development: vLLM with `Qwen/Qwen2.5-7B-Instruct` for notes and `Qwen/Qwen2.5-VL-3B-Instruct-AWQ` for vision
 
 ### Option 1: Local Development (Fastest)
 
@@ -34,10 +33,8 @@ cd frontend && npm install && cd ..
 # Optional local/self-hosted profiles:
 # - Self-hosted vLLM: set LLM_BACKEND=vllm, VLLM_MODEL=Qwen/Qwen2.5-7B-Instruct,
 #   VLLM_VISION_MODEL=Qwen/Qwen2.5-VL-7B-Instruct
-# - Lightweight Ollama: set LLM_BACKEND=ollama, OLLAMA_MODEL=qwen2.5:3b,
-#   OLLAMA_VISION_MODEL=qwen2.5vl:3b
-# - Mixed local: set COMMENTARY_NOTES_LLM_BACKEND=ollama, VISION_LLM_BACKEND=vllm,
-#   OLLAMA_MODEL=qwen2.5:3b, VLLM_BASE_URL=http://localhost:8000,
+# - Split vLLM models: set COMMENTARY_NOTES_LLM_BACKEND=vllm, VISION_LLM_BACKEND=vllm,
+#   VLLM_BASE_URL=http://localhost:8000, VLLM_MODEL=Qwen/Qwen2.5-7B-Instruct,
 #   VLLM_VISION_MODEL=Qwen/Qwen2.5-VL-3B-Instruct-AWQ
 
 # 4. Run backend

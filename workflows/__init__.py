@@ -14,6 +14,7 @@ from workflows.commentary_notes_workflow import (
     build_langgraph,
     create_workflow,
 )
+from workflows.live_notes_patch_workflow import LiveNotesPatchState, LiveNotesPatchWorkflow
 from workflows.orchestration_bridge import OrchestratorBridge
 
 __all__ = [
@@ -23,6 +24,8 @@ __all__ = [
     "WorkflowPhase",
     "build_langgraph",
     "create_workflow",
+    "LiveNotesPatchState",
+    "LiveNotesPatchWorkflow",
     # Bridge
     "OrchestratorBridge",
 ]

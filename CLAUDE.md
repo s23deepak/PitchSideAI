@@ -63,9 +63,8 @@ Screen references now live in the React layouts and Playwright coverage.
 
 ### LLM Backend
 Set `LLM_BACKEND` in `.env`:
-- `ollama` — local dev (qwen2.5:3b, qwen2.5vl:3b) — **default for development**
 - `openai` — cloud (gpt-4o-mini)
-- `vllm` — self-hosted (Qwen2.5-VL via `VLLM_BASE_URL`)
+- `vllm` — local/self-hosted default (Qwen2.5/Qwen2.5-VL via `VLLM_BASE_URL`)
 
 `COMMENTARY_NOTES_LLM_BACKEND` overrides for notes agents only.
 `VISION_LLM_BACKEND` overrides for vision agents only.
@@ -136,8 +135,44 @@ frontend/src/layouts/                 # Core screen layout references
 
 - All code changes validated by the relevant agent from `.claude/agents/`
 - UI changes: always run `ui-design-auditor` after, `frontend-test-agent` to verify
-- No Bedrock/boto3 — use ollama/openai/vllm backends only
+- No Bedrock/boto3 — use openai/vllm backends only
 - No placeholder statistics in LLM prompts — enforced by guardrail in `agents/base.py`
 - `asyncio.gather()` for parallel agent execution — never block the event loop
 - `game_state.to_context_string()` prepended to every commentary LLM prompt
 - Cache TTL patterns: stats 30min, historical 4h, squad 1h
+
+---
+
+## Dual-Attention Agent Prompt Convention
+
+When spawning agents via the Agent tool, structure prompts so the agent understands both
+the **global picture** (what PitchSideAI is, how data flows, what's broken) and the
+**local task** (exact files, line numbers, constraints). Agent definitions in
+`.claude/agents/*.md` already carry global context — your prompt provides the local detail.
+
+**Prompt structure:**
+```
+[GLOBAL ANCHOR] — 1-2 sentences connecting the task to the product.
+  e.g. "The WebSocket `/ws/live` bus broadcasts commentary to both FanLensBroadcast
+  and CommentatorDashboard. This task fixes the duplicate WS management issue #3."
+
+[LOCAL TASK] — Specific files, line numbers, what to change, constraints.
+  e.g. "In `frontend/src/contexts/LiveSessionContext.jsx:47`, the `setLiveCommentary`
+  setter is not exported. Add it to the context value object. Also check that
+  `FanLensBroadcast.jsx` destructures it correctly."
+
+[BOUNDARIES] — What NOT to touch, known pitfalls, cross-domain impact.
+  e.g. "Don't modify App.jsx's WS logic — that's used by /dashboard route only.
+  After fixing, run ui-design-auditor since LiveSessionContext affects rendering."
+```
+
+**Why this matters:** Agents with only local context make narrow fixes that break
+cross-domain contracts (e.g., fixing a backend WS message without updating the
+frontend handler). Global context prevents these blind spots.
+
+**Quick reference — what each agent already knows (from .claude/agents/):**
+- All agents: product vision, user personas (Commentator/Fan), end-to-end data flow,
+  architecture constraints, current known issues, cross-domain awareness.
+- Backend agents: WebSocket contract, SSE format, how frontend parses messages.
+- Frontend agents: design tokens authority, WS message types, how backend sends data.
+- Fullstack/Integrator: entire chain from user click to backend to UI update.

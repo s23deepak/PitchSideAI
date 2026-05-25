@@ -22,6 +22,9 @@ export default function TabbedLivePage() {
     const home = searchParams.get('home') || 'Home Team'
     const away = searchParams.get('away') || 'Away Team'
     const sport = searchParams.get('sport') || 'soccer'
+    const competition = searchParams.get('competition') || ''
+    const activeTab = TABS.find((item) => item.value === tab) || TABS[0]
+    const ActiveComponent = activeTab.Component
 
     const handleTabChange = (newTab: string) => {
         const next = new URLSearchParams(searchParams)
@@ -29,11 +32,12 @@ export default function TabbedLivePage() {
         next.set('home', home)
         next.set('away', away)
         next.set('sport', sport)
+        if (competition) next.set('competition', competition)
         setSearchParams(next, { replace: true })
     }
 
     return (
-        <LiveSessionProvider homeTeam={home} awayTeam={away} sport={sport}>
+        <LiveSessionProvider homeTeam={home} awayTeam={away} sport={sport} competition={competition} autoConnectLive={activeTab.value !== 'notes'}>
             <div className="tabbed-live-page">
                 {/* TopNavBar uses useLocation() internally for active-tab highlighting */}
                 <TopNavBar
@@ -41,16 +45,9 @@ export default function TabbedLivePage() {
                     onAccountClick={() => console.log('account')}
                 />
                 <div className="live-tab-content">
-                    {TABS.map(({ value, Component }) => (
-                        <div
-                            key={value}
-                            role="tabpanel"
-                            aria-selected={tab === value}
-                            style={{ display: tab === value ? 'block' : 'none' }}
-                        >
-                            <Component onTabChange={handleTabChange} />
-                        </div>
-                    ))}
+                    <div role="tabpanel" aria-selected="true">
+                        <ActiveComponent onTabChange={handleTabChange} />
+                    </div>
                 </div>
             </div>
         </LiveSessionProvider>

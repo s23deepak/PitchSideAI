@@ -1,12 +1,36 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { useLiveSession } from '@/contexts/LiveSessionContext'
+
+const clamp = (value, min = 0, max = 100) => Math.max(min, Math.min(max, value))
+
+const renderInlineMarkdown = (text) => {
+    const source = String(text ?? '').replace(/^- /, '')
+    const parts = []
+    const boldPattern = /\*\*(.*?)\*\*/g
+    let lastIndex = 0
+    let match
+
+    while ((match = boldPattern.exec(source)) !== null) {
+        if (match.index > lastIndex) {
+            parts.push(source.slice(lastIndex, match.index).replace(/\*/g, ''))
+        }
+        parts.push(<strong key={`strong-${match.index}`}>{match[1]}</strong>)
+        lastIndex = boldPattern.lastIndex
+    }
+
+    if (lastIndex < source.length) {
+        parts.push(source.slice(lastIndex).replace(/\*/g, ''))
+    }
+
+    return parts
+}
 
 export default function NotesGenerationHub() {
     const {
         homeTeam,
         awayTeam,
         sport,
+        competition,
         commentaryData,
         buildingNotes,
         buildStatus,
@@ -16,7 +40,6 @@ export default function NotesGenerationHub() {
     } = useLiveSession()
 
     const [notes, setNotes] = useState(null)
-    const [agentProgress, setAgentProgress] = useState({})
     const [activeTab, setActiveTab] = useState('section1')
     const [parsedSections, setParsedSections] = useState([])
 
@@ -109,9 +132,14 @@ export default function NotesGenerationHub() {
 
     // Derive agent states from buildProgress
     // buildProgress is a float 0-1 representing overall completion
-    const progressValue = parseFloat(buildProgress) || 0
-    const progressPercent = Math.max(0, Math.min(100, progressValue * 100))
+    const progressValue = clamp(parseFloat(buildProgress) || 0, 0, 1)
+    const progressPercent = clamp(progressValue * 100)
     const progressPercentLabel = `${progressPercent.toFixed(1)}%`
+
+    const phaseProgress = (start, end) => {
+        if (buildStatus === 'ready') return 100
+        return clamp(Math.round(((progressValue - start) / (end - start)) * 100))
+    }
 
     // Agent completion thresholds based on overall progress
     const getAgentStatus = (agentId, threshold) => {
@@ -128,7 +156,7 @@ export default function NotesGenerationHub() {
             description: 'Researching latest team news and updates.',
             icon: 'newspaper',
             status: getAgentStatus('news', 0.10),
-            progress: buildStatus === 'ready' ? 100 : Math.min(100, Math.round((progressValue / 0.10) * 100)),
+            progress: phaseProgress(0, 0.10),
             completed: null,
             total: null,
         },
@@ -138,7 +166,7 @@ export default function NotesGenerationHub() {
             description: 'Checking match day weather conditions.',
             icon: 'cloud',
             status: getAgentStatus('weather', 0.15),
-            progress: buildStatus === 'ready' ? 100 : Math.min(100, Math.round(((progressValue - 0.10) / 0.05) * 100)),
+            progress: phaseProgress(0.10, 0.15),
             completed: null,
             total: null,
         },
@@ -148,7 +176,7 @@ export default function NotesGenerationHub() {
             description: 'Analyzing historical matchup data.',
             icon: 'history',
             status: getAgentStatus('historical', 0.20),
-            progress: buildStatus === 'ready' ? 100 : Math.min(100, Math.round(((progressValue - 0.15) / 0.05) * 100)),
+            progress: phaseProgress(0.15, 0.20),
             completed: null,
             total: null,
         },
@@ -158,8 +186,8 @@ export default function NotesGenerationHub() {
             description: 'Compiling player profiles and metrics.',
             icon: 'person_search',
             status: getAgentStatus('player-research', 0.50),
-            progress: buildStatus === 'ready' ? 100 : Math.min(100, Math.round(((progressValue - 0.20) / 0.30) * 100)),
-            completed: buildStatus === 'ready' ? 25 : Math.min(25, Math.floor(((progressValue - 0.20) / 0.30) * 25)),
+            progress: phaseProgress(0.20, 0.50),
+            completed: buildStatus === 'ready' ? 25 : clamp(Math.floor(((progressValue - 0.20) / 0.30) * 25), 0, 25),
             total: 25,
         },
         {
@@ -168,7 +196,7 @@ export default function NotesGenerationHub() {
             description: 'Analyzing recent form and tactical patterns.',
             icon: 'groups',
             status: getAgentStatus('team-form', 0.70),
-            progress: buildStatus === 'ready' ? 100 : Math.min(100, Math.round(((progressValue - 0.50) / 0.20) * 100)),
+            progress: phaseProgress(0.50, 0.70),
             completed: null,
             total: null,
         },
@@ -178,7 +206,7 @@ export default function NotesGenerationHub() {
             description: 'Breaking down key tactical battles.',
             icon: 'strategy',
             status: getAgentStatus('matchup', 0.85),
-            progress: buildStatus === 'ready' ? 100 : Math.min(100, Math.round(((progressValue - 0.70) / 0.15) * 100)),
+            progress: phaseProgress(0.70, 0.85),
             completed: null,
             total: null,
         },
@@ -188,7 +216,7 @@ export default function NotesGenerationHub() {
             description: 'Synthesizing all data into commentary notes.',
             icon: 'auto_awesome',
             status: getAgentStatus('organizer', 1.0),
-            progress: buildStatus === 'ready' ? 100 : Math.min(100, Math.round(((progressValue - 0.85) / 0.15) * 100)),
+            progress: phaseProgress(0.85, 1.0),
             completed: null,
             total: null,
         },
@@ -206,16 +234,19 @@ export default function NotesGenerationHub() {
             <main className="notes-hub-main">
                 {/* Header */}
                 <header className="notes-hub-header">
-                    <div>
+                    <div className="notes-hub-heading-copy">
                         <h1 className="notes-hub-title">Full Notes Pipeline</h1>
                         <p className="notes-hub-subtitle">
                             Research, audit, and organize the complete commentary-notes artifact for {homeTeam} vs {awayTeam}.
                         </p>
+                        {competition && (
+                            <p className="notes-hub-competition-line">{competition}</p>
+                        )}
                     </div>
                     <div className="notes-hub-status-badge">
                         <div className={`notes-hub-status-dot ${buildStatus === 'ready' ? 'ready' : 'active'}`}></div>
                         <span className="notes-hub-status-label">
-                            {buildStatus === 'ready' ? 'READY' : 'SYSTEM ACTIVE'}
+                            {buildStatus === 'ready' ? 'READY' : buildStatus === 'recovering' ? 'RECOVERING' : 'SYSTEM ACTIVE'}
                         </span>
                     </div>
                 </header>
@@ -367,8 +398,65 @@ export default function NotesGenerationHub() {
                                     <span className="material-icons">format_list_numbered</span>
                                     {notes.beat_count} beats
                                 </span>
+                                {notes.notes_version && (
+                                    <span className="notes-hub-meta-item">
+                                        <span className="material-icons">account_tree</span>
+                                        Notes v{notes.notes_version}
+                                    </span>
+                                )}
+                                {notes.vlm_context_version && (
+                                    <span className="notes-hub-meta-item">
+                                        <span className="material-icons">memory</span>
+                                        VLM ctx v{notes.vlm_context_version}
+                                    </span>
+                                )}
+                                {notes.update_type && (
+                                    <span className="notes-hub-meta-item">
+                                        <span className="material-icons">published_with_changes</span>
+                                        {notes.update_type.replace(/_/g, ' ')}
+                                    </span>
+                                )}
                             </div>
                         </div>
+
+                        {notes.warnings && notes.warnings.length > 0 && (
+                            <div className="notes-hub-quality-card notes-hub-quality-card--warning">
+                                <div className="notes-hub-status-content">
+                                    <div className="notes-hub-status-text">
+                                        <div className="notes-hub-status-icon">
+                                            <span className="material-icons">warning</span>
+                                        </div>
+                                        <div>
+                                            <h2>Generated With Warnings</h2>
+                                            <p>{notes.warnings.slice(0, 3).join(' · ')}</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {((notes.degraded_sections && notes.degraded_sections.length > 0) ||
+                            (notes.quality_report?.rejected_evidence_count || 0) > 0) && (
+                            <div className="notes-hub-quality-card">
+                                <div className="notes-hub-status-content">
+                                    <div className="notes-hub-status-text">
+                                        <div className="notes-hub-status-icon">
+                                            <span className="material-icons">fact_check</span>
+                                        </div>
+                                        <div>
+                                            <h2>Evidence Quality Gate</h2>
+                                            <p>
+                                                {(notes.degraded_sections || []).slice(0, 4).join(' · ') || 'No degraded sections'} ·{' '}
+                                                {notes.quality_report?.rejected_evidence_count || 0} rejected claims
+                                            </p>
+                                            {notes.unavailable_facts && notes.unavailable_facts.length > 0 && (
+                                                <p>{notes.unavailable_facts.slice(0, 3).join(' · ')}</p>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
 
                         {/* Tab Navigation */}
                         <div className="notes-hub-tabs">
@@ -423,7 +511,7 @@ export default function NotesGenerationHub() {
                                                 return (
                                                     <div key={idx} className="notes-hub-list-item">
                                                         <span className="notes-hub-bullet">•</span>
-                                                        <span dangerouslySetInnerHTML={{ __html: item.text.replace(/^- /, '').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') }} />
+                                                        <span>{renderInlineMarkdown(item.text)}</span>
                                                     </div>
                                                 )
                                             }
@@ -431,7 +519,7 @@ export default function NotesGenerationHub() {
                                                 return <hr key={idx} className="notes-hub-divider" />
                                             }
                                             return (
-                                                <p key={idx} className="notes-hub-text" dangerouslySetInnerHTML={{ __html: item.text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\*/g, '') }} />
+                                                <p key={idx} className="notes-hub-text">{renderInlineMarkdown(item.text)}</p>
                                             )
                                         })}
                                     </div>

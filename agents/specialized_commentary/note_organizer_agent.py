@@ -124,7 +124,7 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
                                 beat_text = f"{name} ({position}): {profile[:100]}"
                                 beats.append(NarrativeBeat(
                                     text=beat_text,
-                                    event_tags=["substitution", "goal"],  # Player-specific beats
+                                    event_tags=[],
                                     players=[name],
                                     section="home_team" if side == "home_team" else "away_team",
                                     source=player.get("data_source", "research"),
@@ -171,7 +171,7 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
                     if len(sentence.strip()) > 20:
                         beats.append(NarrativeBeat(
                             text=sentence.strip() + ".",
-                            event_tags=["corner", "offside"],  # General play beats
+                            event_tags=[],
                             players=[],
                             section=side,
                             source="team_form",
@@ -193,7 +193,7 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
                 if len(sentence.strip()) > 20:
                     beats.append(NarrativeBeat(
                         text=sentence.strip() + ".",
-                        event_tags=["goal", "yellow_card", "red_card"],  # Historical storylines
+                        event_tags=[],
                         players=[],
                         section="historical",
                         source="historical_context",
@@ -224,7 +224,52 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
                 confidence=0.6,
             ))
 
+        beats.extend(self._build_canonical_live_trigger_narrative_beats(home_team, away_team))
         return beats
+
+    def _build_canonical_live_trigger_narrative_beats(
+        self,
+        home_team: str,
+        away_team: str,
+    ) -> List[NarrativeBeat]:
+        """Provide event-safe lookup beats without pretending pre-match facts occurred."""
+        trigger_specs = [
+            (
+                "goal",
+                f"Goal trigger: after any confirmed goal, reset the broadcast around score state, scorer role, tactical cause, and how {home_team} and {away_team} must now adjust.",
+            ),
+            (
+                "substitution",
+                "Substitution trigger: connect the change to role, shape, energy, and the matchup it is meant to alter.",
+            ),
+            (
+                "yellow_card",
+                "Yellow-card trigger: explain how the booking changes duel risk, pressing aggression, and defensive cover.",
+            ),
+            (
+                "red_card",
+                "Red-card trigger: immediately reframe territory, rest defense, substitutions, and the side that must manage space.",
+            ),
+            (
+                "corner",
+                "Corner trigger: call delivery side, marking scheme, blockers, second-ball shape, and the counter-attack risk.",
+            ),
+            (
+                "free_kick_dangerous",
+                "Dangerous free-kick trigger: identify the taker, wall setup, delivery angle, runners, and rebound coverage.",
+            ),
+        ]
+        return [
+            NarrativeBeat(
+                text=text,
+                event_tags=[tag],
+                players=[],
+                section="live_triggers",
+                source="broadcast_rundown",
+                confidence=0.8,
+            )
+            for tag, text in trigger_specs
+        ]
 
     def _extract_source_urls(self, value: Any, limit: int = 5) -> List[str]:
         """Collect source URLs nested under a source object."""
@@ -281,59 +326,208 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
         """Build comprehensive Markdown document."""
         home_team = all_outputs.get("home_team", "Home")
         away_team = all_outputs.get("away_team", "Away")
+        competition = str(all_outputs.get("competition") or "").strip()
         match_datetime = all_outputs.get("match_datetime", "TBD")
         venue = all_outputs.get("venue", "Unknown")
         venue_label = self._format_venue_summary(venue)
         tactical_brief = self._build_tactical_brief(all_outputs)
-
-        # PAGE 1: Lineups & Match Info
-        page1 = self._organize_lineups_section(
-            all_outputs.get("player_research", {}).get("home_team", {}),
-            all_outputs.get("player_research", {}).get("away_team", {}),
-            match_datetime,
-            venue_label,
-            all_outputs.get("weather", {}),
+        quality_report = all_outputs.get("quality_report", {})
+        evidence_status = self._format_evidence_status(quality_report)
+        friendly_date = self._format_match_datetime(match_datetime)
+        news = all_outputs.get("news", {})
+        matchups = all_outputs.get("matchups", {})
+        historical = all_outputs.get("historical", {})
+        weather = all_outputs.get("weather", {})
+        team_form = all_outputs.get("team_form", {})
+        home_players = all_outputs.get("player_research", {}).get("home_team", {}).get("players", [])
+        away_players = all_outputs.get("player_research", {}).get("away_team", {}).get("players", [])
+        h2h_record, h2h_narrative = self._format_historical_frame(historical, home_team, away_team)
+        weather_narrative = self._clean_weather_narrative(weather.get("narrative", ""))
+        competition_line = f"{competition} | " if competition else ""
+        final_stakes = (
+            f"This is framed as {competition}; use trophy-stage language, but keep every specific claim tied to verified feed data."
+            if competition
+            else "Competition/stakes were not provided; keep the booth frame tactical and evidence-led."
         )
+        deep_notes = self._format_deep_notes_section(all_outputs.get("deep_notes", {}))
 
-        # PAGE 2: Home Team Analysis
-        page2 = self._organize_team_analysis_section(
-            all_outputs.get("player_research", {}).get("home_team", {}),
-            all_outputs.get("team_form", {}).get("home_team", {}),
-            all_outputs.get("news", {}).get("home_team", {}),
-            home_team,
-            2,
-        )
+        return f"""# Broadcast Prep: {home_team} vs {away_team}
+#### {competition_line}{friendly_date} | {venue_label}
 
-        # PAGE 3: Away Team Analysis
-        page3 = self._organize_team_analysis_section(
-            all_outputs.get("player_research", {}).get("away_team", {}),
-            all_outputs.get("team_form", {}).get("away_team", {}),
-            all_outputs.get("news", {}).get("away_team", {}),
-            away_team,
-            3,
-        )
+{evidence_status}
 
-        # PAGE 4-5: Tactical Analysis & Storylines
-        page45 = self._organize_tactical_section(
-            home_team,
-            away_team,
-            tactical_brief,
-            all_outputs.get("matchups", {}),
-            all_outputs.get("historical", {}),
-            all_outputs.get("weather", {}),
-        )
+## Match Frame
 
-        return f"""# Commentary Notes: {home_team} vs {away_team}
-#### {match_datetime} | {venue_label}
+- Fixture: **{home_team} vs {away_team}**
+- Stage: {competition or 'Unverified in this run'}
+- Date/time: {friendly_date}
+- Venue: {venue_label}
+- Broadcast frame: {final_stakes}
+- Lineups: use only confirmed team-sheet information from the live feed; this run does not promote researched squad lists as starters.
 
-{page1}
+## Tactical Themes
 
-{page2}
+{tactical_brief.get('summary', '')}
 
-{page3}
+### Zone Watch
 
-{page45}
+{self._format_bullets(tactical_brief.get('zone_edges', []))}
+
+### {home_team} Route
+
+{tactical_brief.get('home_plan', '')}
+
+### {away_team} Route
+
+{tactical_brief.get('away_plan', '')}
+
+## Key Player Battles
+
+{self._format_matchups(matchups.get('critical_matchups', []))}
+
+## Form And Storylines
+
+### {home_team}
+
+{self._team_form_for_broadcast(team_form.get('home_team', {}), home_team)}
+
+### {away_team}
+
+{self._team_form_for_broadcast(team_form.get('away_team', {}), away_team)}
+
+### Historical Frame
+
+H2H Record: **{h2h_record}**
+
+{h2h_narrative}
+
+### Weather / Surface
+
+{weather_narrative or 'No verified weather edge was accepted in this run; call visible tempo, footing, and ball speed if conditions become part of the match.'}
+
+## Team News Caveats
+
+### {home_team}
+
+{self._format_news(news.get('home_team', {}), team_name=home_team, side_label='home')}
+
+### {away_team}
+
+{self._format_news(news.get('away_team', {}), team_name=away_team, side_label='away')}
+
+## Commentator Hooks
+
+{self._format_bullets(tactical_brief.get('commentary_angles', []))}
+
+## Live-Trigger Beats
+
+{self._format_bullets(self._build_live_trigger_beats(home_team, away_team, tactical_brief, home_players, away_players))}
+
+## Halftime And Postgame Angles
+
+- Halftime: compare the intended tactical routes with territory, chance quality, and the first set-piece pattern.
+- If {home_team} lead: ask whether control came from sustained pressure or isolated transition moments.
+- If {away_team} lead: ask whether their outlet and counter-press gave them repeatable relief.
+- Postgame: anchor the first question in the clearest verified swing, not in unverified pre-match assumptions.
+
+{deep_notes}
 """
+
+    def _format_match_datetime(self, match_datetime: Any) -> str:
+        if not isinstance(match_datetime, str) or not match_datetime.strip():
+            return "Kickoff time unverified in this run"
+        try:
+            dt_obj = datetime.fromisoformat(match_datetime.replace("Z", "+00:00"))
+            friendly_date = dt_obj.strftime("%A, %B %d, %Y at %H:%M")
+            if dt_obj.tzinfo is not None:
+                offset = dt_obj.strftime("%z")
+                return f"{friendly_date} UTC{offset[:3]}:{offset[3:]}" if offset else friendly_date
+            return friendly_date
+        except Exception:
+            return match_datetime
+
+    def _team_form_for_broadcast(self, form_analysis: Dict[str, Any], team_name: str) -> str:
+        form_text = self._clean_analysis_text(form_analysis.get("comprehensive_analysis", ""), team_name)
+        if not form_text or self._is_low_quality_text(form_text, team_name):
+            form_text = self._build_team_form_fallback(form_analysis, team_name)
+        return form_text
+
+    def _format_historical_frame(
+        self,
+        historical: Dict[str, Any],
+        home_team: str,
+        away_team: str,
+    ) -> Tuple[str, str]:
+        h2h = historical.get("h2h_history", {}) if isinstance(historical, dict) else {}
+        h2h_available = h2h and h2h.get("status") != "unavailable" and (
+            (h2h.get("team1_wins") or 0) + (h2h.get("team2_wins") or 0) + (h2h.get("draws") or 0)
+        ) > 0
+        record = (
+            f"{h2h.get('team1_wins', 0)}-{h2h.get('draws', 0)}-{h2h.get('team2_wins', 0)}"
+            if h2h_available
+            else "Unavailable from trusted sources in this run"
+        )
+        narrative = self._clean_historical_narrative(historical.get("narrative", ""), home_team, away_team)
+        if not narrative:
+            narrative = (
+                f"No verified head-to-head narrative was accepted for {home_team} vs {away_team}; "
+                "lean on live tactical control, crowd tone, and momentum swings."
+            )
+        return record, narrative
+
+    def _build_live_trigger_beats(
+        self,
+        home_team: str,
+        away_team: str,
+        tactical_brief: Dict[str, Any],
+        home_players: List[Dict[str, Any]],
+        away_players: List[Dict[str, Any]],
+    ) -> List[str]:
+        beats = [
+            f"First 10 minutes: identify whether {home_team} can turn possession into territory.",
+            f"First away transition: note whether {away_team}'s outlet receives support or becomes isolated.",
+            "First corner or wide free kick: call marking type, second-ball reaction, and delivery quality.",
+        ]
+        if home_players:
+            first_home = home_players[0].get("name")
+            if first_home:
+                beats.append(f"{home_team} player cue: if {first_home} receives between lines, connect it to the home route.")
+        if away_players:
+            first_away = away_players[0].get("name")
+            if first_away:
+                beats.append(f"{away_team} player cue: if {first_away} is dragged wide, revisit the key-duel framing.")
+        for point in tactical_brief.get("pressure_points", [])[:3]:
+            beats.append(point)
+        return beats[:8]
+
+    def _format_deep_notes_section(self, deep_notes: Dict[str, Any]) -> str:
+        """Format optional DeepAgents synthesis guidance."""
+        if not isinstance(deep_notes, dict) or not deep_notes.get("enabled"):
+            return ""
+
+        def _items(key: str) -> str:
+            value = deep_notes.get(key, [])
+            if isinstance(value, str):
+                return f"- {value}"
+            if isinstance(value, list):
+                return "\n".join(f"- {item}" for item in value[:8] if item)
+            return ""
+
+        sections = []
+        for key, title in (
+            ("storylines", "Deep Storyline Guidance"),
+            ("tactical_questions", "Deep Tactical Questions"),
+            ("precision_checks", "Precision Checks"),
+            ("commentary_directives", "Commentary Directives"),
+        ):
+            body = _items(key)
+            if body:
+                sections.append(f"### {title}\n\n{body}")
+        if not sections:
+            raw = deep_notes.get("raw")
+            if raw:
+                sections.append(f"### Deep Research Brief\n\n{raw}")
+        return "\n\n---\n\n## DEEP RESEARCH SYNTHESIS\n\n" + "\n\n".join(sections) if sections else ""
 
     def _organize_lineups_section(
         self,
@@ -342,6 +536,7 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
         match_datetime: str,
         venue: str,
         weather: Dict[str, Any],
+        news: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Organize PAGE 1 - Lineups & Match Info."""
         home_team = home_squad.get("team_name", "Home")
@@ -351,27 +546,33 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
         wind = weather.get("current_conditions", {}).get("wind_kmh")
         home_players = home_squad.get("players", [])[:11]
         away_players = away_squad.get("players", [])[:11]
+        news = news or {}
+        home_lineup_status = (news.get("home_team", {}) or {}).get("lineup_status", {}).get("status")
+        away_lineup_status = (news.get("away_team", {}) or {}).get("lineup_status", {}).get("status")
+        confirmed_lineups = home_lineup_status == "confirmed" and away_lineup_status == "confirmed"
 
         lineup_rows = self._format_lineup_rows(home_players, away_players)
         lineup_block = (
-            f"""**Probable Starters From Available Research**
+            f"""**Confirmed Starters From Accepted Evidence**
 
 | {home_team} | Pos | {away_team} |
 |-----------|-----|-----------|
 {lineup_rows}
 
-**Lineup Note**: Treat this as the working XI context for the booth. If the confirmed XI changes, pivot the same cues toward the player profile and role that replaces it."""
-            if lineup_rows
+**Lineup Note**: Use this as the working XI context for the booth; if the feed shows a late change, pivot the same cues toward the replacement role."""
+            if lineup_rows and confirmed_lineups
             else f"""**Opening Shape Cues**
 - {home_team}: watch the first receiver under pressure and the fullback height in buildup.
 - {away_team}: track whether the press protects the middle or invites wide circulation.
 - First dead ball: use the marking scheme as the quickest read on defensive organisation."""
         )
 
-        from datetime import datetime
         try:
             dt_obj = datetime.fromisoformat(match_datetime.replace("Z", "+00:00"))
-            friendly_date = dt_obj.strftime("%A, %B %d, %Y at %H:%M UTC")
+            friendly_date = dt_obj.strftime("%A, %B %d, %Y at %H:%M")
+            if dt_obj.tzinfo is not None:
+                offset = dt_obj.strftime("%z")
+                friendly_date = f"{friendly_date} UTC{offset[:3]}:{offset[3:]}" if offset else friendly_date
         except Exception:
             friendly_date = match_datetime
 
@@ -465,18 +666,22 @@ Composite Analysis:
         h2h = historical.get("h2h_history", {})
         weather_narrative = self._clean_weather_narrative(weather.get("narrative", ""))
 
-        # Build H2H record with meaningful fallback
-        if h2h and (h2h.get("team1_wins", 0) + h2h.get("team2_wins", 0) + h2h.get("draws", 0)) > 0:
+        h2h_available = h2h and h2h.get("status") != "unavailable" and (
+            (h2h.get("team1_wins") or 0) + (h2h.get("team2_wins") or 0) + (h2h.get("draws") or 0)
+        ) > 0
+        if h2h_available:
             h2h_record = f"{h2h.get('team1_wins', 0)}-{h2h.get('draws', 0)}-{h2h.get('team2_wins', 0)}"
         else:
-            h2h_record = f"{home_team} and {away_team} have a rich rivalry history"
+            h2h_record = "Unavailable from trusted sources in this run"
 
         # Build narrative with meaningful fallback
-        if not narrative:
+        if not narrative and h2h_available:
             narrative = (
                 f"Frame {home_team} vs {away_team} through the opening tone: which side settles first, "
                 "which midfield wins second balls, and whether the wide channels produce early pressure."
             )
+        elif not narrative:
+            narrative = "No verified head-to-head narrative was accepted in this run; anchor this section in live tactical cues."
         zone_edges = tactical_brief.get("zone_edges", [])
         pressure_points = tactical_brief.get("pressure_points", [])
         commentary_angles = tactical_brief.get("commentary_angles", [])
@@ -571,6 +776,24 @@ Recent H2H Narrative:
             ),
         }
 
+    def _format_evidence_status(self, quality_report: Dict[str, Any]) -> str:
+        """Expose degraded sections without turning weak evidence into claims."""
+        if not isinstance(quality_report, dict) or not quality_report.get("strict_mode"):
+            return ""
+        degraded = quality_report.get("degraded_sections", []) or []
+        unavailable = quality_report.get("unavailable_facts", []) or []
+        if not degraded and not unavailable:
+            return "## EVIDENCE STATUS\n\n- Strict evidence mode: all accepted claims passed source validation."
+        degraded_text = ", ".join(str(item) for item in degraded[:6]) or "none"
+        unavailable_lines = "\n".join(f"- {item}" for item in unavailable[:6]) or "- None"
+        return f"""## EVIDENCE STATUS
+
+- Strict evidence mode: degraded sections are marked instead of filled with weak claims.
+- Degraded sections: {degraded_text}
+
+Unavailable or uncertain facts:
+{unavailable_lines}"""
+
     def _format_player_list(
         self,
         players: List[Dict[str, Any]],
@@ -617,17 +840,25 @@ Recent H2H Narrative:
         injuries = news.get("injuries", [])
         synthesis = news.get("synthesis", "")
         news_items = news.get("news_items", [])[:3]
+        degraded = news.get("validation_status") == "degraded"
 
         synthesis = self._clean_news_text(synthesis)
 
         if not synthesis and not news_items and not injuries:
+            if degraded:
+                return f"No verified {team_name or 'team'} team-news update was accepted in this run."
             return self._build_team_news_fallback(team_name, side_label)
 
         output = ""
         if synthesis:
             output = f"{synthesis}\n\n"
         else:
-            output = f"{self._build_team_news_fallback(team_name, side_label)}\n\n"
+            fallback = (
+                f"No verified {team_name or 'team'} team-news update was accepted in this run."
+                if degraded
+                else self._build_team_news_fallback(team_name, side_label)
+            )
+            output = f"{fallback}\n\n"
 
         if news_items:
             output += "**Recent Headlines**:\n"
@@ -792,10 +1023,10 @@ Recent H2H Narrative:
     def _format_venue_summary(self, venue: Any) -> str:
         """Format venue without exposing placeholders as useful facts."""
         if not isinstance(venue, str):
-            return "No stadium-specific angle in this run"
+            return "Stadium not verified in this run"
         cleaned = venue.strip()
         if not cleaned or cleaned.lower() in {"unknown", "unknown venue", "tbd", "unavailable", "n/a"}:
-            return "No stadium-specific angle in this run"
+            return "Stadium not verified in this run"
         return cleaned
 
     def _format_match_dynamic(
@@ -816,7 +1047,9 @@ Recent H2H Narrative:
                 bullets.append(f"1. Key duel: {p1} vs {p2}")
 
         h2h = historical.get("h2h_history", {})
-        if h2h and (h2h.get("team1_wins", 0) + h2h.get("team2_wins", 0) + h2h.get("draws", 0)) > 0:
+        if h2h and h2h.get("status") != "unavailable" and (
+            (h2h.get("team1_wins") or 0) + (h2h.get("team2_wins") or 0) + (h2h.get("draws") or 0)
+        ) > 0:
             bullets.append(
                 f"2. Historical trend: {h2h.get('team1_wins', 0)}-{h2h.get('draws', 0)}-{h2h.get('team2_wins', 0)} in recent meetings"
             )
@@ -1164,6 +1397,7 @@ Recent H2H Narrative:
                 "home_team": all_outputs.get("home_team", "Unknown"),
                 "away_team": all_outputs.get("away_team", "Unknown"),
                 "sport": self.sport,
+                "competition": all_outputs.get("competition", ""),
                 "match_datetime": all_outputs.get("match_datetime", "Unknown"),
                 "venue": all_outputs.get("venue", "Unknown"),
                 "generated_at": datetime.utcnow().isoformat(),

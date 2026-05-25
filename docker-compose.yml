@@ -20,6 +20,13 @@ services:
       - LLM_BACKEND=${LLM_BACKEND:-vllm}
       - VISION_LLM_BACKEND=${VISION_LLM_BACKEND:-vllm}
       - COMMENTARY_NOTES_LLM_BACKEND=${COMMENTARY_NOTES_LLM_BACKEND:-vllm}
+      - WAFER_BASE_URL=${WAFER_BASE_URL}
+      - WAFER_API_KEY=${WAFER_API_KEY}
+      - WAFER_MODEL=${WAFER_MODEL}
+      - BRIGHTDATA_MCP_TOKEN=${BRIGHTDATA_MCP_TOKEN}
+      - BRIGHTDATA_MCP_GROUPS=${BRIGHTDATA_MCP_GROUPS:-advanced_scraping}
+      - DEEP_NOTES_ENABLED=${DEEP_NOTES_ENABLED:-false}
+      - DEEPAGENTS_MODEL=${DEEPAGENTS_MODEL:-openai:gpt-5.4}
       - VLLM_BASE_URL=${VLLM_BASE_URL:-http://host.docker.internal:8001}
       - LOG_LEVEL=INFO
     extra_hosts:
@@ -57,6 +64,41 @@ services:
       - LLM_BACKEND=${LLM_BACKEND:-vllm}
       - VISION_LLM_BACKEND=${VISION_LLM_BACKEND:-vllm}
       - COMMENTARY_NOTES_LLM_BACKEND=${COMMENTARY_NOTES_LLM_BACKEND:-vllm}
+      - WAFER_BASE_URL=${WAFER_BASE_URL}
+      - WAFER_API_KEY=${WAFER_API_KEY}
+      - WAFER_MODEL=${WAFER_MODEL}
+      - BRIGHTDATA_MCP_TOKEN=${BRIGHTDATA_MCP_TOKEN}
+      - BRIGHTDATA_MCP_GROUPS=${BRIGHTDATA_MCP_GROUPS:-advanced_scraping}
+      - DEEP_NOTES_ENABLED=${DEEP_NOTES_ENABLED:-false}
+      - DEEPAGENTS_MODEL=${DEEPAGENTS_MODEL:-openai:gpt-5.4}
+      - VLLM_BASE_URL=${VLLM_BASE_URL:-http://host.docker.internal:8001}
+      - LOG_LEVEL=INFO
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - pitchside
+    depends_on:
+      - redis
+      - postgres
+    restart: unless-stopped
+
+  notes-scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A jobs.celery_app.celery_app beat --loglevel=INFO
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://pitchai:pitchai@postgres:5432/pitchai}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      - LLM_BACKEND=${LLM_BACKEND:-vllm}
+      - VISION_LLM_BACKEND=${VISION_LLM_BACKEND:-vllm}
+      - COMMENTARY_NOTES_LLM_BACKEND=${COMMENTARY_NOTES_LLM_BACKEND:-vllm}
+      - DEEP_NOTES_ENABLED=${DEEP_NOTES_ENABLED:-false}
+      - DEEPAGENTS_MODEL=${DEEPAGENTS_MODEL:-openai:gpt-5.4}
       - VLLM_BASE_URL=${VLLM_BASE_URL:-http://host.docker.internal:8001}
       - LOG_LEVEL=INFO
     extra_hosts:

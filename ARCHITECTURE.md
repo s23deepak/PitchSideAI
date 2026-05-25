@@ -2,7 +2,7 @@
 
 ## System Overview
 
-PitchSideAI v2.0 is a production-grade, enterprise-level sports AI platform built around Amazon Bedrock's Nova models, with optional Ollama, OpenAI, and vLLM backends behind the same agent interface. The system implements advanced multi-agent orchestration, high-concurrency handling, and intelligent RAG strategies.
+PitchSideAI v2.0 is a production-grade, enterprise-level sports AI platform built around OpenAI-compatible inference, with OpenAI and vLLM backends behind the same agent interface. The system implements advanced multi-agent orchestration, high-concurrency handling, and intelligent RAG strategies.
 
 ## Core Components
 

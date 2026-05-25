@@ -1,7 +1,7 @@
 import { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react'
 import { backendUrl, backendWsUrl } from '@/lib/backend-url'
 
-function buildMatchSessionKey(homeTeam, awayTeam, sport = 'soccer') {
+export function buildMatchSessionKey(homeTeam, awayTeam, sport = 'soccer', competition = '') {
     const slugify = (value) =>
         (value || '')
             .trim()
@@ -9,7 +9,8 @@ function buildMatchSessionKey(homeTeam, awayTeam, sport = 'soccer') {
             .replace(/[^a-z0-9]+/g, '-')
             .replace(/^-+|-+$/g, '') || 'unknown'
 
-    return `${slugify(sport)}#${slugify(homeTeam)}#vs#${slugify(awayTeam)}`
+    const base = `${slugify(sport)}#${slugify(homeTeam)}#vs#${slugify(awayTeam)}`
+    return competition ? `${base}#${slugify(competition)}` : base
 }
 
 const LiveSessionContext = createContext(null)
@@ -19,11 +20,14 @@ export function LiveSessionProvider({
     homeTeam: initialHomeTeam = 'Barcelona',
     awayTeam: initialAwayTeam = 'Real Madrid',
     sport: initialSport = 'soccer',
+    competition: initialCompetition = '',
+    autoConnectLive = true,
 }) {
     // Match info state
     const [homeTeam, setHomeTeam] = useState(initialHomeTeam)
     const [awayTeam, setAwayTeam] = useState(initialAwayTeam)
     const [sport, setSport] = useState(initialSport)
+    const [competition, setCompetition] = useState(initialCompetition)
     const [matchSession, setMatchSession] = useState(null)
 
     // Notes & commentary state
@@ -66,6 +70,14 @@ export function LiveSessionProvider({
             beats: data.beats || data.notes?.beats || [],
             beat_count: data.beat_count ?? data.notes?.beats?.length ?? 0,
             markdown_notes: data.markdown_notes || '',
+            notes_version: data.notes_version ?? data.vlm_context?.notes_version ?? null,
+            vlm_context_version: data.vlm_context_version ?? data.vlm_context?.vlm_context_version ?? null,
+            update_type: data.update_type || 'prematch',
+            warnings: data.warnings || [],
+            errors: data.errors || [],
+            quality_report: data.quality_report || data.vlm_context?.quality_report || {},
+            degraded_sections: data.degraded_sections || data.vlm_context?.quality_report?.degraded_sections || [],
+            unavailable_facts: data.unavailable_facts || data.vlm_context?.quality_report?.unavailable_facts || [],
         }
         setCommentaryData(normalized)
         setBuildStatus('ready')
@@ -75,9 +87,9 @@ export function LiveSessionProvider({
 
     // Initialize match session when teams change
     useEffect(() => {
-        const key = buildMatchSessionKey(homeTeam, awayTeam, sport)
+        const key = buildMatchSessionKey(homeTeam, awayTeam, sport, competition)
         setMatchSession(key)
-    }, [homeTeam, awayTeam, sport])
+    }, [homeTeam, awayTeam, sport, competition])
 
     const loadPreparedNotes = useCallback(async (sessionKey = matchSession) => {
         if (!sessionKey) return false
@@ -104,6 +116,7 @@ export function LiveSessionProvider({
 
     // Ensure live WebSocket session
     const ensureLiveSession = useCallback(async () => {
+        if (!autoConnectLive) return false
         if (!homeTeam || !awayTeam) return false
 
         // Close old WS if matchSession changed
@@ -143,6 +156,7 @@ export function LiveSessionProvider({
                     home_team: homeTeam,
                     away_team: awayTeam,
                     sport: sport,
+                    competition: competition,
                 }))
 
                 // Send pending settings/language if queued
@@ -250,11 +264,25 @@ export function LiveSessionProvider({
         })
 
         return sessionPromiseRef.current
-    }, [homeTeam, awayTeam, sport, matchSession])
+    }, [autoConnectLive, homeTeam, awayTeam, sport, competition, matchSession, liveSessionReady])
 
     // Initialize live session when matchSession is ready, with auto-reconnect on failure
     useEffect(() => {
-        if (!matchSession) return
+        if (!matchSession || !autoConnectLive) {
+            shouldReconnectRef.current = false
+            if (reconnectTimerRef.current) {
+                clearTimeout(reconnectTimerRef.current)
+                reconnectTimerRef.current = null
+            }
+            if (wsRef.current) {
+                wsRef.current.close()
+                wsRef.current = null
+            }
+            setIsConnected(false)
+            setLiveSessionReady(false)
+            setConnectionState('idle')
+            return
+        }
 
         let cancelled = false
 
@@ -281,7 +309,7 @@ export function LiveSessionProvider({
                 reconnectTimerRef.current = null
             }
         }
-    }, [matchSession, ensureLiveSession])
+    }, [autoConnectLive, matchSession, ensureLiveSession])
 
     // Cleanup on unmount
     useEffect(() => {
@@ -297,6 +325,25 @@ export function LiveSessionProvider({
     }, [])
 
     // Prepare notes via SSE stream
+    const recoverNotesJobResult = useCallback(async (statusUrl) => {
+        if (!statusUrl) return null
+        await new Promise(resolve => setTimeout(resolve, 1500))
+        for (let attempt = 0; attempt < 60; attempt++) {
+            const statusRes = await fetch(backendUrl(statusUrl))
+            if (statusRes.ok) {
+                const status = await statusRes.json()
+                if (status.result) return status.result
+                if (status.status === 'failed' || status.status === 'cancelled') {
+                    throw new Error(status.error || `Notes job ${status.status}`)
+                }
+                setBuildProgress(status.progress !== undefined ? status.progress : 'Recovering stream...')
+                addLog(`RECOVERING: Job is ${status.status || 'running'}${status.phase ? ` (${status.phase})` : ''}`, 'running')
+            }
+            await new Promise(resolve => setTimeout(resolve, 2000))
+        }
+        return null
+    }, [addLog])
+
     const prepareNotes = useCallback(async (home, away) => {
         setBuildingNotes(true)
         setBuildStatus('loading')
@@ -323,6 +370,7 @@ export function LiveSessionProvider({
                     home_team: home,
                     away_team: away,
                     sport: sport,
+                    competition: competition,
                 }),
                 signal: abortControllerRef.current.signal,
             })
@@ -381,28 +429,31 @@ export function LiveSessionProvider({
                 addLog('Cancelled by user', 'info')
             } else {
                 console.error('[LiveSession] Notes generation failed:', err)
+                let recoveredError = null
                 if (queuedJob?.status_url) {
                     try {
-                        const statusRes = await fetch(backendUrl(queuedJob.status_url))
-                        if (statusRes.ok) {
-                            const status = await statusRes.json()
-                            if (status.result) {
-                                applyNotesResult(status.result, 'Recovered completed notes after stream interruption.')
-                                return
-                            }
+                        setBuildStatus('recovering')
+                        setBuildProgress('Recovering stream...')
+                        addLog('RECOVERING: Event stream dropped; checking durable job status.', 'running')
+                        const recovered = await recoverNotesJobResult(queuedJob.status_url)
+                        if (recovered) {
+                            applyNotesResult(recovered, 'Recovered completed notes after stream interruption.')
+                            return
                         }
                     } catch (statusErr) {
+                        recoveredError = statusErr
                         console.warn('[LiveSession] Notes job status recovery failed:', statusErr)
                     }
                 }
+                const finalError = recoveredError || err
                 setBuildStatus('error')
-                setBuildProgress(err.message || 'Generation failed')
-                addLog(`FAILED: ${err.message}`, 'error')
+                setBuildProgress(finalError.message || 'Generation failed')
+                addLog(`FAILED: ${finalError.message}`, 'error')
             }
         } finally {
             setBuildingNotes(false)
         }
-    }, [addLog, applyNotesResult, sport])
+    }, [addLog, applyNotesResult, competition, recoverNotesJobResult, sport])
 
     // Send match event
     const sendMatchEvent = useCallback(async (description) => {
@@ -479,6 +530,8 @@ export function LiveSessionProvider({
         homeTeam,
         awayTeam,
         sport,
+        competition,
+        setCompetition,
         matchSession,
 
         // Notes & commentary

@@ -32,9 +32,21 @@ Built for the **AMD Developer Hackathon (May 2026)**. PitchSideAI gives fans and
 
 **For preparation (Notes Hub):** Enter two teams, click Generate. The backend creates a durable notes job, a Celery worker runs the 7-agent research pipeline, and progress streams back from Redis while final notes are stored in Postgres.
 
+Production planning handoff: see [Production Notes + Live VLM Loop Vertical Slice Plan](docs/production-notes-live-vlm-vertical-slice-plan.md).
+
 ---
 
 ## Quick Start
+
+### Prerequisites
+
+- Python 3.11+
+- Node.js 18+
+- Git
+- A GPU with 6GB+ VRAM for vLLM, or 40GB+ for StreamingVLM (MI300X/H100)
+- Docker (required for the one-command backend stack; optional if you provide Postgres/Redis yourself)
+
+### 1. Clone and install dependencies
 
 ```bash
 git clone https://github.com/your-username/PitchSideAI.git
@@ -43,19 +55,95 @@ cd PitchSideAI
 # Backend
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env          # set LLM_BACKEND=vllm
 
-# Start a vLLM OpenAI-compatible server separately
-# Example: export VLLM_BASE_URL=http://localhost:8001
-
-# Start backend
-python -m uvicorn api.server:app --reload --port 8000
-
-# Frontend (separate terminal)
-cd frontend && npm install && npm run dev
+# Frontend
+cd frontend && npm install && cd ..
 ```
 
-Open http://localhost:5173 — landing page → Fan Lens or Commentator Dashboard.
+### 2. Configure environment
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` and set your LLM backend. Choose one:
+
+**Option A — vLLM (consumer GPU, 6GB+ VRAM):**
+```env
+LLM_BACKEND=vllm
+VLLM_BASE_URL=http://localhost:8001
+VLLM_MODEL=Qwen/Qwen2.5-VL-3B-Instruct-AWQ
+```
+Start vLLM in a separate terminal before the backend:
+```bash
+vllm serve Qwen/Qwen2.5-VL-3B-Instruct-AWQ \
+  --host 0.0.0.0 --port 8001 \
+  --trust-remote-code \
+  --quantization awq_marlin \
+  --gpu-memory-utilization 0.45
+```
+
+**Option B — StreamingVLM (MI300X/H100, 40GB+ VRAM):**
+```env
+LLM_BACKEND=vllm
+VLLM_BASE_URL=http://localhost:8001
+```
+StreamingVLM activates automatically when the hardware is available. See the [Vision Pipeline](#vision-pipeline--2-level-fallback) section for details.
+
+You can also override backends per component:
+```env
+COMMENTARY_NOTES_LLM_BACKEND=vllm   # notes pipeline only
+VISION_LLM_BACKEND=vllm            # vision agents only
+```
+
+### 3. Start the backend stack
+
+One command starts the backend applications: Redis, Postgres, FastAPI, the Celery notes worker, and Celery Beat.
+
+```bash
+./scripts/start_backend_stack.sh
+```
+
+Useful variants:
+
+```bash
+./scripts/start_backend_stack.sh --build --logs  # rebuild images and follow logs
+./scripts/start_backend_stack.sh --no-beat       # skip the scheduled notes scanner
+./scripts/start_backend_stack.sh --local         # Docker Redis/Postgres, local FastAPI/Celery from .venv
+```
+
+The default Docker stack exposes FastAPI at **http://localhost:8080**.
+
+Manual local alternative:
+
+```bash
+source .venv/bin/activate
+docker compose up -d postgres redis
+celery -A jobs.celery_app.celery_app worker --loglevel=INFO --concurrency=1
+python -m uvicorn api.server:app --reload --port 8080
+```
+
+### 4. Start the frontend
+
+In a separate terminal:
+
+```bash
+cd frontend && npm run dev
+```
+
+### 5. Open the app
+
+Go to **http://localhost:5173** — you'll see the landing page with links to:
+- **Fan Lens Broadcast** — cinematic live view
+- **Commentator Dashboard** — teleprompter + video
+- **Notes Generation Hub** — pre-match research
+
+### Verify it's running
+
+```bash
+curl http://localhost:8080/health
+# Expected: {"status": "healthy", ...}
+```
 
 ---
 
@@ -122,16 +210,26 @@ Generate Notes
   └── POST /api/v1/commentary/prepare-notes
         ├── notes_jobs row (queued) in Postgres
         └── Celery task on Redis
-              ├── initialize_workflow()
-              ├── NewsAgent + WeatherContextAgent + HistoricalContextAgent
-              ├── PlayerResearchAgent + TeamFormAgent
-              ├── MatchupAnalysisAgent
-              └── NoteOrganizer → NotesStore
+              └── LangGraph CommentaryNotesWorkflow
+                    ├── initialize_workflow()
+                    ├── NewsAgent + WeatherContextAgent + HistoricalContextAgent
+                    ├── PlayerResearchAgent + TeamFormAgent
+                    ├── MatchupAnalysisAgent
+                    ├── optional DeepAgents research synthesis
+                    └── NoteOrganizer → NotesStore + VLM context
                     ├── notes_results row in Postgres
+                    ├── notes_versions row in Postgres
+                    ├── Redis latest-notes/VLM-context cache
                     └── Redis progress events for SSE
 ```
 
-Each agent extends `BaseAgent` and calls `call_llm()` via `httpx.AsyncClient` — fully async, no event loop blocking. LangGraph remains available as an internal helper for non-streaming workflow runs, but production Generate Notes uses the native async workflow inside a Celery worker.
+Each agent extends `BaseAgent` and calls `call_llm()` via `httpx.AsyncClient` — fully async, no event loop blocking. Production Generate Notes now uses Celery for durable dispatch and LangGraph as the actual workflow engine.
+
+Scheduled production flow:
+- `POST /api/v1/matches/schedule` stores kickoff/team/venue state in Postgres.
+- Celery Beat scans every minute and enqueues notes 12 hours before kickoff.
+- `GET /api/v1/matches/{match_id}/vlm-context` serves Redis-cached VLM context with Postgres fallback.
+- `POST /api/v1/matches/{match_id}/events` stores live events and triggers LangGraph live notes patches.
 
 ---
 
@@ -182,7 +280,7 @@ Set `LLM_BACKEND` in `.env`:
 
 | Backend | Use case | Models |
 |---|---|---|
-| `openai` | Cloud fallback | `gpt-4o-mini` |
+| `vllm` | Self-hosted, consumer GPU | `Qwen2.5-VL-3B-Instruct-AWQ` |
 | `vllm` | Self-hosted, best quality | `Qwen2.5-VL-7B-Instruct-AWQ` |
 
 Override per-component:
@@ -216,7 +314,7 @@ AUDIO_MODEL=Qwen/Qwen2-Audio-7B-Instruct
 
 ```env
 # Required
-LLM_BACKEND=vllm                            # openai | vllm
+LLM_BACKEND=vllm                            # vllm
 DATABASE_URL=postgresql+asyncpg://pitchai:pitchai@localhost:5432/pitchai
 REDIS_URL=redis://localhost:6379/0
 CELERY_BROKER_URL=redis://localhost:6379/0
@@ -236,7 +334,7 @@ FOOTBALL_DATA_API_KEY=your_key
 FIRECRAWL_API_KEY=your_key
 
 # Frontend
-VITE_BACKEND_URL=http://localhost:8000
+VITE_BACKEND_URL=http://localhost:8080
 ```
 
 ---
@@ -311,6 +409,7 @@ PitchSideAI/
 │   │       └── LiveSessionContext.jsx  # WebSocket state + SSE stream
 │   └── package.json
 ├── scripts/
+│   ├── start_backend_stack.sh        # One-command backend stack startup
 │   ├── deploy_hf.sh                  # Hugging Face Space deployment
 │   ├── benchmark_latency.py
 │   └── chaos_test.py

@@ -9,11 +9,13 @@ def test_parse_live_init_message_trims_and_normalizes():
         "home_team": "  Barcelona  ",
         "away_team": " Real Madrid ",
         "sport": "soccer",
+        "competition": " Champions League Final ",
     })
 
     assert message.home_team == "Barcelona"
     assert message.away_team == "Real Madrid"
     assert message.sport == "soccer"
+    assert message.competition == "Champions League Final"
 
 
 @pytest.mark.parametrize(

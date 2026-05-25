@@ -8,7 +8,7 @@
 - Batched player profile generation to one LLM call per squad instead of one LLM call per player.
 - Raced the first two available API/source retrievers for player stats, recent form, team news, and injuries, while preserving per-source rate limiters.
 - Standardized notes inference on `vllm` for the active self-hosted path.
-- Removed Ollama from the active README setup path; notes inference should use `vllm`.
+- Kept the active README setup path on `vllm` for notes inference.
 
 ## Parallel vs Sequential
 
