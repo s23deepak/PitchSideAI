@@ -94,6 +94,7 @@ class TavilySearchService:
         max_results: int = 5,
         include_answer: bool = True,
         cache_namespace: str = "tavily",
+        include_domains: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Execute a Tavily search with caching.
@@ -106,7 +107,8 @@ class TavilySearchService:
                 "source":  "tavily"|"cache"|"fallback"
             }
         """
-        cache_key = f"{query}|{search_depth}|{topic}"
+        include_domains = include_domains or []
+        cache_key = f"{query}|{search_depth}|{topic}|{','.join(include_domains)}"
         cached = self.cache.get(cache_namespace, cache_key)
         if cached:
             result = {**cached, "source": "cache"}
@@ -120,6 +122,7 @@ class TavilySearchService:
                     "max_results": max_results,
                     "include_answer": include_answer,
                     "cache_namespace": cache_namespace,
+                    "include_domains": include_domains,
                     "cache_hit": True,
                 },
                 result=result,
@@ -140,6 +143,7 @@ class TavilySearchService:
                     "max_results": max_results,
                     "include_answer": include_answer,
                     "cache_namespace": cache_namespace,
+                    "include_domains": include_domains,
                     "available": False,
                 },
                 result=result,
@@ -150,14 +154,22 @@ class TavilySearchService:
 
         start_ms = monotonic_ms()
         try:
-            response = await asyncio.to_thread(
-                self._client.search,
-                query=query,
-                search_depth=search_depth,
-                topic=topic,
-                max_results=max_results,
-                include_answer=include_answer,
-            )
+            search_kwargs = {
+                "query": query,
+                "search_depth": search_depth,
+                "topic": topic,
+                "max_results": max_results,
+                "include_answer": include_answer,
+            }
+            if include_domains:
+                search_kwargs["include_domains"] = include_domains
+            try:
+                response = await asyncio.to_thread(self._client.search, **search_kwargs)
+            except TypeError:
+                if not include_domains:
+                    raise
+                search_kwargs.pop("include_domains", None)
+                response = await asyncio.to_thread(self._client.search, **search_kwargs)
             result = {
                 "answer": response.get("answer", ""),
                 "results": response.get("results", []),
@@ -175,6 +187,7 @@ class TavilySearchService:
                     "max_results": max_results,
                     "include_answer": include_answer,
                     "cache_namespace": cache_namespace,
+                    "include_domains": include_domains,
                     "cache_hit": False,
                 },
                 result=result,
@@ -195,6 +208,7 @@ class TavilySearchService:
                     "max_results": max_results,
                     "include_answer": include_answer,
                     "cache_namespace": cache_namespace,
+                    "include_domains": include_domains,
                 },
                 result=result,
                 error=exc,
@@ -292,7 +306,7 @@ class TavilySearchService:
         )
 
     async def search_h2h(
-        self, team1: str, team2: str, sport: str = "soccer"
+        self, team1: str, team2: str, sport: str = "soccer", include_domains: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """Search for head-to-head history between two teams."""
         query = (
@@ -304,6 +318,7 @@ class TavilySearchService:
             search_depth="advanced",
             max_results=5,
             cache_namespace="tavily_h2h",
+            include_domains=include_domains,
         )
 
     async def search_team_tactics(
@@ -321,7 +336,7 @@ class TavilySearchService:
         )
 
     async def search_team_news(
-        self, team_name: str, sport: str = "soccer"
+        self, team_name: str, sport: str = "soccer", include_domains: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """Search for latest team news, injuries, suspensions, transfers."""
         query = (
@@ -333,6 +348,7 @@ class TavilySearchService:
             topic="news",
             max_results=5,
             cache_namespace="tavily_team_news",
+            include_domains=include_domains,
         )
 
     async def search_team_manager(
@@ -366,7 +382,7 @@ class TavilySearchService:
         )
 
     async def search_match_storylines(
-        self, team1: str, team2: str, sport: str = "soccer"
+        self, team1: str, team2: str, sport: str = "soccer", include_domains: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """Search for key match storylines and narratives."""
         query = (
@@ -378,6 +394,7 @@ class TavilySearchService:
             topic="news",
             max_results=5,
             cache_namespace="tavily_storylines",
+            include_domains=include_domains,
         )
 
     async def search_player_matchup(
@@ -395,7 +412,7 @@ class TavilySearchService:
         )
 
     async def search_lineup(
-        self, team_name: str, sport: str = "soccer"
+        self, team_name: str, sport: str = "soccer", include_domains: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """Search for predicted starting lineup."""
         query = (
@@ -407,6 +424,7 @@ class TavilySearchService:
             topic="news",
             max_results=3,
             cache_namespace="tavily_lineup",
+            include_domains=include_domains,
         )
 
     # ── helpers ───────────────────────────────────────────────────────────────

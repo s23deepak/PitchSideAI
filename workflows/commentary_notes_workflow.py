@@ -61,6 +61,7 @@ class CommentaryNotesState:
     venue: str = ""
     venue_lat: float = 0.0
     venue_lon: float = 0.0
+    fixture_context: Dict[str, Any] = field(default_factory=dict)
 
     # === Workflow Metadata ===
     workflow_id: str = ""
@@ -123,6 +124,7 @@ class CommentaryNotesWorkflow:
         """Initialize workflow state and extract final contextual parameters sequentially."""
         import uuid
         from data_sources.factory import get_retriever
+        from data_sources.fixture_resolver import FixtureResolver
         
         state.workflow_id = str(uuid.uuid4())
         state.phase = WorkflowPhase.INITIAL_CONTEXT
@@ -131,20 +133,44 @@ class CommentaryNotesWorkflow:
         logger.info(
             f"Workflow {state.workflow_id} initialized for {state.home_team} vs {state.away_team}"
         )
-        await self._emit("initialize", "Fetching match schedule and venue...")
+        await self._emit("initialize", "Preparing match context...")
         self._ensure_cache()
-        
-        # Sequentially populate missing venue and datetime data from ESPN before launching the parallel multi-agents
+
+        # For custom generated fixtures, resolve facts from fixture-specific evidence first.
+        # Do not borrow a team's unrelated next event unless no competition was provided.
         if not state.match_datetime or not state.venue:
-            logger.info(f"[{state.workflow_id}] Sequentially fetching match location and schedule...")
-            retriever = get_retriever(state.sport)
-            ctx = await retriever.get_match_context(state.home_team, state.sport) or {}
-            state.match_datetime = (
-                state.match_datetime
-                or ctx.get("date")
-                or datetime.utcnow().isoformat()
-            )
-            state.venue = state.venue or ctx.get("venue") or "Unknown"
+            if state.competition:
+                resolver = FixtureResolver(cache=self._ensure_cache())
+                fixture_context = await resolver.resolve(
+                    home_team=state.home_team,
+                    away_team=state.away_team,
+                    sport=state.sport,
+                    competition=state.competition,
+                )
+                state.fixture_context = fixture_context or {}
+
+                if not state.match_datetime and state.fixture_context.get("match_datetime"):
+                    state.match_datetime = state.fixture_context["match_datetime"]
+                if not state.venue and state.fixture_context.get("venue"):
+                    state.venue = state.fixture_context["venue"]
+                if not state.venue_lat and state.fixture_context.get("venue_lat"):
+                    state.venue_lat = state.fixture_context["venue_lat"]
+                if not state.venue_lon and state.fixture_context.get("venue_lon"):
+                    state.venue_lon = state.fixture_context["venue_lon"]
+
+                if not state.match_datetime:
+                    state.warnings.append("Kickoff time unverified for custom fixture")
+                if not state.venue:
+                    state.warnings.append("Venue unverified for custom fixture")
+                state.venue = state.venue or "Unknown"
+                if state.fixture_context.get("status") == "accepted":
+                    state.warnings.append("Fixture context resolved from fixture-specific web evidence")
+            else:
+                logger.info(f"[{state.workflow_id}] Sequentially fetching match location and schedule...")
+                retriever = get_retriever(state.sport)
+                ctx = await retriever.get_match_context(state.home_team, state.sport) or {}
+                state.match_datetime = state.match_datetime or ctx.get("date") or ""
+                state.venue = state.venue or ctx.get("venue") or "Unknown"
 
         await self._emit("initialize", "Match context ready", done=True)
         return state
@@ -268,7 +294,11 @@ class CommentaryNotesWorkflow:
         try:
             cache = getattr(self, "_cache", None)
             agent = PlayerResearchAgent(sport=state.sport, cache=cache)
-            result = await agent.research_squad_pair(state.home_team, state.away_team)
+            result = await agent.research_squad_pair(
+                state.home_team,
+                state.away_team,
+                fixture_context=state.fixture_context,
+            )
 
             state.player_research = result
             state.completed_agents.append("player_research")
@@ -379,6 +409,7 @@ class CommentaryNotesWorkflow:
             "competition": state.competition,
             "match_datetime": state.match_datetime,
             "venue": state.venue,
+            "fixture_context": state.fixture_context,
             "player_research": state.player_research,
             "team_form": state.team_form,
             "historical": state.historical_context,
@@ -455,7 +486,7 @@ class CommentaryNotesWorkflow:
                 })
         quality_score = score_notes(
             getattr(notes_store, "raw_markdown", "") or "",
-            {"beats": beats_payload},
+            {"beats": beats_payload, "quality_report": state.quality_report},
         ).to_dict()
         return {
             "warnings_count": len(state.warnings),

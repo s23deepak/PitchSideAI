@@ -13,6 +13,7 @@ import re
 from agents.base import BaseAgent
 from data_sources import DataCache
 from models.notes_store import NotesStore, NarrativeBeat
+from quality.evidence import source_tier_priority
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,12 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
         "unavailable 2",
         "tactical route unavailable",
         "verified tactical snapshot unavailable",
+        "commentary notes:",
+        "maximum confidence level",
+        "currently operating at an elite level",
+        "elite defensive record",
+        "potent goal-scoring rate",
+        "opponents must prioritize",
     )
 
     def __init__(
@@ -119,7 +126,7 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
                             stats = player.get("stats", {})
                             profile = player.get("profile", "")
 
-                            if name:
+                            if name and not self._is_placeholder_player_name(name):
                                 source_urls = self._extract_source_urls(player)
                                 beat_text = f"{name} ({position}): {profile[:100]}"
                                 beats.append(NarrativeBeat(
@@ -145,7 +152,13 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
                     p1 = matchup.get("player1", "")
                     p2 = matchup.get("player2", "")
                     analysis = matchup.get("analysis", "")
-                    if p1 and p2:
+                    if (
+                        p1
+                        and p2
+                        and not self._is_placeholder_player_name(p1)
+                        and not self._is_placeholder_player_name(p2)
+                        and not self._is_low_quality_text(analysis)
+                    ):
                         source_urls = self._extract_source_urls(matchup)
                         beats.append(NarrativeBeat(
                             text=f"Key duel: {p1} vs {p2} — {analysis[:80]}",
@@ -349,12 +362,23 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
             if competition
             else "Competition/stakes were not provided; keep the booth frame tactical and evidence-led."
         )
+        air_ready_rundown = self._format_air_ready_rundown(
+            home_team=home_team,
+            away_team=away_team,
+            competition=competition,
+            quality_report=quality_report,
+            tactical_brief=tactical_brief,
+            news=news,
+            historical=historical,
+        )
         deep_notes = self._format_deep_notes_section(all_outputs.get("deep_notes", {}))
 
         return f"""# Broadcast Prep: {home_team} vs {away_team}
 #### {competition_line}{friendly_date} | {venue_label}
 
 {evidence_status}
+
+{air_ready_rundown}
 
 ## Match Frame
 
@@ -448,7 +472,11 @@ H2H Record: **{h2h_record}**
 
     def _team_form_for_broadcast(self, form_analysis: Dict[str, Any], team_name: str) -> str:
         form_text = self._clean_analysis_text(form_analysis.get("comprehensive_analysis", ""), team_name)
-        if not form_text or self._is_low_quality_text(form_text, team_name):
+        if (
+            not form_text
+            or self._is_low_quality_text(form_text, team_name)
+            or self._looks_like_numbered_homework(form_text)
+        ):
             form_text = self._build_team_form_fallback(form_analysis, team_name)
         return form_text
 
@@ -488,14 +516,24 @@ H2H Record: **{h2h_record}**
             f"First away transition: note whether {away_team}'s outlet receives support or becomes isolated.",
             "First corner or wide free kick: call marking type, second-ball reaction, and delivery quality.",
         ]
-        if home_players:
-            first_home = home_players[0].get("name")
-            if first_home:
-                beats.append(f"{home_team} player cue: if {first_home} receives between lines, connect it to the home route.")
-        if away_players:
-            first_away = away_players[0].get("name")
-            if first_away:
-                beats.append(f"{away_team} player cue: if {first_away} is dragged wide, revisit the key-duel framing.")
+        first_home_player = next(
+            (player for player in home_players if not self._is_placeholder_player_name(player.get("name"))),
+            None,
+        )
+        first_away_player = next(
+            (player for player in away_players if not self._is_placeholder_player_name(player.get("name"))),
+            None,
+        )
+        first_matchup = tactical_brief.get("first_matchup") if isinstance(tactical_brief, dict) else {}
+        if isinstance(first_matchup, dict) and first_matchup.get("player1") and first_matchup.get("player2"):
+            beats.append(
+                f"First named duel: if {first_matchup['player1']} and {first_matchup['player2']} meet in the same channel, call who gets help first."
+            )
+        elif first_home_player and first_away_player:
+            first_home = first_home_player.get("name")
+            first_away = first_away_player.get("name")
+            if first_home and first_away:
+                beats.append(f"First named duel: if {first_home} and {first_away} meet in the same channel, call who gets help first.")
         for point in tactical_brief.get("pressure_points", [])[:3]:
             beats.append(point)
         return beats[:8]
@@ -754,6 +792,8 @@ Recent H2H Narrative:
             part for part in summary_parts
             if part and not self._is_low_quality_text(part)
         ).strip()
+        if self._is_unsafe_tactical_summary(summary):
+            summary = ""
         if not summary:
             summary = (
                 f"{home_team} vs {away_team} profiles as a balanced tactical battle. "
@@ -766,6 +806,7 @@ Recent H2H Narrative:
             "home_plan": self._extract_team_plan(team_form.get("home_team", {}), home_team),
             "away_plan": self._extract_team_plan(team_form.get("away_team", {}), away_team),
             "pressure_points": self._build_pressure_points(home_team, away_team, matchups.get("weak_points", {})),
+            "first_matchup": self._first_valid_matchup(matchups.get("critical_matchups", [])),
             "commentary_angles": self._build_commentary_angles(
                 home_team,
                 away_team,
@@ -775,6 +816,23 @@ Recent H2H Narrative:
                 comparative,
             ),
         }
+
+    def _first_valid_matchup(self, matchups: List[Dict[str, Any]]) -> Dict[str, Any]:
+        for matchup in matchups or []:
+            p1 = matchup.get("player1")
+            p2 = matchup.get("player2")
+            if p1 and p2 and not self._is_placeholder_player_name(p1) and not self._is_placeholder_player_name(p2):
+                return matchup
+        return {}
+
+    def _is_unsafe_tactical_summary(self, summary: str) -> bool:
+        lower = (summary or "").lower()
+        return (
+            "weak points" in lower
+            or "vulnerabilities" in lower
+            or "based on the identification" in lower
+            or "five critical battles" in lower
+        )
 
     def _format_evidence_status(self, quality_report: Dict[str, Any]) -> str:
         """Expose degraded sections without turning weak evidence into claims."""
@@ -794,6 +852,96 @@ Recent H2H Narrative:
 Unavailable or uncertain facts:
 {unavailable_lines}"""
 
+    def _format_air_ready_rundown(
+        self,
+        *,
+        home_team: str,
+        away_team: str,
+        competition: str,
+        quality_report: Dict[str, Any],
+        tactical_brief: Dict[str, Any],
+        news: Dict[str, Any],
+        historical: Dict[str, Any],
+    ) -> str:
+        accepted = quality_report.get("accepted_evidence", []) if isinstance(quality_report, dict) else []
+        ready_facts = self._source_backed_facts(accepted)
+        blocked_claims = quality_report.get("unavailable_facts", []) if isinstance(quality_report, dict) else []
+        opener = (
+            f"{home_team} and {away_team} meet with {competition} stakes; "
+            "the first job is to verify whether the occasion settles into control or becomes a transition game."
+            if competition
+            else f"{home_team} and {away_team} meet with the live pictures carrying the story; start with territory, tempo, and pressure."
+        )
+        setup = (
+            f"Ready to say: {ready_facts[0]}"
+            if ready_facts
+            else "Ready to say: fixture frame is available, but detailed claims should wait for confirmed sources and the live feed."
+        )
+        watch_cards = [
+            f"Watch: {home_team}'s first buildup under pressure. Say: if they play through the first line twice, the tone becomes control rather than survival. Prove: two clean exits into midfield.",
+            f"Watch: {away_team}'s first transition outlet. Say: the counter only becomes a pattern if the runner receives support. Prove: second runner arrives before the recycle.",
+        ]
+        if tactical_brief.get("first_matchup"):
+            matchup = tactical_brief["first_matchup"]
+            watch_cards.append(
+                f"Watch: {matchup.get('player1')} vs {matchup.get('player2')}. Say: the duel matters only once it decides territory. Prove: a tackle, foul, forced pass, or carried escape."
+            )
+        wait_items = blocked_claims[:4] or ["confirmed lineups", "late injury updates"]
+
+        return f"""## Air-Ready Rundown
+
+### Ready To Say
+
+- 15-second opener: {opener}
+- 45-second setup: {setup}
+{self._format_bullets(ready_facts[1:4])}
+
+### Watch, Say, Prove
+
+{self._format_bullets(watch_cards)}
+
+### Wait For Confirmation
+
+{self._format_bullets([f"Do not state {item} until an official, structured, or trusted-media source confirms it." for item in wait_items])}
+
+### Source-Backed Storylines
+
+{self._format_bullets(self._source_backed_storylines(historical, news))}"""
+
+    def _source_backed_facts(self, accepted: Any) -> List[str]:
+        facts = []
+        if isinstance(accepted, list):
+            sorted_items = sorted(
+                (item for item in accepted if isinstance(item, dict)),
+                key=lambda item: source_tier_priority(str(item.get("source_tier") or "")),
+            )
+            for item in sorted_items:
+                claim = self._clean_analysis_text(item.get("claim", "")).strip()
+                tier = item.get("source_tier") or "source"
+                source = item.get("source_name") or item.get("url") or "source"
+                if claim and not self._is_low_quality_text(claim):
+                    facts.append(f"{claim} ({tier}: {source})")
+        return facts[:5]
+
+    def _source_backed_storylines(self, historical: Dict[str, Any], news: Dict[str, Any]) -> List[str]:
+        storylines = []
+        historical_storylines = historical.get("storylines", []) if isinstance(historical, dict) else []
+        for story in historical_storylines:
+            title = self._clean_analysis_text(story.get("title", "")).strip()
+            label = story.get("source_policy_label") or story.get("source_tier") or story.get("source") or "accepted source"
+            if title:
+                storylines.append(f"Ready to say: {title} ({label}).")
+        for side in ("home_team", "away_team"):
+            team_news = news.get(side, {}) if isinstance(news, dict) else {}
+            for item in team_news.get("news_items", [])[:2]:
+                title = self._clean_analysis_text(item.get("title", "")).strip()
+                label = item.get("source_policy_label") or item.get("source_tier") or item.get("source") or "accepted source"
+                if title:
+                    storylines.append(f"Ready to say: {title} ({label}).")
+        if storylines:
+            return storylines[:5]
+        return ["No source-backed storyline is strong enough yet; sell the opening through live tempo, territory, and confirmed team-sheet facts."]
+
     def _format_player_list(
         self,
         players: List[Dict[str, Any]],
@@ -804,6 +952,8 @@ Unavailable or uncertain facts:
         formatted = []
         for i, player in enumerate(players, 1):
             name = player.get("name", "Unknown")
+            if self._is_placeholder_player_name(name):
+                continue
             pos = player.get("position", "N/A")
             stats = player.get("stats", {}) if isinstance(player.get("stats"), dict) else {}
             apps = stats.get("appearances", 0)
@@ -865,7 +1015,8 @@ Unavailable or uncertain facts:
             for item in news_items:
                 title = item.get('title', '')
                 if title:
-                    output += f"- {title}\n"
+                    label = item.get("source_policy_label") or item.get("source_tier") or item.get("source") or "accepted source"
+                    output += f"- {title} ({label})\n"
             output += "\n"
 
         if injuries:
@@ -899,12 +1050,12 @@ Unavailable or uncertain facts:
         label = team_name or ("Away side" if is_away else "home side")
         if is_away:
             return (
-                f"No major {label} disruption surfaced. Frame their first spell through travel composure, "
-                "defensive spacing, and whether the outlet runner gives them relief."
+                f"No verified {label} team-news update was accepted in this run. Frame their first spell through "
+                "travel composure, defensive spacing, and whether the outlet runner gives them relief."
             )
         return (
-            f"No major {label} disruption surfaced. Frame their first spell through home tempo, "
-            "territory, and whether the selection gives them early control."
+            f"No verified {label} team-news update was accepted in this run. Frame their first spell through "
+            "home tempo, territory, and whether the on-ball structure gives them early control."
         )
 
     def _build_team_tactical_profile(
@@ -976,7 +1127,12 @@ Unavailable or uncertain facts:
             p1 = matchup.get("player1", "")
             p2 = matchup.get("player2", "")
             analysis = self._clean_matchup_analysis(matchup.get("analysis", ""))
-            if p1 and p2:
+            if (
+                p1
+                and p2
+                and not self._is_placeholder_player_name(p1)
+                and not self._is_placeholder_player_name(p2)
+            ):
                 if analysis:
                     formatted.append(f"**{p1} vs {p2}**\n{analysis}\n")
                 else:
@@ -986,8 +1142,10 @@ Unavailable or uncertain facts:
             return "\n".join(formatted)
 
         return (
-            "*No clean individual duel was returned in this run. Call the matchup by zone: central buildup versus pressure, "
-            "wide isolation versus fullback cover, and set-piece marking on the first dead ball.*"
+            "- Central lane: identify which midfield can receive under pressure and play forward cleanly.\n"
+            "- Wide channels: watch whether the first isolation produces a cross, a cutback, or a turnover.\n"
+            "- Defensive transition: after the first broken attack, call which back line recovers shape faster.\n"
+            "- Set pieces: use the first corner or wide free kick to judge marking, second-ball reaction, and delivery quality."
         )
 
     def _format_bullets(self, items: List[str]) -> str:
@@ -1040,11 +1198,12 @@ Unavailable or uncertain facts:
 
         critical_matchups = matchups.get("critical_matchups", [])
         if critical_matchups:
-            first = critical_matchups[0]
-            p1 = first.get('player1', '')
-            p2 = first.get('player2', '')
-            if p1 and p2:
-                bullets.append(f"1. Key duel: {p1} vs {p2}")
+            for first in critical_matchups:
+                p1 = first.get('player1', '')
+                p2 = first.get('player2', '')
+                if p1 and p2 and not self._is_placeholder_player_name(p1) and not self._is_placeholder_player_name(p2):
+                    bullets.append(f"1. Key duel: {p1} vs {p2}")
+                    break
 
         h2h = historical.get("h2h_history", {})
         if h2h and h2h.get("status") != "unavailable" and (
@@ -1133,7 +1292,16 @@ Unavailable or uncertain facts:
         """Build quick commentary cues from validated workflow outputs."""
         angles = []
 
-        first_matchup = (matchups.get("critical_matchups") or [{}])[0]
+        first_matchup = next(
+            (
+                matchup for matchup in (matchups.get("critical_matchups") or [])
+                if matchup.get("player1")
+                and matchup.get("player2")
+                and not self._is_placeholder_player_name(matchup.get("player1"))
+                and not self._is_placeholder_player_name(matchup.get("player2"))
+            ),
+            {},
+        )
         if first_matchup.get("player1") and first_matchup.get("player2"):
             angles.append(
                 f"Open with the duel between {first_matchup['player1']} and {first_matchup['player2']}."
@@ -1152,7 +1320,11 @@ Unavailable or uncertain facts:
             angles.append(f"Form cue: {comparative_line}")
 
         if not angles:
-            angles.append(f"Lead with how {home_team} and {away_team} handle the first tactical swing in midfield.")
+            angles.extend([
+                f"Opening hook: {home_team} vs {away_team} is a final, but the first proof point is control of the middle third.",
+                "Momentum hook: after the first turnover, name whether the counter-press or the outlet pass wins.",
+                "Evidence hook: keep lineup, injury, venue, and schedule claims out until the live feed verifies them.",
+            ])
 
         return [angle for angle in angles if not self._is_low_quality_text(angle)][:4]
 
@@ -1166,18 +1338,18 @@ Unavailable or uncertain facts:
         losses = record.get("losses")
         has_record = any((value or 0) > 0 for value in (wins, draws, losses))
 
-        if has_record:
-            record_text = f"{wins or 0}W-{draws or 0}D-{losses or 0}L"
-            form_clause = f" Their recent sequence reads {form_string}." if self._is_meaningful_form_string(form_string) else ""
-            return (
-                f"{team_name} enter with a recent record of {record_text}.{form_clause} "
-                "For commentary, watch whether that baseline shows up as early territorial control, clean rest defense, or pressure after turnovers."
-            )
-
         if self._is_meaningful_form_string(form_string):
             return (
-                f"{team_name}'s recent sequence reads {form_string}. "
-                "Turn that into a live read on tempo, field tilt, and first-half chance quality."
+                f"{team_name}: recent results are available as {form_string}, but treat them as context rather than a script. "
+                "The useful live read is whether their first three possessions create territory, whether the midfield can play through pressure, "
+                "and whether the defensive line stays connected after turnovers."
+            )
+
+        if has_record:
+            record_text = f"{wins or 0}W-{draws or 0}D-{losses or 0}L"
+            return (
+                f"{team_name}: available record context is {record_text}. Do not sell it as a match prediction. "
+                "Use it to set one opening question: does that baseline show up as territorial control, clean rest defense, or repeat pressure?"
             )
 
         split = form_analysis.get("home_away_split", {}) if isinstance(form_analysis, dict) else {}
@@ -1202,11 +1374,17 @@ Unavailable or uncertain facts:
 
     def _build_team_plan_fallback(self, form_analysis: Dict[str, Any], team_name: str) -> str:
         """Build a tactical route when generated prose is placeholder-like."""
-        form_copy = self._build_team_form_fallback(form_analysis, team_name)
-        first = self._first_sentence(form_copy)
+        recent_form = form_analysis.get("recent_form", {}) if isinstance(form_analysis, dict) else {}
+        form_string = recent_form.get("form_string", "") if isinstance(recent_form, dict) else ""
+        context = (
+            f"Use the recent sequence {form_string} only as a context cue. "
+            if self._is_meaningful_form_string(form_string)
+            else ""
+        )
         return (
-            f"{first} The route to tilting the match is to establish territory early, protect the central lane, "
-            "and turn wide pressure into repeatable final-third moments."
+            f"{team_name}: {context}In possession, watch first-pass security under pressure. "
+            "Out of possession, check how quickly the midfield supports the ball. "
+            "In transition, judge whether wide pressure becomes a repeatable final-third entry or breaks down into isolated moments."
         )
 
     def _format_home_away_split_for_notes(self, split: Dict[str, Any]) -> str:
@@ -1258,7 +1436,15 @@ Unavailable or uncertain facts:
             return True
         if "form favorability:" in lower:
             return True
+        if "clear form favorability" in lower:
+            return True
+        if "lacking available performance metrics" in lower:
+            return True
+        if lower.startswith("as an elite"):
+            return True
         if "limited historical data" in lower:
+            return True
+        if self._looks_like_numbered_homework(cleaned):
             return True
         if "****" in cleaned or "###" in cleaned:
             return True
@@ -1282,6 +1468,8 @@ Unavailable or uncertain facts:
             return True
         if re.search(r"\b(?:declining|stable|resurgent|in-form)\s+-\s+defensive record", lower):
             return True
+        if re.fullmatch(r"(?:\d+\.\s*)?(?:declining|stable|resurgent|in-form)[.!]?", lower):
+            return True
         if re.search(r"(^|\s)[1-5]\.\s*(?:$|[1-5]\.|[A-Za-z ]{0,24}:?\s*(?:unavailable|tbd|unknown))", cleaned, re.I):
             return True
         if re.fullmatch(r"(?:[1-5]\.\s*)+", cleaned):
@@ -1292,6 +1480,31 @@ Unavailable or uncertain facts:
             if re.search(r"\b(home team|away team)\b", lower):
                 return True
         return False
+
+    def _looks_like_numbered_homework(self, text: Any) -> bool:
+        """Reject LLM outline prose that reads like an answer sheet, not booth notes."""
+        if not isinstance(text, str):
+            return False
+        cleaned = " ".join(text.split()).strip()
+        if not cleaned:
+            return False
+        numbered_markers = len(re.findall(r"(?:^|\s)[1-5]\.\s+", cleaned))
+        if numbered_markers >= 2:
+            return True
+        return bool(re.search(r"\b1\.\s*(?:in-form|declining|stable|resurgent)\b", cleaned, flags=re.I))
+
+    def _is_placeholder_player_name(self, name: Any) -> bool:
+        """Reject mock squad names before they become commentary copy."""
+        if not isinstance(name, str):
+            return True
+        cleaned = " ".join(name.split()).strip()
+        if not cleaned or cleaned.lower() == "unknown":
+            return True
+        if cleaned.endswith("-"):
+            return True
+        if any(token in {"Getty", "Reuters", "Image", "Images", "Photo", "For"} for token in cleaned.split()):
+            return True
+        return bool(re.search(r"\bPlayer\s+\d+\b", cleaned, flags=re.I))
 
     def _is_unverified_lineup_weakness(self, text: str) -> bool:
         """Reject lineup weakness labels that are unsafe when starters are missing."""
@@ -1318,6 +1531,8 @@ Unavailable or uncertain facts:
             self._is_low_quality_text(cleaned)
             or "both players have not scored" in lower
             or "the lies in" in lower
+            or "cannot be determined" in lower
+            or "unquantifiable" in lower
         ):
             return ""
         return self._first_two_sentences(cleaned)
@@ -1332,6 +1547,10 @@ Unavailable or uncertain facts:
             "no recent news available" in lower
             or "lineup status is unavailable" in lower
             or "no tactical adjustments are expected" in lower
+            or "none reported" in lower
+            or "no injuries" in lower
+            or "no injury" in lower
+            or "no major disruption" in lower
             or "check official" in lower
             or "latest roster updates" in lower
         ):

@@ -47,3 +47,28 @@ def test_notes_quality_penalizes_placeholders():
 
     assert score.hallucination_risk > 0
     assert score.total < 0.6
+
+
+def test_notes_quality_caps_green_score_when_evidence_count_is_zero():
+    markdown = """
+## Air-Ready Rundown
+- Ready to say: fixture frame only.
+- Watch, say, prove: midfield pressure.
+- Wait for confirmation: team news.
+## Match Frame
+## Tactical Themes
+press transition midfield zone duel set piece tempo line shape fullback
+## Key Player Battles
+## Team News Caveats
+## Live-Trigger Beats
+"""
+    score = score_notes(markdown, {
+        "beats": [{"text": "Cue", "source_urls": ["https://www.uefa.com/test"]}],
+        "quality_report": {
+            "accepted_evidence_count": 0,
+            "degraded_sections": ["historical_h2h", "storylines", "team_news:Arsenal", "team_news:Paris Saint-Germain"],
+        },
+    })
+
+    assert score.score_cap == 0.62
+    assert score.total <= 0.62

@@ -12,7 +12,7 @@ import logging
 from agents.base import BaseAgent
 from data_sources import DataCache
 from data_sources.factory import get_brightdata_mcp_retriever, get_football_data_retriever, get_retriever, get_search_service
-from quality.evidence import filter_allowed_search_results
+from quality.evidence import classify_source_tier, filter_allowed_search_results, preferred_domains_for_topic
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +154,38 @@ Keep to 3-4 sentences. Do not invent head-to-head numbers when the record is una
                 logger.warning("Football-data H2H failed for %s vs %s: %s", team1, team2, exc)
 
         if not h2h_data:
+            if self.search_service and self.search_service.is_available:
+                try:
+                    search_result = await self.search_service.search_h2h(
+                        team1,
+                        team2,
+                        self.sport,
+                        include_domains=preferred_domains_for_topic("h2h", "Champions League"),
+                    )
+                    accepted_results, _ = filter_allowed_search_results(
+                        search_result.get("results", []) or [],
+                        home_team=team1,
+                        away_team=team2,
+                        topic="h2h",
+                        max_results=2,
+                    )
+                    if accepted_results:
+                        primary = accepted_results[0]
+                        h2h_data = {
+                            "status": "accepted",
+                            "total_matches": None,
+                            "team1_wins": None,
+                            "team2_wins": None,
+                            "draws": None,
+                            "recent_results": [],
+                            "source_urls": [item.get("url", "") for item in accepted_results if item.get("url")],
+                            "source_tier": primary.get("source_tier") or classify_source_tier(primary.get("url", ""), primary.get("source", "")),
+                            "note": (primary.get("content") or primary.get("title") or "")[:240],
+                        }
+                except Exception as exc:
+                    logger.warning("Trusted H2H search failed for %s vs %s: %s", team1, team2, exc)
+
+        if not h2h_data:
             h2h_data = {
                 "status": "unavailable",
                 "total_matches": None,
@@ -179,6 +211,8 @@ Keep to 3-4 sentences. Do not invent head-to-head numbers when the record is una
             "recent_matches": recent_matches,
             "patterns": patterns,
             "note": h2h_data.get("note", ""),
+            "source_urls": h2h_data.get("source_urls", []),
+            "source_tier": h2h_data.get("source_tier", ""),
         }
 
     async def identify_key_storylines(
@@ -202,7 +236,10 @@ Keep to 3-4 sentences. Do not invent head-to-head numbers when the record is una
         if self.search_service and self.search_service.is_available:
             try:
                 search_result = await self.search_service.search_match_storylines(
-                    home_team, away_team, self.sport
+                    home_team,
+                    away_team,
+                    self.sport,
+                    include_domains=preferred_domains_for_topic("storylines", "Champions League"),
                 )
                 if search_result.get("results"):
                     accepted_results, rejected = filter_allowed_search_results(
@@ -234,6 +271,9 @@ Keep to 3-4 sentences. Do not invent head-to-head numbers when the record is una
                             "description": (scraped.get("content") or result.get("content", ""))[:300],
                             "source": result.get("source", ""),
                             "url": result.get("url", ""),
+                            "source_tier": result.get("source_tier") or classify_source_tier(result.get("url", ""), result.get("source", "")),
+                            "source_policy_label": result.get("source_policy_label", ""),
+                            "published_at": result.get("published_at", result.get("published_date", "")),
                             "data_source": "brightdata_mcp" if scraped else "tavily_search",
                         })
                     if rejected or scrape_result.get("degraded"):

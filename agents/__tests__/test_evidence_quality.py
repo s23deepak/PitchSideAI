@@ -1,4 +1,17 @@
-from quality.evidence import build_evidence_quality_report, validate_scraped_content
+from quality.evidence import build_evidence_quality_report, classify_source_tier, validate_scraped_content
+
+
+def test_source_tiers_cover_official_structured_media_and_weather_sources():
+    assert classify_source_tier("https://www.uefa.com/uefachampionsleague/match/2047742--paris-vs-arsenal/final/") == "official"
+    assert classify_source_tier("https://www.arsenal.com/news/team-news") == "official"
+    assert classify_source_tier("https://en.psg.fr/teams/first-team/content/team-news") == "official"
+    assert classify_source_tier("https://www.espn.com/soccer/story/_/id/1") == "structured"
+    assert classify_source_tier("https://www.bbc.co.uk/sport/football/articles/test") == "trusted_media"
+    assert classify_source_tier("https://www.skysports.com/football/news/test") == "trusted_media"
+    assert classify_source_tier("https://www.reuters.com/sports/soccer/test") == "trusted_media"
+    assert classify_source_tier("https://apnews.com/article/test") == "trusted_media"
+    assert classify_source_tier("https://www.theguardian.com/football/test") == "trusted_media"
+    assert classify_source_tier("https://weather.com/weather/tenday/l/Budapest") == "weather"
 
 
 def test_sunderland_chelsea_quality_gate_rejects_polluted_claims():

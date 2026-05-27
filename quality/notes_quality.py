@@ -14,10 +14,12 @@ RISK_PATTERNS = (
     "{{",
     "}}",
     "verified tactical snapshot unavailable",
+    "balanced on verified data",
 )
 
 REQUIRED_SECTIONS = (
     "MATCH FRAME",
+    "AIR-READY RUNDOWN",
     "TACTICAL THEMES",
     "KEY PLAYER BATTLES",
     "TEAM NEWS CAVEATS",
@@ -32,17 +34,22 @@ class NotesQualityScore:
     precision: float
     provenance: float
     hallucination_risk: float
+    evidence_strength: float = 0.5
+    on_air_usability: float = 0.5
+    score_cap: float = 1.0
 
     @property
     def total(self) -> float:
-        return round(
+        raw = (
             self.structure * 0.25
-            + self.tactical_depth * 0.25
-            + self.precision * 0.2
+            + self.tactical_depth * 0.2
+            + self.precision * 0.15
             + self.provenance * 0.15
-            + (1.0 - self.hallucination_risk) * 0.15,
-            3,
+            + self.evidence_strength * 0.15
+            + self.on_air_usability * 0.1
+            + (1.0 - self.hallucination_risk) * 0.15
         )
+        return round(min(raw, self.score_cap), 3)
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -89,6 +96,29 @@ def score_notes(markdown: str, notes_payload: dict[str, Any] | None = None) -> N
     lowered = markdown.lower()
     risk_hits = sum(1 for pattern in RISK_PATTERNS if pattern in lowered)
     hallucination_risk = min(1.0, risk_hits / 3)
+    generic_hits = lowered.count("balanced on verified data") + lowered.count("no verified season-stat edge")
+    hallucination_risk = min(1.0, hallucination_risk + min(0.35, generic_hits * 0.08))
+
+    quality_report = notes_payload.get("quality_report") or {}
+    accepted_count = int(quality_report.get("accepted_evidence_count") or 0) if isinstance(quality_report, dict) else 0
+    degraded_count = len(quality_report.get("degraded_sections") or []) if isinstance(quality_report, dict) else 0
+    if isinstance(quality_report, dict) and "accepted_evidence_count" in quality_report:
+        evidence_strength = min(1.0, accepted_count / 4)
+        score_cap = 0.62 if accepted_count == 0 else 1.0
+        if degraded_count >= 4:
+            score_cap = min(score_cap, 0.82)
+    else:
+        evidence_strength = provenance
+        score_cap = 1.0
+
+    on_air_markers = (
+        "ready to say",
+        "watch, say, prove",
+        "wait for confirmation",
+        "live-trigger beats",
+        "15-second opener",
+    )
+    on_air_usability = min(1.0, sum(1 for marker in on_air_markers if marker in lowered) / 4)
 
     return NotesQualityScore(
         structure=round(structure, 3),
@@ -96,4 +126,7 @@ def score_notes(markdown: str, notes_payload: dict[str, Any] | None = None) -> N
         precision=round(precision, 3),
         provenance=round(provenance, 3),
         hallucination_risk=round(hallucination_risk, 3),
+        evidence_strength=round(evidence_strength, 3),
+        on_air_usability=round(on_air_usability, 3),
+        score_cap=round(score_cap, 3),
     )

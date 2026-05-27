@@ -12,7 +12,7 @@ import logging
 from agents.base import BaseAgent
 from data_sources import DataCache
 from data_sources.factory import get_brightdata_mcp_retriever, get_retriever, get_search_service
-from quality.evidence import filter_allowed_search_results
+from quality.evidence import classify_source_tier, filter_allowed_search_results, preferred_domains_for_topic
 
 logger = logging.getLogger(__name__)
 
@@ -111,13 +111,24 @@ class NewsAgent(BaseAgent):
         ]
 
         rejected_evidence: list[dict[str, Any]] = []
+        if news_items:
+            news_items, rejected = filter_allowed_search_results(
+                news_items,
+                home_team=team_name,
+                away_team=opponent,
+                topic="team_news",
+                max_results=5,
+            )
+            rejected_evidence.extend(item.to_dict() for item in rejected)
         brightdata_status = {"available": False, "degraded_count": 0, "reason": ""}
 
         # Fetch team news via Tavily search, then scrape only allowlisted URLs.
         if self.search_service and self.search_service.is_available:
             try:
                 search_result = await self.search_service.search_team_news(
-                    team_name, self.sport
+                    team_name,
+                    self.sport,
+                    include_domains=preferred_domains_for_topic("team_news"),
                 )
                 if search_result.get("results"):
                     accepted_results, rejected = filter_allowed_search_results(
@@ -154,6 +165,9 @@ class NewsAgent(BaseAgent):
                             "content": (scraped_by_url.get(r.get("url"), {}).get("content") or r.get("content", ""))[:500],
                             "source": r.get("source", ""),
                             "url": r.get("url", ""),
+                            "source_tier": classify_source_tier(r.get("url", ""), r.get("source", "")),
+                            "source_policy_label": r.get("source_policy_label", ""),
+                            "published_at": r.get("published_at", r.get("published_date", "")),
                             "data_source": "brightdata_mcp" if r.get("url") in scraped_by_url else "tavily_search",
                             "validation_status": "accepted",
                         }
@@ -180,6 +194,8 @@ Provide:
 2. Player availability status
 3. Any tactical adjustments expected
 
+Only state injury, readiness, or availability claims when the supplied evidence explicitly says so. If the injury list says it is not verified, do not convert that into "none reported" or "no injuries."
+
 Keep to 3-4 sentences."""
 
         synthesis = ""
@@ -194,8 +210,12 @@ Keep to 3-4 sentences."""
             "team_name": team_name,
             "news_items": news_items,
             "injuries": injuries,
+            "injury_status": {
+                "status": "verified" if injuries else "unverified",
+                "summary": "" if injuries else "No verified injury report was accepted in this run",
+            },
             "lineup_status": lineup_status,
-            "last_minute_changes": news_items[0].get("title", "") if news_items else "None",
+            "last_minute_changes": news_items[0].get("title", "") if news_items else "",
             "synthesis": synthesis,
             "last_updated": datetime.utcnow().isoformat(),
             "data_source": "combined" if news_items or injuries else "unavailable",
@@ -218,7 +238,7 @@ Keep to 3-4 sentences."""
     def _format_injuries(self, injuries: List[Dict[str, Any]]) -> str:
         """Format injury list for prompting."""
         if not injuries:
-            return "None reported"
+            return "Not verified in this run"
         return ", ".join(
             f"{inj.get('player', 'Unknown')} ({inj.get('status', 'Unavailable')})"
             for inj in injuries[:4]
@@ -228,7 +248,11 @@ Keep to 3-4 sentences."""
         """Infer lineup certainty from web search results."""
         if self.search_service and self.search_service.is_available:
             try:
-                search_result = await self.search_service.search_lineup(team_name, self.sport)
+                search_result = await self.search_service.search_lineup(
+                    team_name,
+                    self.sport,
+                    include_domains=preferred_domains_for_topic("lineup"),
+                )
                 accepted_results, _ = filter_allowed_search_results(
                     search_result.get("results", []) or [],
                     home_team=team_name,
@@ -287,7 +311,7 @@ Keep to 3-4 sentences."""
                 critical.append(f"Suspension: {item.get('title', '')}")
                 break
 
-        return critical[:2] if critical else ["No critical updates"]
+        return critical[:2]
 
     async def close(self):
         """Clean up resources."""

@@ -143,9 +143,9 @@ def test_tactical_plan_replaces_numbered_unavailable_llm_stub():
 
     assert "Current Form Status: Unavailable" not in notes
     assert "How Roma Can Tilt The Match" in notes
-    assert "Roma enter with a recent record of 2W-1D-2L" in notes
+    assert "Roma: Use the recent sequence WDLWL only as a context cue" in notes
     assert "How Napoli Can Tilt The Match" in notes
-    assert "Napoli enter with a recent record of 3W-1D-1L" in notes
+    assert "Napoli: Use the recent sequence WWDLW only as a context cue" in notes
 
 
 def test_team_analysis_uses_actual_team_name_and_sanitized_form():
@@ -188,7 +188,7 @@ def test_tactical_plan_rejects_markdown_artifacts_and_bad_metric_claims():
 
     assert "****" not in plan
     assert "defensive record: 4 wins" not in plan
-    assert "Roma enter with a recent record of 4W-0D-11L" in plan
+    assert "Roma: In possession, watch first-pass security" in plan
 
 
 def test_tactical_plan_rejects_zero_defensive_record_colon_form():
@@ -207,7 +207,7 @@ def test_tactical_plan_rejects_zero_defensive_record_colon_form():
     )
 
     assert "Defensive record: 0 wins" not in plan
-    assert "live cues" in plan
+    assert "In possession, watch first-pass security" in plan
 
 
 def test_tactical_plan_rejects_broken_stable_no_matches_sentence():
@@ -224,7 +224,7 @@ def test_tactical_plan_rejects_broken_stable_no_matches_sentence():
 
     assert "Real Madrid's is stable" not in plan
     assert "not won any matches" not in plan
-    assert "Real Madrid's recent sequence reads DLWDW" in plan
+    assert "Real Madrid: Use the recent sequence DLWDW only as a context cue" in plan
 
 
 def test_matchup_analysis_is_cleaned_to_commentary_blurb():
@@ -265,7 +265,7 @@ def test_zero_record_no_data_uses_live_cue_fallback():
     )
 
     assert "0W-0D-0L" not in plan
-    assert "live cues" in plan
+    assert "In possession, watch first-pass security" in plan
 
 
 def test_form_sequence_does_not_tell_user_to_verify():
@@ -283,7 +283,7 @@ def test_form_sequence_does_not_tell_user_to_verify():
     )
 
     assert "verify" not in copy.lower()
-    assert "Turn that into a live read" in copy
+    assert "treat them as context rather than a script" in copy
 
 
 def test_historical_zero_zero_zero_claim_is_replaced():
@@ -348,8 +348,8 @@ def test_missing_data_fallbacks_are_booth_guidance_not_homework():
     for phrase in banned:
         assert phrase not in combined.lower()
     assert "first receiver" in players.lower()
-    assert "No major home side disruption surfaced" in news
-    assert "Call the matchup by zone" in matchups
+    assert "No verified home side team-news update was accepted" in news
+    assert "Central lane" in matchups
 
 
 def test_lineups_without_players_render_shape_cues_not_empty_table():
@@ -439,6 +439,43 @@ def test_degraded_news_and_h2h_do_not_emit_false_claims():
     assert "0-0-0" not in tactical
 
 
+@pytest.mark.asyncio
+async def test_air_ready_rundown_surfaces_source_backed_and_blocked_claims():
+    organizer = CommentaryNoteOrganizerAgent(sport="soccer")
+
+    markdown = await organizer._build_markdown_document({
+        "home_team": "Arsenal",
+        "away_team": "Paris Saint-Germain",
+        "competition": "Champions League Final",
+        "match_datetime": "2026-05-30T18:00:00+02:00",
+        "venue": "Puskas Arena",
+        "quality_report": {
+            "strict_mode": True,
+            "accepted_evidence_count": 1,
+            "accepted_evidence": [{
+                "claim": "UEFA confirms Paris vs Arsenal at Puskas Arena.",
+                "source_name": "UEFA",
+                "source_tier": "official",
+                "source_url": "https://www.uefa.com/uefachampionsleague/match/2047742--paris-vs-arsenal/final/",
+            }],
+            "degraded_sections": ["team_news:Arsenal"],
+            "unavailable_facts": ["Arsenal verified team news"],
+        },
+        "historical": {"storylines": []},
+        "news": {},
+        "team_form": {},
+        "matchups": {},
+        "weather": {},
+        "player_research": {},
+    })
+
+    assert "## Air-Ready Rundown" in markdown
+    assert "### Ready To Say" in markdown
+    assert "UEFA confirms Paris vs Arsenal at Puskas Arena" in markdown
+    assert "### Wait For Confirmation" in markdown
+    assert "Arsenal verified team news" in markdown
+
+
 def test_unknown_venue_is_rendered_as_broadcast_angle_not_placeholder():
     organizer = CommentaryNoteOrganizerAgent(sport="soccer")
 
@@ -511,6 +548,44 @@ def test_tactical_summary_drops_no_critical_battles_scaffold():
     assert all("Form Favorability" not in angle for angle in brief["commentary_angles"])
 
 
+def test_tactical_summary_drops_missing_metrics_form_favorability_claim():
+    organizer = CommentaryNoteOrganizerAgent(sport="soccer")
+
+    brief = organizer._build_tactical_brief({
+        "home_team": "Arsenal",
+        "away_team": "Paris Saint-Germain",
+        "team_form": {},
+        "matchups": {
+            "tactical_implications": (
+                "As an elite soccer analyst, Arsenal holds a clear form favorability, "
+                "contrasting sharply with a declining PSG side lacking available performance metrics."
+            )
+        },
+        "historical": {},
+        "weather": {},
+    })
+
+    assert "clear form favorability" not in brief["summary"].lower()
+    assert "lacking available performance metrics" not in brief["summary"].lower()
+    assert "balanced tactical battle" in brief["summary"]
+
+
+def test_team_plan_rejects_bare_numbered_form_status():
+    organizer = CommentaryNoteOrganizerAgent(sport="soccer")
+
+    plan = organizer._extract_team_plan(
+        {
+            "team_name": "Paris Saint-Germain",
+            "recent_form": {"form_string": "DDWWL"},
+            "comprehensive_analysis": "1. Declining.",
+        },
+        "Paris Saint-Germain",
+    )
+
+    assert "1. Declining" not in plan
+    assert "Paris Saint-Germain: Use the recent sequence DDWWL only as a context cue" in plan
+
+
 def test_pressure_points_reject_unverified_lineup_weaknesses():
     organizer = CommentaryNoteOrganizerAgent(sport="soccer")
 
@@ -547,3 +622,48 @@ def test_limited_historical_pattern_not_used_as_commentary_angle():
     combined = " ".join(angles).lower()
     assert "limited historical data" not in combined
     assert "form favorability" not in combined
+
+
+@pytest.mark.asyncio
+async def test_note_organizer_suppresses_placeholder_players_in_notes_and_beats():
+    organizer = CommentaryNoteOrganizerAgent(sport="soccer")
+
+    notes = await organizer.synthesize_to_notes_store({
+        "home_team": "Arsenal",
+        "away_team": "Paris Saint-Germain",
+        "sport": "soccer",
+        "competition": "Champions League Final",
+        "player_research": {
+            "home_team": {"team_name": "Arsenal", "players": []},
+            "away_team": {
+                "team_name": "Paris Saint-Germain",
+                "players": [{
+                    "name": "Paris Saint-Germain Player 1",
+                    "position": "Midfielder",
+                    "profile": "Mock fallback profile that should not reach the booth.",
+                }],
+            },
+        },
+        "team_form": {},
+        "matchups": {
+            "critical_matchups": [{
+                "player1": "Paris Saint-Germain Player 1",
+                "player2": "Arsenal Player 1",
+                "analysis": "Both have 0G 0A, so this is placeholder filler.",
+            }],
+            "tactical_implications": "",
+            "positional_strength": {},
+            "weak_points": {},
+        },
+        "historical": {},
+        "weather": {},
+        "news": {},
+    })
+
+    rendered = notes.raw_markdown
+    beat_text = " ".join(beat.text for beat in notes.beats)
+
+    assert "Paris Saint-Germain Player 1" not in rendered
+    assert "Arsenal Player 1" not in rendered
+    assert "Paris Saint-Germain Player 1" not in beat_text
+    assert "0G 0A" not in rendered
