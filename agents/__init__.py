@@ -13,13 +13,31 @@ Provides specialized agents for sports analysis:
 All agents support dynamic sport types (Soccer, Cricket, Basketball, etc.)
 """
 from .base import BaseAgent
-from .research_agent import ResearchAgent
-from .vision_agent import VisionAgent
-from .commentary_agent import CommentaryAgent
-from .live_agent import LiveAgent
-from .coordinator import AgentCoordinator, CoordinationContext
-from .qa_agent import QAAgent, QAPair, VisionTacticalContext
-from .player_id_agent import PlayerIDAgent, PlayerIdentification
+
+_LAZY_EXPORTS = {
+    "ResearchAgent": (".research_agent", "ResearchAgent"),
+    "VisionAgent": (".vision_agent", "VisionAgent"),
+    "CommentaryAgent": (".commentary_agent", "CommentaryAgent"),
+    "LiveAgent": (".live_agent", "LiveAgent"),
+    "AgentCoordinator": (".coordinator", "AgentCoordinator"),
+    "CoordinationContext": (".coordinator", "CoordinationContext"),
+    "QAAgent": (".qa_agent", "QAAgent"),
+    "QAPair": (".qa_agent", "QAPair"),
+    "VisionTacticalContext": (".qa_agent", "VisionTacticalContext"),
+    "PlayerIDAgent": (".player_id_agent", "PlayerIDAgent"),
+    "PlayerIdentification": (".player_id_agent", "PlayerIdentification"),
+}
+
+
+def __getattr__(name):
+    if name not in _LAZY_EXPORTS:
+        raise AttributeError(f"module 'agents' has no attribute {name!r}")
+    from importlib import import_module
+
+    module_name, attr_name = _LAZY_EXPORTS[name]
+    attr = getattr(import_module(module_name, __name__), attr_name)
+    globals()[name] = attr
+    return attr
 
 __all__ = [
     "BaseAgent",

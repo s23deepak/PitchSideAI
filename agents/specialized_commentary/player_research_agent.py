@@ -10,6 +10,7 @@ from datetime import datetime
 import asyncio
 import json
 import logging
+import re
 from agents.base import BaseAgent
 from data_sources import DataCache, WikipediaRetriever
 from data_sources.factory import (
@@ -74,6 +75,7 @@ class PlayerResearchAgent(BaseAgent):
         self,
         home_team: str,
         away_team: str,
+        fixture_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Research both team squads simultaneously.
@@ -86,11 +88,18 @@ class PlayerResearchAgent(BaseAgent):
             Squad data for both teams
         """
         start_time = datetime.utcnow()
+        fixture_players = (fixture_context or {}).get("players", {})
 
         # Research both squads in parallel
         home_squad, away_squad = await asyncio.gather(
-            self.research_squad(home_team),
-            self.research_squad(away_team),
+            self.research_squad(
+                home_team,
+                fixture_players=fixture_players.get("home_team", []),
+            ),
+            self.research_squad(
+                away_team,
+                fixture_players=fixture_players.get("away_team", []),
+            ),
         )
 
         duration_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
@@ -112,7 +121,11 @@ class PlayerResearchAgent(BaseAgent):
             "timestamp": datetime.utcnow().isoformat(),
         }
 
-    async def research_squad(self, team_name: str) -> Dict[str, Any]:
+    async def research_squad(
+        self,
+        team_name: str,
+        fixture_players: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
         """
         Research complete team squad with player-by-player analysis.
 
@@ -125,8 +138,13 @@ class PlayerResearchAgent(BaseAgent):
         # Fetch ESPN squad data
         espn_squad = await self.retriever.get_team_squad(team_name, self.sport)
 
-        # Enrich each player with detailed research
-        players = espn_squad.get("players", [])[:5]  # 5 for local dev (bump to 25 for production)
+        # ESPN's fallback can fabricate "{team} Player 1" rows. Treat those as
+        # unavailable evidence instead of allowing mock names into notes.
+        raw_players = espn_squad.get("players", [])
+        players = [
+            player for player in raw_players
+            if not self._is_placeholder_player(player, team_name)
+        ][:5]  # 5 for local dev (bump to 25 for production)
 
         enriched_players = await asyncio.gather(
             *[self._research_player_detailed(p, team_name) for p in players],
@@ -135,15 +153,87 @@ class PlayerResearchAgent(BaseAgent):
 
         # Filter out any errors
         enriched_players = [p for p in enriched_players if not isinstance(p, Exception)]
+        enriched_players = self._merge_fixture_candidates(
+            enriched_players,
+            fixture_players or [],
+            team_name,
+        )
         enriched_players = await self._synthesize_player_profiles(team_name, enriched_players)
 
         return {
             "team_name": team_name,
             "players": enriched_players,
             "total_players_researched": len(enriched_players),
-            "data_sources": ["ESPN", "FBref", "Tavily"],
+            "data_sources": self._data_sources(enriched_players),
+            "data_status": "accepted" if enriched_players else "unavailable",
             "research_timestamp": datetime.utcnow().isoformat(),
         }
+
+    def _is_placeholder_player(self, player: Dict[str, Any], team_name: str) -> bool:
+        """Reject deterministic mock squad rows from upstream fallbacks."""
+        if not isinstance(player, dict):
+            return True
+        name = str(player.get("name") or "").strip()
+        if not name or name.lower() == "unknown":
+            return True
+        normalized_team = re.escape(" ".join(team_name.split()))
+        if re.fullmatch(rf"{normalized_team}\s+Player\s+\d+", name, flags=re.I):
+            return True
+        return bool(re.fullmatch(r"(?:Home|Away|Team|Player)\s*\d*", name, flags=re.I))
+
+    def _merge_fixture_candidates(
+        self,
+        researched_players: List[Dict[str, Any]],
+        fixture_players: List[Dict[str, Any]],
+        team_name: str,
+    ) -> List[Dict[str, Any]]:
+        merged = list(researched_players)
+        seen = {self._normalize_player_name(player.get("name", "")) for player in merged}
+
+        for player in fixture_players:
+            if not isinstance(player, dict) or self._is_placeholder_player(player, team_name):
+                continue
+            name_key = self._normalize_player_name(player.get("name", ""))
+            if not name_key or name_key in seen:
+                continue
+            merged.append(self._fixture_candidate(player, team_name))
+            seen.add(name_key)
+            if len(merged) >= 8:
+                break
+        return merged
+
+    def _fixture_candidate(self, player: Dict[str, Any], team_name: str) -> Dict[str, Any]:
+        evidence = str(player.get("evidence") or player.get("profile") or "").strip()
+        return {
+            "name": player.get("name", "Unknown"),
+            "position": player.get("position") or "Unknown",
+            "squad_number": "N/A",
+            "age": "Unknown",
+            "stats": {},
+            "biography": "",
+            "nationality": "N/A",
+            "injury_status": "Not verified",
+            "profile": evidence[:180] or (
+                f"{player.get('name', 'This player')} is a fixture-evidence candidate for "
+                f"{team_name}; role and starter status are not verified."
+            ),
+            "data_source": player.get("data_source") or "fixture_resolver",
+            "source_urls": player.get("source_urls") or [],
+            "evidence": evidence,
+            "confidence": player.get("confidence", 0.55),
+            "candidate_status": player.get("candidate_status") or "fixture-evidence; not confirmed starter",
+        }
+
+    def _normalize_player_name(self, name: str) -> str:
+        return re.sub(r"\W+", "", str(name or "").lower())
+
+    def _data_sources(self, players: List[Dict[str, Any]]) -> List[str]:
+        sources = set()
+        if any(player.get("data_source") != "fixture_resolver" for player in players):
+            sources.update({"ESPN", "FBref", "Tavily"})
+        if any(player.get("data_source") == "fixture_resolver" for player in players):
+            sources.add("FixtureResolver")
+        return sorted(sources)
 
     async def _research_player_detailed(
         self,
@@ -234,9 +324,12 @@ class PlayerResearchAgent(BaseAgent):
         """Create all player blurbs for a squad with one LLM call."""
         if not players:
             return players
+        players_needing_profiles = [player for player in players if not player.get("profile")]
+        if not players_needing_profiles:
+            return players
 
         payload = []
-        for player in players:
+        for player in players_needing_profiles:
             stats = player.get("stats", {}) if isinstance(player.get("stats"), dict) else {}
             payload.append({
                 "name": player.get("name", "Unknown"),
@@ -273,7 +366,8 @@ Players:
 
         for player in players:
             name = player.get("name", "Unknown")
-            player["profile"] = profile_by_name.get(name) or self._fallback_profile(player, team_name)
+            if not player.get("profile"):
+                player["profile"] = profile_by_name.get(name) or self._fallback_profile(player, team_name)
         return players
 
     def _fallback_profile(self, player: Dict[str, Any], team_name: str) -> str:

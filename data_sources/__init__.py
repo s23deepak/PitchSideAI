@@ -26,6 +26,7 @@ from data_sources.multi_source_retriever import MultiSourceRetriever
 from data_sources.transfermarkt_retriever import TransfermarktRetriever
 from data_sources.one_versus_one_retriever import OneVersusOneRetriever
 from data_sources.brightdata_mcp_retriever import BrightDataMcpRetriever
+from data_sources.fixture_resolver import FixtureResolver
 
 __all__ = [
     "DataCache",
@@ -41,4 +42,5 @@ __all__ = [
     "TransfermarktRetriever",
     "OneVersusOneRetriever",
     "BrightDataMcpRetriever",
+    "FixtureResolver",
 ]

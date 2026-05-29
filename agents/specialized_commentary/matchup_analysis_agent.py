@@ -10,6 +10,7 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime
 import asyncio
 import logging
+import re
 from agents.base import BaseAgent
 from data_sources import DataCache
 from data_sources.factory import get_fbref_retriever  # Returns MultiSourceRetriever
@@ -89,6 +90,7 @@ class MatchupAnalysisAgent(BaseAgent):
 
         return {
             "critical_matchups": critical_matchups,
+            "validation_status": "accepted" if critical_matchups else "degraded",
             "positional_strength": positional_analysis,
             "weak_points": weak_points,
             "tactical_implications": await self._generate_tactical_implications(
@@ -104,38 +106,33 @@ class MatchupAnalysisAgent(BaseAgent):
         away_lineup: List[Dict[str, str]],
     ) -> List[Dict[str, Any]]:
         """Identify key 1v1 matchups - pairing opposite positions (attacker vs defender)."""
-        # Pair opposite positions: attackers vs defenders, wingers vs fullbacks
         matchup_tasks = []
+        away_by_position = self._players_by_position(away_lineup)
+        home_by_position = self._players_by_position(home_lineup)
+        seen_pairs: set[tuple[str, str]] = set()
 
-        # Build position-based lookup for away team
-        away_by_position = {}
-        for player in away_lineup:
-            pos = player.get("position", "").upper()
-            away_by_position[pos] = player
+        def add_pair(player1: Dict[str, str], player2: Optional[Dict[str, str]]) -> None:
+            if not player2:
+                return
+            if self._is_placeholder_player(player1) or self._is_placeholder_player(player2):
+                return
+            pair_key = tuple(sorted((player1.get("name", ""), player2.get("name", ""))))
+            if not pair_key[0] or not pair_key[1] or pair_key in seen_pairs:
+                return
+            seen_pairs.add(pair_key)
+            matchup_tasks.append(self._analyze_player_matchup(player1, player2))
 
         # Match home attackers against away defenders
         for home_player in home_lineup:
             home_pos = home_player.get("position", "").upper()
-            away_opponent = None
+            if home_pos not in {"GK", "GOALKEEPER"}:
+                add_pair(home_player, self._find_opponent(home_pos, away_by_position))
 
-            # Striker/Forward vs Center Back
-            if home_pos in {"ST", "CF", "FW", "FWD", "STRIKER", "FORWARD"}:
-                away_opponent = away_by_position.get("CB") or away_by_position.get("DEFENDER")
-            # Winger vs Fullback
-            elif home_pos in {"LW", "RW", "LM", "RM", "WINGER"}:
-                if home_pos in {"LW", "LM"}:
-                    away_opponent = away_by_position.get("LB") or away_by_position.get("LWB")
-                else:
-                    away_opponent = away_by_position.get("RB") or away_by_position.get("RWB")
-            # Attacking Midfielder vs Defensive Midfielder
-            elif home_pos in {"CAM", "AM"}:
-                away_opponent = away_by_position.get("CDM") or away_by_position.get("CM")
-            # Midfielder vs Midfielder (same position ok here)
-            elif home_pos in {"CM", "CDM"}:
-                away_opponent = away_by_position.get("CM") or away_by_position.get("CAM")
-
-            if away_opponent and home_pos not in {"GK", "GOALKEEPER"}:
-                matchup_tasks.append(self._analyze_player_matchup(home_player, away_opponent))
+        # Also catch away attackers against home defenders; the first pass can miss these.
+        for away_player in away_lineup:
+            away_pos = away_player.get("position", "").upper()
+            if away_pos not in {"GK", "GOALKEEPER"}:
+                add_pair(away_player, self._find_opponent(away_pos, home_by_position))
 
         # Execute all matchup analyses IN PARALLEL
         if matchup_tasks:
@@ -143,7 +140,96 @@ class MatchupAnalysisAgent(BaseAgent):
             matchups = [r for r in results if isinstance(r, dict) and r]
             return matchups[:5]  # Top 5 matchups
 
-        return []
+        return self._candidate_matchups_without_positions(home_lineup, away_lineup)
+
+    def _players_by_position(self, lineup: List[Dict[str, str]]) -> Dict[str, List[Dict[str, str]]]:
+        by_position: Dict[str, List[Dict[str, str]]] = {}
+        for player in lineup:
+            pos = player.get("position", "").upper()
+            if pos:
+                by_position.setdefault(pos, []).append(player)
+        return by_position
+
+    def _first_for_positions(
+        self,
+        players_by_position: Dict[str, List[Dict[str, str]]],
+        positions: List[str],
+    ) -> Optional[Dict[str, str]]:
+        for position in positions:
+            players = players_by_position.get(position)
+            if players:
+                return players[0]
+        return None
+
+    def _is_placeholder_player(self, player: Dict[str, Any]) -> bool:
+        name = str(player.get("name") or "").strip()
+        if not name or name.lower() == "unknown":
+            return True
+        if name.endswith("-"):
+            return True
+        if any(token in {"Getty", "Reuters", "Image", "Images", "Photo", "For"} for token in name.split()):
+            return True
+        return bool(re.search(r"\bPlayer\s+\d+\b", name, flags=re.I))
+
+    def _candidate_matchups_without_positions(
+        self,
+        home_lineup: List[Dict[str, Any]],
+        away_lineup: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        home_candidates = [player for player in home_lineup if not self._is_placeholder_player(player)]
+        away_candidates = [player for player in away_lineup if not self._is_placeholder_player(player)]
+        matchups = []
+        for home_player, away_player in zip(home_candidates[:3], away_candidates[:3]):
+            source_urls = []
+            for player in (home_player, away_player):
+                for url in player.get("source_urls") or []:
+                    if url and url not in source_urls:
+                        source_urls.append(url)
+            p1_name = home_player.get("name", "Home player")
+            p2_name = away_player.get("name", "Away player")
+            matchups.append({
+                "player1": p1_name,
+                "player2": p2_name,
+                "position": "candidate",
+                "player1_stats": {},
+                "player2_stats": {},
+                "analysis": (
+                    f"Candidate duel only: fixture evidence names {p1_name} and {p2_name}, "
+                    "but roles and lineups are not confirmed. Watch whether they share the "
+                    "same channel before leaning on this matchup live."
+                ),
+                "importance": "medium",
+                "source_urls": source_urls,
+                "candidate_status": "fixture-evidence; not confirmed starter",
+            })
+        return matchups
+
+    def _has_useful_stats(self, stats: Dict[str, Any]) -> bool:
+        if not isinstance(stats, dict) or stats.get("error"):
+            return False
+        for key in ("appearances", "starts", "minutes", "goals", "assists", "shots", "tackles", "interceptions"):
+            value = stats.get(key)
+            if isinstance(value, (int, float)) and value > 0:
+                return True
+        return False
+
+    def _find_opponent(
+        self,
+        position: str,
+        opponents_by_position: Dict[str, List[Dict[str, str]]],
+    ) -> Optional[Dict[str, str]]:
+        pos = (position or "").upper()
+        if pos in {"ST", "CF", "FW", "FWD", "STRIKER", "FORWARD"}:
+            return self._first_for_positions(opponents_by_position, ["CB", "DEFENDER", "LCB", "RCB"])
+        if pos in {"LW", "LM"}:
+            return self._first_for_positions(opponents_by_position, ["RB", "RWB", "DEFENDER"])
+        if pos in {"RW", "RM", "WINGER"}:
+            return self._first_for_positions(opponents_by_position, ["LB", "LWB", "DEFENDER"])
+        if pos in {"CAM", "AM"}:
+            return self._first_for_positions(opponents_by_position, ["CDM", "DM", "CM", "MIDFIELDER"])
+        if pos in {"CM", "CDM", "DM", "MIDFIELDER", "MF"}:
+            return self._first_for_positions(opponents_by_position, ["CM", "CDM", "DM", "CAM", "MIDFIELDER", "MF"])
+        return None
 
     async def _analyze_player_matchup(
         self,
@@ -156,6 +242,9 @@ class MatchupAnalysisAgent(BaseAgent):
         p2_name = player2.get('name', '')
         p1_team = player1.get('team', '')
         p2_team = player2.get('team', '')
+
+        if self._is_placeholder_player(player1) or self._is_placeholder_player(player2):
+            return None
 
         # Check local DB first
         player1_stats = db.get_season_stats(p1_name, self.sport, "25-26", "fbref") or {}
@@ -188,16 +277,19 @@ class MatchupAnalysisAgent(BaseAgent):
 
         # Build prompt with stats if available
         stats_context = ""
-        if player1_stats:
+        player1_stats_useful = self._has_useful_stats(player1_stats)
+        player2_stats_useful = self._has_useful_stats(player2_stats)
+
+        if player1_stats_useful:
             goals1 = player1_stats.get('goals', 0) or 0
             assists1 = player1_stats.get('assists', 0) or 0
             stats_context += f"\n{player1.get('name')}: {goals1}G {assists1}A this season"
-        if player2_stats:
+        if player2_stats_useful:
             goals2 = player2_stats.get('goals', 0) or 0
             assists2 = player2_stats.get('assists', 0) or 0
             stats_context += f"\n{player2.get('name')}: {goals2}G {assists2}A this season"
         if not stats_context:
-            stats_context = "\nNo verified season stats were available for this matchup."
+            return self._deterministic_matchup_note(player1, player2)
 
         prompt = f"""As an elite {self.sport} analyst, analyze matchup: {player1.get('name', 'Player 1')} vs {player2.get('name', 'Player 2')}
 Position: {player1.get('position', 'Unknown')}
@@ -222,11 +314,57 @@ Keep to 2-3 sentences."""
             "player1": player1.get("name", "Unknown"),
             "player2": player2.get("name", "Unknown"),
             "position": player1.get("position", "Unknown"),
-            "player1_stats": player1_stats,
-            "player2_stats": player2_stats,
+            "player1_stats": player1_stats if player1_stats_useful else {},
+            "player2_stats": player2_stats if player2_stats_useful else {},
             "analysis": analysis,
             "importance": "high",
         }
+
+    def _deterministic_matchup_note(
+        self,
+        player1: Dict[str, str],
+        player2: Dict[str, str],
+    ) -> Dict[str, Any]:
+        p1_name = player1.get("name", "Player 1")
+        p2_name = player2.get("name", "Player 2")
+        p1_pos = player1.get("position", "Unknown")
+        p2_pos = player2.get("position", "Unknown")
+        watch = self._position_watchpoint(p1_pos, p2_pos)
+        analysis = (
+            f"No verified season-stat edge was available for {p1_name} vs {p2_name}. "
+            f"Use it as a live watchpoint: {watch}"
+        )
+        return {
+            "player1": p1_name,
+            "player2": p2_name,
+            "position": p1_pos,
+            "player1_stats": {},
+            "player2_stats": {},
+            "analysis": analysis,
+            "importance": "medium",
+        }
+
+    def _position_watchpoint(self, player1_position: str, player2_position: str) -> str:
+        p1_zone = self._position_zone(player1_position)
+        p2_zone = self._position_zone(player2_position)
+        if {p1_zone, p2_zone} == {"attack", "defense"}:
+            return (
+                "first body contact, who controls the channel, whether cover arrives before the turn, "
+                "and whether the duel ends in a shot, foul, or forced recycle."
+            )
+        if p1_zone == "midfield" and p2_zone == "midfield":
+            return (
+                "who receives on the half-turn, who wins the second ball after pressure, "
+                "and which player can turn a safe pass into territory."
+            )
+        if "midfield" in {p1_zone, p2_zone} and "defense" in {p1_zone, p2_zone}:
+            return (
+                "whether the midfielder can draw out the defensive line, whether the defender passes runners on cleanly, "
+                "and who controls the space in front of the back four."
+            )
+        return (
+            "who gets cover first, who controls the next pass, and whether the duel changes territory."
+        )
 
     async def _analyze_positional_strength(
         self,
@@ -318,6 +456,9 @@ Keep to 2-3 sentences."""
         weak_points: Dict[str, Any],
     ) -> str:
         """Generate tactical implications from matchup analysis."""
+        if not matchups:
+            return ""
+
         prompt = f"""As an elite {self.sport} analyst, based on key matchups and weak points, what tactical approaches will likely emerge?
 
 Matchups Summary: {len(matchups)} critical battles identified

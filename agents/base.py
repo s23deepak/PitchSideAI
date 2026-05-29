@@ -309,8 +309,9 @@ class BaseAgent(ABC):
     ) -> httpx.Response:
         max_attempts = int(os.getenv("LLM_MAX_RETRY_ATTEMPTS", "5"))
         retry_base_seconds = float(os.getenv("LLM_RETRY_BASE_SECONDS", "1.0"))
+        timeout_seconds = float(os.getenv("LLM_HTTP_TIMEOUT_SECONDS", "300.0"))
 
-        async with httpx.AsyncClient(timeout=300.0) as client:
+        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
             last_response: Optional[httpx.Response] = None
             for attempt in range(max(1, max_attempts)):
                 response = await client.post(

@@ -114,23 +114,43 @@ class TeamFormAgent(BaseAgent):
         )
 
         # Extract record data from ESPN schema
+        recent_form = self._normalize_recent_form(recent_form)
         record = recent_form.get('record', {})
-        wins = record.get('wins', 0)
-        draws = record.get('draws', 0)
-        losses = record.get('losses', 0)
-        goals_for = recent_form.get('goals_for', 0)
-        goals_against = recent_form.get('goals_against', 0)
+        wins = record.get('wins')
+        draws = record.get('draws')
+        losses = record.get('losses')
+        goals_for = recent_form.get('goals_for')
+        goals_against = recent_form.get('goals_against')
         form_string = recent_form.get('form_string', '')
         home_away_split = await self.analyze_home_away_split(team_name)
 
         split_summary = self._format_home_away_split(home_away_split)
+        has_form_evidence = self._has_form_evidence(recent_form, home_away_split)
+        if not has_form_evidence:
+            return {
+                "team_name": team_name,
+                "recent_form": recent_form,
+                "home_away_split": home_away_split,
+                "comprehensive_analysis": "",
+                "data_status": "unavailable",
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        if self._has_only_sequence_evidence(recent_form, home_away_split):
+            return {
+                "team_name": team_name,
+                "recent_form": recent_form,
+                "home_away_split": home_away_split,
+                "comprehensive_analysis": "",
+                "data_status": "partial",
+                "timestamp": datetime.utcnow().isoformat(),
+            }
 
         # Use Bedrock to synthesize comprehensive analysis
         analysis_prompt = f"""As an elite {self.sport} analyst, analyze the current form and tactical evolution of {team_name}:
 
 Recent Form: {form_string or 'No data'}
-Record: {wins}W-{draws}D-{losses}L
-Goals For/Against: {goals_for} / {goals_against}
+Record: {self._format_record(wins, draws, losses)}
+Goals For/Against: {self._format_metric_pair(goals_for, goals_against)}
 Home/Away Split: {split_summary}
 
 Provide:
@@ -190,6 +210,64 @@ Keep analysis concise (4-5 sentences for commentary notes)."""
             )
         return " | ".join(parts)
 
+    def _normalize_recent_form(self, recent_form: Dict[str, Any]) -> Dict[str, Any]:
+        """Preserve missing form values as unavailable instead of numeric zero."""
+        if not isinstance(recent_form, dict):
+            return {"record": {"wins": None, "draws": None, "losses": None}, "form_string": ""}
+        normalized = dict(recent_form)
+        raw_record = recent_form.get("record", {}) if isinstance(recent_form.get("record"), dict) else {}
+        normalized["record"] = {
+            key: raw_record[key] if key in raw_record and raw_record[key] is not None else None
+            for key in ("wins", "draws", "losses")
+        }
+        for key in ("goals_for", "goals_against"):
+            if key not in recent_form or recent_form.get(key) is None:
+                normalized[key] = None
+        return normalized
+
+    def _has_form_evidence(self, recent_form: Dict[str, Any], home_away_split: Dict[str, Any]) -> bool:
+        record = recent_form.get("record", {}) if isinstance(recent_form, dict) else {}
+        record_values = [record.get(key) for key in ("wins", "draws", "losses")]
+        if any(self._is_positive_number(value) for value in record_values):
+            return True
+        if self._is_meaningful_form_string(recent_form.get("form_string", "")):
+            return True
+        if self._is_positive_number(recent_form.get("goals_for")) or self._is_positive_number(recent_form.get("goals_against")):
+            return True
+        return bool(self._format_home_away_split(home_away_split) != "Unavailable")
+
+    def _has_only_sequence_evidence(self, recent_form: Dict[str, Any], home_away_split: Dict[str, Any]) -> bool:
+        if not self._is_meaningful_form_string(recent_form.get("form_string", "")):
+            return False
+        record = recent_form.get("record", {}) if isinstance(recent_form, dict) else {}
+        record_values = [record.get(key) for key in ("wins", "draws", "losses")]
+        has_record = any(self._is_positive_number(value) for value in record_values)
+        has_goals = self._is_positive_number(recent_form.get("goals_for")) or self._is_positive_number(recent_form.get("goals_against"))
+        has_split = self._format_home_away_split(home_away_split) != "Unavailable"
+        return not (has_record or has_goals or has_split)
+
+    def _is_positive_number(self, value: Any) -> bool:
+        try:
+            return value is not None and float(value) > 0
+        except (TypeError, ValueError):
+            return False
+
+    def _format_record(self, wins: Any, draws: Any, losses: Any) -> str:
+        if wins is None and draws is None and losses is None:
+            return "Unavailable"
+        return f"{wins if wins is not None else 'unavailable'}W-{draws if draws is not None else 'unavailable'}D-{losses if losses is not None else 'unavailable'}L"
+
+    def _format_metric_pair(self, first: Any, second: Any) -> str:
+        if first is None and second is None:
+            return "Unavailable"
+        return f"{first if first is not None else 'unavailable'} / {second if second is not None else 'unavailable'}"
+
+    def _is_meaningful_form_string(self, form_string: Any) -> bool:
+        if not isinstance(form_string, str):
+            return False
+        cleaned = form_string.strip().lower()
+        return bool(cleaned) and cleaned not in {"no data", "unavailable", "unknown", "n/a", "none", "tbd"}
+
     async def _compare_form(
         self,
         home_form: Dict[str, Any],
@@ -205,6 +283,16 @@ Keep analysis concise (4-5 sentences for commentary notes)."""
         Returns:
             Comparative assessment
         """
+        if home_form.get("data_status") == "unavailable" and away_form.get("data_status") == "unavailable":
+            return {
+                "comparative_assessment": "",
+                "likely_match_narrative": "Unavailable",
+                "data_status": "unavailable",
+            }
+
+        if self._should_use_deterministic_comparison(home_form, away_form):
+            return self._build_comparative_fallback(home_form, away_form)
+
         comparison_prompt = f"""As an elite {self.sport} analyst, compare the current form of {home_form['team_name']} (home) vs {away_form['team_name']} (away):
 
 Home Team Form: {home_form.get('comprehensive_analysis', 'Analysis unavailable')[:200]}...
@@ -229,6 +317,42 @@ Keep to 3-4 sentences."""
             "comparative_assessment": comparison,
             "likely_match_narrative": comparison.split(".")[0].strip() if comparison else "Unavailable",
         }
+
+    def _should_use_deterministic_comparison(self, home_form: Dict[str, Any], away_form: Dict[str, Any]) -> bool:
+        if home_form.get("data_status") == "partial" or away_form.get("data_status") == "partial":
+            return True
+        return not home_form.get("comprehensive_analysis") or not away_form.get("comprehensive_analysis")
+
+    def _build_comparative_fallback(self, home_form: Dict[str, Any], away_form: Dict[str, Any]) -> Dict[str, Any]:
+        home_team = home_form.get("team_name", "Home team")
+        away_team = away_form.get("team_name", "Away team")
+        home_sequence = self._form_sequence(home_form)
+        away_sequence = self._form_sequence(away_form)
+        parts = []
+        if home_sequence:
+            parts.append(f"{home_team}'s recent-results cue is {home_sequence}.")
+        if away_sequence:
+            parts.append(f"{away_team}'s recent-results cue is {away_sequence}.")
+        if not parts:
+            assessment = (
+                "Verified comparative form detail is thin in this run. Use the opening phase to judge territory, "
+                "pressure resistance, and transition recovery rather than leaning on a pre-match form verdict."
+            )
+        else:
+            assessment = (
+                " ".join(parts)
+                + " Treat those sequences as context, not a prediction; the useful booth read is whether either side turns it into territory, clean buildup, and repeatable transition defense."
+            )
+        return {
+            "comparative_assessment": assessment,
+            "likely_match_narrative": assessment.split(".")[0].strip(),
+            "data_status": "partial",
+        }
+
+    def _form_sequence(self, form: Dict[str, Any]) -> str:
+        recent_form = form.get("recent_form", {}) if isinstance(form, dict) else {}
+        sequence = recent_form.get("form_string", "") if isinstance(recent_form, dict) else ""
+        return sequence if self._is_meaningful_form_string(sequence) else ""
 
 
     async def close(self):
