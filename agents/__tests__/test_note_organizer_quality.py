@@ -84,6 +84,11 @@ async def test_professional_final_notes_include_competition_frame_and_no_scaffol
     assert "## Tactical Themes" in markdown
     assert "## Key Player Battles" in markdown
     assert "## Team News Caveats" in markdown
+    assert "## Broadcast Folder Pages" in markdown
+    assert "### Page 1: Team Sheets And Officials" in markdown
+    assert "### Pages 2-3: Individual Player Profiles" in markdown
+    assert "### Pages 4-5: Tactical And Historical Context" in markdown
+    assert "### Archival Trivia" in markdown
     assert "## Live-Trigger Beats" in markdown
     assert "## Halftime And Postgame Angles" in markdown
     assert "Bukayo Saka vs Achraf Hakimi" in markdown
@@ -474,6 +479,83 @@ async def test_air_ready_rundown_surfaces_source_backed_and_blocked_claims():
     assert "UEFA confirms Paris vs Arsenal at Puskas Arena" in markdown
     assert "### Wait For Confirmation" in markdown
     assert "Arsenal verified team news" in markdown
+
+
+@pytest.mark.asyncio
+async def test_broadcast_folder_pages_match_a4_reference_structure():
+    organizer = CommentaryNoteOrganizerAgent(sport="soccer")
+
+    markdown = await organizer._build_markdown_document({
+        "home_team": "Arsenal",
+        "away_team": "Paris Saint-Germain",
+        "competition": "Champions League Final",
+        "match_datetime": "2026-05-30T18:00:00+02:00",
+        "venue": "Puskas Arena",
+        "quality_report": {"strict_mode": True, "degraded_sections": [], "unavailable_facts": []},
+        "historical": {
+            "h2h_history": {"team1_wins": 2, "team2_wins": 2, "draws": 3},
+            "narrative": "UEFA lists seven previous meetings.",
+            "storylines": [{
+                "title": "Paris and Arsenal meet in a European final",
+                "source": "UEFA",
+            }],
+        },
+        "matchups": {
+            "critical_matchups": [{
+                "player1": "Bukayo Saka",
+                "player2": "Nuno Mendes",
+                "analysis": "Wide control against recovery speed.",
+            }],
+        },
+        "possible_lineups": {
+            "source": "Opta/Sky/NBC/UEFA consensus",
+            "source_urls": [
+                "https://theanalyst.com/articles/psg-vs-arsenal-prediction-champions-league-final-05-2026",
+                "https://www.skysports.com/football/news/11095/13548482/champions-league-final-who-does-mikel-arteta-pick-in-his-arsenal-starting-xi-to-face-psg-in-budapest",
+                "https://www.nbcsports.com/soccer/news/psg-vs-arsenal-predicted-lineups-team-news-analysis-for-epic-champions-league-final",
+                "https://www.uefa.com/uefachampionsleague/news/02a5-20b60cd56a21-50353358258b-1000--champions-league-final-predicted-starting-line-ups-team-news/",
+            ],
+            "home_team": {"players": ["Raya", "Saliba", "Saka"], "out": ["White"]},
+            "away_team": {"players": ["Safonov", "Vitinha", "Dembélé"], "doubtful": ["Hakimi"]},
+        },
+        "plausible_lineups": {
+            "basis": "recent-start model",
+            "confidence": "medium",
+            "home_team": {
+                "formation": "4-3-3",
+                "players": ["Raya", "Timber", "Saliba", "Gabriel", "Calafiori", "Rice", "Ødegaard", "Saka"],
+                "caveat": "final XI depends on late fitness checks",
+            },
+            "away_team": {
+                "formation": "4-3-3",
+                "players": ["Safonov", "Hakimi", "Marquinhos", "Vitinha", "Dembélé"],
+            },
+        },
+        "team_form": {},
+        "weather": {},
+        "news": {},
+        "player_research": {},
+    })
+
+    assert "## Broadcast Folder Pages" in markdown
+    assert "Confirmed XIs: leave editable until official team sheets arrive" in markdown
+    assert "Officials: add referee, VAR, and assistants only when confirmed" in markdown
+    assert "#### Plausible XIs - Recent-Start Model" in markdown
+    assert "Arsenal plausible XI (recent-start model, 4-3-3; confidence medium): Raya, Timber, Saliba" in markdown
+    assert "Arsenal caveat: final XI depends on late fitness checks" in markdown
+    assert "#### Source-Predicted XIs - Not Confirmed" in markdown
+    assert "Arsenal source-predicted XI (Opta/Sky/NBC/UEFA consensus, unconfirmed): Raya, Saliba, Saka" in markdown
+    assert "Paris Saint-Germain source-predicted XI (Opta/Sky/NBC/UEFA consensus, unconfirmed): Safonov, Vitinha, Dembélé" in markdown
+    assert "Arsenal listed out: White" in markdown
+    assert "Paris Saint-Germain listed doubtful: Hakimi" in markdown
+    assert "https://theanalyst.com/articles/psg-vs-arsenal-prediction-champions-league-final-05-2026" in markdown
+    assert "https://www.skysports.com/football/news/11095/13548482/champions-league-final-who-does-mikel-arteta-pick-in-his-arsenal-starting-xi-to-face-psg-in-budapest" in markdown
+    assert "https://www.nbcsports.com/soccer/news/psg-vs-arsenal-predicted-lineups-team-news-analysis-for-epic-champions-league-final" in markdown
+    assert "### Pages 2-3: Individual Player Profiles" in markdown
+    assert "### Pages 4-5: Tactical And Historical Context" in markdown
+    assert "Paris and Arsenal meet in a European final" in markdown
+    assert "Bukayo Saka vs Nuno Mendes" in markdown
+    assert "2-3-2" in markdown
 
 
 def test_unknown_venue_is_rendered_as_broadcast_angle_not_placeholder():

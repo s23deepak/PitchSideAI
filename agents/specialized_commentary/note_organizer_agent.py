@@ -352,6 +352,8 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
         historical = all_outputs.get("historical", {})
         weather = all_outputs.get("weather", {})
         team_form = all_outputs.get("team_form", {})
+        possible_lineups = all_outputs.get("possible_lineups", {})
+        plausible_lineups = all_outputs.get("plausible_lineups", {})
         home_players = all_outputs.get("player_research", {}).get("home_team", {}).get("players", [])
         away_players = all_outputs.get("player_research", {}).get("away_team", {}).get("players", [])
         h2h_record, h2h_narrative = self._format_historical_frame(historical, home_team, away_team)
@@ -371,6 +373,23 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
             news=news,
             historical=historical,
         )
+        broadcast_folder_pages = self._format_broadcast_folder_pages(
+            home_team=home_team,
+            away_team=away_team,
+            competition=competition,
+            venue=venue_label,
+            friendly_date=friendly_date,
+            h2h_record=h2h_record,
+            tactical_brief=tactical_brief,
+            team_form=team_form,
+            historical=historical,
+            news=news,
+            matchups=matchups,
+            home_players=home_players,
+            away_players=away_players,
+            possible_lineups=possible_lineups,
+            plausible_lineups=plausible_lineups,
+        )
         deep_notes = self._format_deep_notes_section(all_outputs.get("deep_notes", {}))
 
         return f"""# Broadcast Prep: {home_team} vs {away_team}
@@ -387,7 +406,7 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
 - Date/time: {friendly_date}
 - Venue: {venue_label}
 - Broadcast frame: {final_stakes}
-- Lineups: use only confirmed team-sheet information from the live feed; this run does not promote researched squad lists as starters.
+- Lineups: see Broadcast Folder Page 1; treat plausible and source-predicted XIs as unconfirmed until team sheets arrive.
 
 ## Tactical Themes
 
@@ -397,27 +416,18 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
 
 {self._format_bullets(tactical_brief.get('zone_edges', []))}
 
-### {home_team} Route
-
-{tactical_brief.get('home_plan', '')}
-
-### {away_team} Route
-
-{tactical_brief.get('away_plan', '')}
-
 ## Key Player Battles
 
 {self._format_matchups(matchups.get('critical_matchups', []))}
 
-## Form And Storylines
+## Form, History And Conditions
 
-### {home_team}
+### Form Cards
 
-{self._team_form_for_broadcast(team_form.get('home_team', {}), home_team)}
-
-### {away_team}
-
-{self._team_form_for_broadcast(team_form.get('away_team', {}), away_team)}
+{self._format_bullets([
+    self._folder_form_line(team_form.get('home_team', {}), home_team),
+    self._folder_form_line(team_form.get('away_team', {}), away_team),
+])}
 
 ### Historical Frame
 
@@ -439,9 +449,7 @@ H2H Record: **{h2h_record}**
 
 {self._format_news(news.get('away_team', {}), team_name=away_team, side_label='away')}
 
-## Commentator Hooks
-
-{self._format_bullets(tactical_brief.get('commentary_angles', []))}
+{broadcast_folder_pages}
 
 ## Live-Trigger Beats
 
@@ -902,11 +910,7 @@ Unavailable or uncertain facts:
 
 ### Wait For Confirmation
 
-{self._format_bullets([f"Do not state {item} until an official, structured, or trusted-media source confirms it." for item in wait_items])}
-
-### Source-Backed Storylines
-
-{self._format_bullets(self._source_backed_storylines(historical, news))}"""
+{self._format_bullets([f"Do not state {item} until an official, structured, or trusted-media source confirms it." for item in wait_items])}"""
 
     def _source_backed_facts(self, accepted: Any) -> List[str]:
         facts = []
@@ -941,6 +945,277 @@ Unavailable or uncertain facts:
         if storylines:
             return storylines[:5]
         return ["No source-backed storyline is strong enough yet; sell the opening through live tempo, territory, and confirmed team-sheet facts."]
+
+    def _format_broadcast_folder_pages(
+        self,
+        *,
+        home_team: str,
+        away_team: str,
+        competition: str,
+        venue: str,
+        friendly_date: str,
+        h2h_record: str,
+        tactical_brief: Dict[str, Any],
+        team_form: Dict[str, Any],
+        historical: Dict[str, Any],
+        news: Dict[str, Any],
+        matchups: Dict[str, Any],
+        home_players: List[Dict[str, Any]],
+        away_players: List[Dict[str, Any]],
+        possible_lineups: Dict[str, Any],
+        plausible_lineups: Dict[str, Any],
+    ) -> str:
+        """Build A4-folder style quick-reference pages for live commentary."""
+        home_rows = self._format_player_profile_grid(home_players, home_team)
+        away_rows = self._format_player_profile_grid(away_players, away_team)
+        tactical_pages = self._format_folder_tactical_pages(
+            home_team=home_team,
+            away_team=away_team,
+            h2h_record=h2h_record,
+            tactical_brief=tactical_brief,
+            team_form=team_form,
+            matchups=matchups,
+            historical=historical,
+        )
+        trivia = self._format_folder_trivia(historical, news)
+        return f"""## Broadcast Folder Pages
+
+### Page 1: Team Sheets And Officials
+
+- Match: {home_team} vs {away_team}
+- Stage: {competition or 'Unverified in this run'}
+- Kickoff: {friendly_date}
+- Venue: {venue}
+- Confirmed XIs: leave editable until official team sheets arrive; do not promote researched squads as starters.
+- Substitutes: add from the confirmed team sheet, then mark tactical alternatives by role.
+- Officials: add referee, VAR, and assistants only when confirmed by an official or trusted source.
+
+#### Plausible XIs - Recent-Start Model
+
+{self._format_plausible_lineups(plausible_lineups, home_team, away_team)}
+
+#### Source-Predicted XIs - Not Confirmed
+
+{self._format_source_lineup_delta(possible_lineups, plausible_lineups, home_team, away_team)}
+
+### Pages 2-3: Individual Player Profiles
+
+#### {home_team} Grid
+
+{home_rows}
+
+#### {away_team} Grid
+
+{away_rows}
+
+### Pages 4-5: Tactical And Historical Context
+
+{tactical_pages}
+
+### Archival Trivia
+
+{trivia}"""
+
+    def _format_player_profile_grid(self, players: List[Dict[str, Any]], team_name: str) -> str:
+        rows = []
+        for player in players or []:
+            name = player.get("name", "")
+            if self._is_placeholder_player_name(name):
+                continue
+            number = player.get("squad_number") or player.get("shirt_number") or "tbc"
+            position = player.get("position") or "role tbc"
+            cue = self._first_sentence(str(player.get("profile") or player.get("evidence") or "")).strip()
+            if not cue or self._is_low_quality_text(cue):
+                cue = "Use only confirmed live role, touch map, and matchup evidence."
+            rows.append(f"No. {number} | {name} | {position} | {cue}")
+            if len(rows) >= 8:
+                break
+        if rows:
+            return self._format_bullets(rows)
+        return f"- {team_name}: no player grid promoted yet; fill from confirmed team sheet and verified squad notes."
+
+    def _format_possible_lineups(
+        self,
+        possible_lineups: Dict[str, Any],
+        home_team: str,
+        away_team: str,
+    ) -> str:
+        if not isinstance(possible_lineups, dict) or not possible_lineups:
+            return "- Possible XIs not promoted in this run; wait for an official or trusted predicted-lineup source."
+
+        lines = []
+        source = possible_lineups.get("source") or possible_lineups.get("source_name") or "predicted-lineup source"
+        source_urls = possible_lineups.get("source_urls")
+        if not isinstance(source_urls, list):
+            source_url = possible_lineups.get("source_url") or possible_lineups.get("url") or ""
+            source_urls = [source_url] if source_url else []
+
+        for side, team_name in (("home_team", home_team), ("away_team", away_team)):
+            side_data = possible_lineups.get(side, {})
+            players = side_data.get("players") if isinstance(side_data, dict) else None
+            if not isinstance(players, list) or not players:
+                continue
+            names = [
+                str(player).strip()
+                for player in players
+                if isinstance(player, str) and player.strip() and not self._is_placeholder_player_name(player)
+            ]
+            if names:
+                lines.append(f"{team_name} possible XI ({source}, unconfirmed): {', '.join(names)}.")
+            outs = side_data.get("out") if isinstance(side_data, dict) else None
+            doubtful = side_data.get("doubtful") if isinstance(side_data, dict) else None
+            if isinstance(outs, list) and outs:
+                lines.append(f"{team_name} listed out: {', '.join(str(item) for item in outs)}.")
+            if isinstance(doubtful, list) and doubtful:
+                lines.append(f"{team_name} listed doubtful: {', '.join(str(item) for item in doubtful)}.")
+
+        if not lines:
+            return "- Possible XIs not promoted in this run; wait for an official or trusted predicted-lineup source."
+        trusted_urls = [str(url) for url in source_urls if isinstance(url, str) and url.startswith("http")]
+        if trusted_urls:
+            lines.append(f"Sources: {'; '.join(trusted_urls[:4])}")
+        return self._format_bullets(lines)
+
+    def _format_source_lineup_delta(
+        self,
+        possible_lineups: Dict[str, Any],
+        plausible_lineups: Dict[str, Any],
+        home_team: str,
+        away_team: str,
+    ) -> str:
+        if not isinstance(possible_lineups, dict) or not possible_lineups:
+            return "- No source-predicted XI promoted separately in this run."
+
+        source = possible_lineups.get("source") or possible_lineups.get("source_name") or "predicted-lineup source"
+        source_urls = possible_lineups.get("source_urls")
+        if not isinstance(source_urls, list):
+            source_url = possible_lineups.get("source_url") or possible_lineups.get("url") or ""
+            source_urls = [source_url] if source_url else []
+        lines = []
+        for side, team_name in (("home_team", home_team), ("away_team", away_team)):
+            source_names = self._lineup_names(possible_lineups.get(side, {}))
+            model_names = self._lineup_names(plausible_lineups.get(side, {})) if isinstance(plausible_lineups, dict) else []
+            if source_names and model_names and source_names == model_names:
+                lines.append(f"{team_name}: source-predicted XI matches the plausible XI above ({source}, unconfirmed).")
+            elif source_names:
+                lines.append(f"{team_name} source-predicted XI ({source}, unconfirmed): {', '.join(source_names)}.")
+            side_data = possible_lineups.get(side, {})
+            outs = side_data.get("out") if isinstance(side_data, dict) else None
+            doubtful = side_data.get("doubtful") if isinstance(side_data, dict) else None
+            if isinstance(outs, list) and outs and not self._only_none_values(outs):
+                lines.append(f"{team_name} listed out: {', '.join(str(item) for item in outs)}.")
+            if isinstance(doubtful, list) and doubtful and not self._only_none_values(doubtful):
+                lines.append(f"{team_name} listed doubtful: {', '.join(str(item) for item in doubtful)}.")
+
+        trusted_urls = [str(url) for url in source_urls if isinstance(url, str) and url.startswith("http")]
+        if trusted_urls:
+            lines.append(f"Sources: {'; '.join(trusted_urls[:4])}")
+        return self._format_bullets(lines) or "- No source-predicted XI promoted separately in this run."
+
+    def _lineup_names(self, lineup: Any) -> List[str]:
+        players = lineup.get("players") if isinstance(lineup, dict) else None
+        if not isinstance(players, list):
+            return []
+        return [
+            str(player).strip()
+            for player in players
+            if isinstance(player, str) and player.strip() and not self._is_placeholder_player_name(player)
+        ]
+
+    def _only_none_values(self, values: List[Any]) -> bool:
+        return all(str(value).strip().lower() in {"none", "n/a", "no", "nil"} for value in values)
+
+    def _format_plausible_lineups(
+        self,
+        plausible_lineups: Dict[str, Any],
+        home_team: str,
+        away_team: str,
+    ) -> str:
+        if not isinstance(plausible_lineups, dict) or not plausible_lineups:
+            return "- Plausible XI model not run in this sample; use recent starts, minutes, role continuity, and availability before air."
+
+        lines = []
+        basis = plausible_lineups.get("basis") or "recent starts, minutes, role continuity, and availability"
+        confidence = plausible_lineups.get("confidence") or "medium"
+        for side, team_name in (("home_team", home_team), ("away_team", away_team)):
+            side_data = plausible_lineups.get(side, {})
+            players = side_data.get("players") if isinstance(side_data, dict) else None
+            if not isinstance(players, list) or not players:
+                continue
+            names = [
+                str(player).strip()
+                for player in players
+                if isinstance(player, str) and player.strip() and not self._is_placeholder_player_name(player)
+            ]
+            if not names:
+                continue
+            formation = side_data.get("formation") if isinstance(side_data, dict) else ""
+            formation_part = f", {formation}" if formation else ""
+            lines.append(
+                f"{team_name} plausible XI ({basis}{formation_part}; confidence {confidence}): {', '.join(names)}."
+            )
+            caveat = side_data.get("caveat") if isinstance(side_data, dict) else ""
+            if isinstance(caveat, str) and caveat.strip():
+                lines.append(f"{team_name} caveat: {caveat.strip()}")
+
+        if lines:
+            return self._format_bullets(lines)
+        return "- Plausible XI model not run in this sample; use recent starts, minutes, role continuity, and availability before air."
+
+    def _format_folder_tactical_pages(
+        self,
+        *,
+        home_team: str,
+        away_team: str,
+        h2h_record: str,
+        tactical_brief: Dict[str, Any],
+        team_form: Dict[str, Any],
+        matchups: Dict[str, Any],
+        historical: Dict[str, Any],
+    ) -> str:
+        home_form = self._folder_form_line(team_form.get("home_team", {}), home_team)
+        away_form = self._folder_form_line(team_form.get("away_team", {}), away_team)
+        matchup_names = []
+        for matchup in (matchups.get("critical_matchups") or [])[:4]:
+            p1 = matchup.get("player1")
+            p2 = matchup.get("player2")
+            if p1 and p2 and not self._is_placeholder_player_name(p1) and not self._is_placeholder_player_name(p2):
+                matchup_names.append(f"{p1} vs {p2}")
+        matchup_index = "; ".join(matchup_names) if matchup_names else "Map the first repeated channel battle from live pictures."
+        historical_line = self._first_sentence(historical.get("narrative", "")) if isinstance(historical, dict) else ""
+        if not historical_line:
+            historical_line = "No verified historical narrative promoted beyond the H2H record."
+        items = [
+            "Tactical spine: use Tactical Themes above for the full read.",
+            f"Form cards: {home_form}; {away_form}",
+            f"H2H: {h2h_record}",
+            f"Historical cue: {historical_line}",
+            f"Matchup index: {matchup_index}",
+            "Manager/shape box: fill with confirmed team shapes at kickoff, then update if the press or buildup changes.",
+        ]
+        return self._format_bullets(items)
+
+    def _folder_form_line(self, form_data: Dict[str, Any], team_name: str) -> str:
+        recent = form_data.get("recent_form", {}) if isinstance(form_data, dict) else {}
+        record = recent.get("record", {}) if isinstance(recent, dict) else {}
+        record_parts = []
+        for key, label in (("wins", "W"), ("draws", "D"), ("losses", "L")):
+            value = record.get(key)
+            if value is not None:
+                record_parts.append(f"{value}{label}")
+        form_string = recent.get("form_string") if isinstance(recent, dict) else ""
+        record_text = "-".join(record_parts) if record_parts else (form_string or "form record unavailable")
+        return f"{team_name} form card: {record_text}"
+
+    def _format_folder_trivia(self, historical: Dict[str, Any], news: Dict[str, Any]) -> str:
+        trivia = []
+        for item in self._source_backed_storylines(historical, news):
+            cleaned = item.replace("Ready to say: ", "", 1).strip()
+            if cleaned:
+                trivia.append(cleaned)
+        if trivia:
+            return self._format_bullets(trivia[:6])
+        return "- No archival trivia promoted yet; use only confirmed source-backed items."
 
     def _format_player_list(
         self,
