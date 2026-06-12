@@ -70,7 +70,16 @@ POSITION_KEYWORDS = {
     "attacker": "Forward",
 }
 NON_PERSON_TERMS = {
+    "Against Bayern",
+    "Arsenal",
+    "Assistant Referee Bastian Dankert",
+    "Bayern Munich",
     "Final",
+    "French Ligue",
+    "Holders Paris",
+    "Les Parisiens",
+    "Marc Atkins",
+    "Mark Leech",
     "Semi Final",
     "Quarter Final",
     "Match Preview",
@@ -78,12 +87,21 @@ NON_PERSON_TERMS = {
     "Team News",
     "Match News",
     "Kickoff",
+    "Pass-happy PSG",
+    "Paris St Germain",
     "Preview",
+    "Real Madrid",
+    "Stamford Bridge",
     "Stadium",
     "Arena",
     "Aréna",
+    "The Gunners",
+    "UEFA Champions League Round",
 }
 PERSON_PREFIX_STOPWORDS = {
+    "Against",
+    "And",
+    "Assistant",
     "Youngster",
     "Manager",
     "Coach",
@@ -94,8 +112,41 @@ PERSON_PREFIX_STOPWORDS = {
     "Forward",
     "Striker",
     "Winger",
+    "French",
+    "Holders",
+    "Pass-happy",
+    "The",
 }
-PERSON_TOKEN_STOPWORDS = {"Getty", "Reuters", "Image", "Images", "Photo", "For"}
+PERSON_TOKEN_STOPWORDS = {
+    "AFP",
+    "Assistant",
+    "Bridge",
+    "Champions",
+    "FIFE",
+    "Fourth",
+    "GER",
+    "Getty",
+    "Image",
+    "Images",
+    "League",
+    "Photo",
+    "Referee",
+    "Reuters",
+    "Round",
+    "Stamford",
+    "SUI",
+    "UEFA",
+    "Video",
+    "For",
+}
+NON_PLAYER_SENTENCE_MARKERS = (
+    "afp via getty",
+    "assistant referee",
+    "fourth official",
+    "getty images",
+    "photo by",
+    "video assistant",
+)
 
 
 @dataclass
@@ -217,7 +268,7 @@ class FixtureResolver:
             if not self._is_relevant_fixture_text(text, home_team, away_team, competition):
                 continue
             candidates.append(result)
-        candidates.sort(key=self._source_rank)
+        candidates.sort(key=lambda result: self._source_rank(result, competition))
 
         for result in candidates:
             text = self._result_text(result)
@@ -258,13 +309,43 @@ class FixtureResolver:
         resolution.status = "accepted" if resolution.confidence >= 0.45 else "unavailable"
         return resolution
 
-    def _source_rank(self, result: Dict[str, Any]) -> Tuple[int, float, str]:
+    def _source_rank(self, result: Dict[str, Any], competition: str = "") -> Tuple[int, float, float, str]:
         tier = classify_source_tier(str(result.get("url") or ""), str(result.get("source") or ""))
         return (
             source_tier_priority(tier),
+            -self._fixture_specificity_score(result, competition),
             -float(result.get("score") or 0.0),
             str(result.get("title") or ""),
         )
+
+    def _fixture_specificity_score(self, result: Dict[str, Any], competition: str = "") -> float:
+        """Prefer exact fixture pages over broad or older official club pages."""
+        text = self._result_text(result).lower()
+        title = str(result.get("title") or "").lower()
+        url = str(result.get("url") or "").lower()
+        competition_terms = [
+            term for term in re.split(r"\W+", competition.lower())
+            if len(term) > 3
+        ]
+
+        score = 0.0
+        if competition_terms:
+            score += 0.5 * sum(1 for term in competition_terms if term in text)
+            if all(term in text for term in competition_terms):
+                score += 2.0
+
+        if "final" in competition.lower():
+            if "final" in title or "final" in url:
+                score += 4.0
+            elif re.search(r"\bfinal\b", text):
+                score += 1.0
+
+        if "champions league" in competition.lower() and "uefa.com/uefachampionsleague/match/" in url:
+            score += 5.0
+        if re.search(r"(?:paris|psg)[-/ ]vs[-/ ]arsenal|arsenal[-/ ]vs[-/ ](?:paris|psg)", url):
+            score += 2.0
+
+        return score
 
     def _result_text(self, result: Dict[str, Any]) -> str:
         return " ".join(
@@ -440,22 +521,30 @@ class FixtureResolver:
         excluded = self._excluded_name_phrases(home_team, away_team, competition)
         for match in PERSON_PATTERN.finditer(sentence):
             name = match.group(1).strip()
-            if name in excluded:
-                continue
-            if any(name.lower() == item.lower() for item in excluded):
-                continue
-            if any(token in name for token in ("Final", "Stadium", "Arena", "Aréna", "Kick")):
-                continue
-            if name.endswith("-"):
-                continue
-            if name.split()[0] in PERSON_PREFIX_STOPWORDS:
-                continue
-            if any(token in PERSON_TOKEN_STOPWORDS for token in name.split()):
-                continue
-            if len(name.split()) > 4:
+            if self._is_non_player_name(name, sentence, excluded):
                 continue
             names.append(name)
         return names
+
+    def _is_non_player_name(self, name: str, sentence: str, excluded: set[str]) -> bool:
+        if name in excluded or any(name.lower() == item.lower() for item in excluded):
+            return True
+        if any(marker in sentence.lower() for marker in NON_PLAYER_SENTENCE_MARKERS):
+            return True
+        if any(token in name for token in ("Final", "Stadium", "Arena", "Aréna", "Kick")):
+            return True
+        if name.endswith("-"):
+            return True
+        tokens = name.split()
+        if not tokens or len(tokens) > 4:
+            return True
+        if name.isupper() and len(tokens) > 1:
+            return True
+        if tokens[0] in PERSON_PREFIX_STOPWORDS:
+            return True
+        if any(token in PERSON_TOKEN_STOPWORDS for token in tokens):
+            return True
+        return False
 
     def _excluded_name_phrases(self, home_team: str, away_team: str, competition: str) -> set[str]:
         excluded = {phrase for phrase in (home_team, away_team, competition) if phrase}

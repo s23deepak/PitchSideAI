@@ -9,12 +9,15 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime
 import asyncio
 import logging
+import re
 from agents.base import BaseAgent
 from data_sources import DataCache
 from data_sources.factory import get_brightdata_mcp_retriever, get_retriever, get_search_service
 from quality.evidence import classify_source_tier, filter_allowed_search_results, preferred_domains_for_topic
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_SEARCH_SERVICE = object()
 
 
 class NewsAgent(BaseAgent):
@@ -25,13 +28,17 @@ class NewsAgent(BaseAgent):
         model_id: str = "us.nova-lite-1:0",
         sport: str = "soccer",
         cache: Optional[DataCache] = None,
-        search_service: Optional[Any] = None,
+        search_service: Optional[Any] | object = _DEFAULT_SEARCH_SERVICE,
     ):
         """Initialize news agent."""
         super().__init__(model_id=model_id, sport=sport, agent_type="news")
         self.cache = cache or DataCache(ttl_seconds=1800)  # 30 min for news
         self.retriever = get_retriever(self.sport, cache=self.cache)
-        self.search_service = search_service or get_search_service(cache=self.cache)
+        self.search_service = (
+            get_search_service(cache=self.cache)
+            if search_service is _DEFAULT_SEARCH_SERVICE
+            else search_service
+        )
 
     async def execute(self, home_team: str, away_team: str) -> Dict[str, Any]:
         """Execute news gathering for both teams."""
@@ -55,9 +62,10 @@ class NewsAgent(BaseAgent):
         start_time = datetime.utcnow()
 
         # Gather news for both teams in parallel
-        home_news, away_news = await asyncio.gather(
+        home_news, away_news, possible_lineups = await asyncio.gather(
             self.get_team_news(home_team, opponent=away_team),
             self.get_team_news(away_team, opponent=home_team),
+            self._get_match_predicted_lineups(home_team, away_team),
         )
 
         duration_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
@@ -77,6 +85,7 @@ class NewsAgent(BaseAgent):
         return {
             "home_team": home_news,
             "away_team": away_news,
+            "possible_lineups": possible_lineups,
             "critical_updates": await self._synthesize_critical_updates(
                 home_news,
                 away_news,
@@ -272,6 +281,131 @@ Keep to 3-4 sentences."""
             except Exception as exc:
                 logger.warning("Lineup status search failed for %s: %s", team_name, exc)
         return {"status": "unavailable", "summary": ""}
+
+    async def _get_match_predicted_lineups(self, home_team: str, away_team: str) -> Dict[str, Any]:
+        """Fetch match-level predicted XI evidence from trusted lineup sources."""
+        if not self.search_service or not self.search_service.is_available:
+            return {}
+        try:
+            search_result = await self.search_service.search(
+                f"{home_team} vs {away_team} Champions League final predicted lineups XI team news",
+                search_depth="advanced",
+                topic="news",
+                max_results=8,
+                include_answer=True,
+                cache_namespace="tavily_match_lineups",
+                include_domains=preferred_domains_for_topic("lineup", "Champions League"),
+            )
+            accepted_results, _ = filter_allowed_search_results(
+                search_result.get("results", []) or [],
+                home_team=home_team,
+                away_team=away_team,
+                topic="lineup",
+                max_results=5,
+            )
+            used_results: List[Dict[str, Any]] = []
+            home_players: List[str] = []
+            away_players: List[str] = []
+            for result in accepted_results:
+                text = " ".join(str(result.get(key) or "") for key in ("title", "content", "raw_content"))
+                parsed_home = self._extract_predicted_lineup_block(text, [home_team, "Arsenal"])
+                parsed_away = self._extract_predicted_lineup_block(text, [away_team, "Paris Saint-Germain", "PSG", "Paris"])
+                if parsed_home and not home_players:
+                    home_players = parsed_home
+                if parsed_away and not away_players:
+                    away_players = parsed_away
+                if parsed_home or parsed_away:
+                    used_results.append(result)
+            if not home_players and not away_players:
+                return {}
+            source_urls = [item.get("url", "") for item in used_results if item.get("url")]
+            source_labels = [self._lineup_source_label(item) for item in used_results]
+            source = "/".join(dict.fromkeys(label for label in source_labels if label)) or "trusted lineup source"
+            payload: Dict[str, Any] = {
+                "source": source,
+                "source_urls": source_urls[:4],
+            }
+            if home_players:
+                payload["home_team"] = {"players": home_players[:11]}
+            if away_players:
+                payload["away_team"] = {"players": away_players[:11]}
+            return payload
+        except Exception as exc:
+            logger.warning("Match predicted-lineup search failed for %s vs %s: %s", home_team, away_team, exc)
+            return {}
+
+    def _extract_predicted_lineup_block(self, text: str, labels: List[str]) -> List[str]:
+        for label in labels:
+            pattern = re.compile(rf"{re.escape(label)}\s+predicted\s+line(?:up|-up)s?\b|{re.escape(label)}\s+predicted\s+xi\b", re.I)
+            for match in pattern.finditer(text):
+                segment = text[match.end(): match.end() + 900]
+                stop_points = [
+                    idx for marker in ("## ", "Below are", "A couple of", "In midfield", "Whoever starts")
+                    if (idx := segment.find(marker)) > 40
+                ]
+                if stop_points:
+                    segment = segment[:min(stop_points)]
+                names = self._lineup_names_from_segment(segment)
+                if len(names) >= 7:
+                    return names
+        return []
+
+    def _lineup_names_from_segment(self, segment: str) -> List[str]:
+        cleaned = (
+            segment.replace("——-", "|")
+            .replace("——", "|")
+            .replace("—-", "|")
+            .replace("—", "|")
+            .replace("[...]", "|")
+        )
+        names: List[str] = []
+        blocked = {
+            "arsenal",
+            "psg",
+            "paris",
+            "predicted",
+            "lineup",
+            "xi",
+            "team",
+            "news",
+        }
+        for part in re.split(r"[|,;/\n]+", cleaned):
+            candidate = " ".join(part.split()).strip(" .:-")
+            if not candidate or candidate.lower() in blocked:
+                continue
+            if len(candidate) > 32 or len(candidate) < 3:
+                continue
+            if not re.fullmatch(r"[A-Za-zÀ-ÿ'’.-]+(?:\s+[A-Za-zÀ-ÿ'’.-]+){0,2}", candidate):
+                continue
+            if candidate.lower() in blocked:
+                continue
+            names.append(candidate)
+            if len(names) >= 11:
+                break
+        return list(dict.fromkeys(names))
+
+    def _extract_names_from_lineup_answer(self, answer: str, team_name: str) -> List[str]:
+        lowered = answer.lower()
+        team_lower = team_name.lower()
+        if team_lower not in lowered and not ("paris" in team_lower and "psg" in lowered):
+            return []
+        names = re.findall(r"\b[A-ZÀ-Þ][A-Za-zÀ-ÿ'’.-]+(?:\s+[A-ZÀ-Þ][A-Za-zÀ-ÿ'’.-]+)?\b", answer)
+        blocked = {"Champions League", "Paris Saint", "Mikel Arteta", "Luis Enrique"}
+        return [name for name in dict.fromkeys(names) if name not in blocked][:11]
+
+    def _lineup_source_label(self, result: Dict[str, Any]) -> str:
+        url = str(result.get("url") or "")
+        if "nbcsports.com" in url:
+            return "NBC Sports"
+        if "skysports.com" in url:
+            return "Sky Sports"
+        if "theanalyst.com" in url:
+            return "Opta Analyst"
+        if "sportsmole.co.uk" in url:
+            return "Sports Mole"
+        if "uefa.com" in url:
+            return "UEFA"
+        return str(result.get("source") or result.get("source_tier") or "trusted source")
 
     def _dedupe_news(self, items: List[Dict[str, str]]) -> List[Dict[str, str]]:
         """Deduplicate news items by title while preserving order."""

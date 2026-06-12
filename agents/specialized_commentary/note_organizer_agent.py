@@ -352,8 +352,14 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
         historical = all_outputs.get("historical", {})
         weather = all_outputs.get("weather", {})
         team_form = all_outputs.get("team_form", {})
+        broadcast_dossier = all_outputs.get("broadcast_dossier", {})
+        match_facts = broadcast_dossier.get("match_facts", {}) if isinstance(broadcast_dossier, dict) else {}
         possible_lineups = all_outputs.get("possible_lineups", {})
-        plausible_lineups = all_outputs.get("plausible_lineups", {})
+        plausible_lineups = all_outputs.get("plausible_lineups", {}) or (
+            broadcast_dossier.get("lineups", {}).get("plausible", {})
+            if isinstance(broadcast_dossier, dict)
+            else {}
+        )
         home_players = all_outputs.get("player_research", {}).get("home_team", {}).get("players", [])
         away_players = all_outputs.get("player_research", {}).get("away_team", {}).get("players", [])
         h2h_record, h2h_narrative = self._format_historical_frame(historical, home_team, away_team)
@@ -389,6 +395,7 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
             away_players=away_players,
             possible_lineups=possible_lineups,
             plausible_lineups=plausible_lineups,
+            broadcast_dossier=broadcast_dossier,
         )
         deep_notes = self._format_deep_notes_section(all_outputs.get("deep_notes", {}))
 
@@ -405,6 +412,7 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
 - Stage: {competition or 'Unverified in this run'}
 - Date/time: {friendly_date}
 - Venue: {venue_label}
+- Referee/officials: {self._format_officials_summary(match_facts.get('officials', {}))}
 - Broadcast frame: {final_stakes}
 - Lineups: see Broadcast Folder Page 1; treat plausible and source-predicted XIs as unconfirmed until team sheets arrive.
 
@@ -904,6 +912,10 @@ Unavailable or uncertain facts:
 - 45-second setup: {setup}
 {self._format_bullets(ready_facts[1:4])}
 
+### Opening Lines Bank
+
+{self._format_bullets(self._build_opening_lines_bank(home_team, away_team, competition))}
+
 ### Watch, Say, Prove
 
 {self._format_bullets(watch_cards)}
@@ -926,6 +938,14 @@ Unavailable or uncertain facts:
                 if claim and not self._is_low_quality_text(claim):
                     facts.append(f"{claim} ({tier}: {source})")
         return facts[:5]
+
+    def _build_opening_lines_bank(self, home_team: str, away_team: str, competition: str) -> List[str]:
+        stage = competition or "the night"
+        return [
+            f"{home_team} and {away_team} bring the occasion; {stage} will decide which story survives contact with the first whistle.",
+            f"For {home_team}: start with territory, courage on the ball, and the players trusted to turn preparation into control.",
+            f"For {away_team}: watch the first release pass, the first counter-press, and whether speed becomes a pattern rather than a moment.",
+        ]
 
     def _source_backed_storylines(self, historical: Dict[str, Any], news: Dict[str, Any]) -> List[str]:
         storylines = []
@@ -964,10 +984,21 @@ Unavailable or uncertain facts:
         away_players: List[Dict[str, Any]],
         possible_lineups: Dict[str, Any],
         plausible_lineups: Dict[str, Any],
+        broadcast_dossier: Dict[str, Any],
     ) -> str:
         """Build A4-folder style quick-reference pages for live commentary."""
-        home_rows = self._format_player_profile_grid(home_players, home_team)
-        away_rows = self._format_player_profile_grid(away_players, away_team)
+        player_cards = broadcast_dossier.get("player_cards", {}) if isinstance(broadcast_dossier, dict) else {}
+        home_rows = self._format_player_profile_grid(
+            player_cards.get("home_team") or home_players,
+            home_team,
+        )
+        away_rows = self._format_player_profile_grid(
+            player_cards.get("away_team") or away_players,
+            away_team,
+        )
+        match_facts = broadcast_dossier.get("match_facts", {}) if isinstance(broadcast_dossier, dict) else {}
+        club_context = broadcast_dossier.get("club_context", {}) if isinstance(broadcast_dossier, dict) else {}
+        statistics_context = broadcast_dossier.get("statistics_context", {}) if isinstance(broadcast_dossier, dict) else {}
         tactical_pages = self._format_folder_tactical_pages(
             home_team=home_team,
             away_team=away_team,
@@ -982,13 +1013,16 @@ Unavailable or uncertain facts:
 
 ### Page 1: Team Sheets And Officials
 
+Broadcast page role: **Match Overview & Lineups**
+
 - Match: {home_team} vs {away_team}
 - Stage: {competition or 'Unverified in this run'}
 - Kickoff: {friendly_date}
 - Venue: {venue}
-- Confirmed XIs: leave editable until official team sheets arrive; do not promote researched squads as starters.
+- Officials: {self._format_officials_summary(match_facts.get('officials', {}))}
+- Confirmed XIs: {self._format_confirmed_lineup_status(broadcast_dossier)}
 - Substitutes: add from the confirmed team sheet, then mark tactical alternatives by role.
-- Officials: add referee, VAR, and assistants only when confirmed by an official or trusted source.
+- Pencil rule: keep this page editable until the official team sheet lands.
 
 #### Plausible XIs - Recent-Start Model
 
@@ -1000,17 +1034,25 @@ Unavailable or uncertain facts:
 
 ### Pages 2-3: Individual Player Profiles
 
-#### {home_team} Grid
+#### Page 2: {home_team} Deep-Dive
 
 {home_rows}
 
-#### {away_team} Grid
+#### Page 3: {away_team} Deep-Dive
 
 {away_rows}
 
+### Page 4: Club Context & Staff
+
+{self._format_club_context_pages(home_team, away_team, club_context)}
+
 ### Pages 4-5: Tactical And Historical Context
 
+Broadcast page role: **Pages 5-6: Statistics & Historical Context**
+
 {tactical_pages}
+
+{self._format_statistics_context(statistics_context)}
 
 ### Archival Trivia
 
@@ -1024,15 +1066,93 @@ Unavailable or uncertain facts:
                 continue
             number = player.get("squad_number") or player.get("shirt_number") or "tbc"
             position = player.get("position") or "role tbc"
-            cue = self._first_sentence(str(player.get("profile") or player.get("evidence") or "")).strip()
+            age = player.get("age") or "age tbc"
+            nationality = player.get("nationality") or ""
+            stats_line = player.get("stats_line")
+            if not stats_line:
+                stats = player.get("stats", {}) if isinstance(player.get("stats"), dict) else {}
+                stats_line = self._format_compact_stats(stats)
+            cue = self._first_sentence(str(player.get("cue") or player.get("profile") or player.get("evidence") or "")).strip()
             if not cue or self._is_low_quality_text(cue):
                 cue = "Use only confirmed live role, touch map, and matchup evidence."
-            rows.append(f"No. {number} | {name} | {position} | {cue}")
-            if len(rows) >= 8:
+            bio_bits = " | ".join(str(bit) for bit in (position, age, nationality, stats_line) if bit)
+            rows.append(f"No. {number} | {name} | {bio_bits} | Cue: {cue}")
+            if len(rows) >= 25:
                 break
         if rows:
             return self._format_bullets(rows)
         return f"- {team_name}: no player grid promoted yet; fill from confirmed team sheet and verified squad notes."
+
+    def _format_officials_summary(self, officials: Any) -> str:
+        if not isinstance(officials, dict) or not officials:
+            return "add referee, VAR, and assistants only when confirmed by an official or trusted source"
+        labels = []
+        for key, label in (
+            ("referee", "Referee"),
+            ("var", "VAR"),
+            ("assistant_referees", "Assistants"),
+            ("fourth_official", "Fourth official"),
+        ):
+            value = officials.get(key)
+            if value:
+                labels.append(f"{label}: {value}")
+        for key, value in officials.items():
+            if key not in {"referee", "var", "assistant_referees", "fourth_official"} and value:
+                labels.append(f"{str(key).replace('_', ' ').title()}: {value}")
+        return "; ".join(labels) if labels else "officials not promoted from accepted evidence"
+
+    def _format_confirmed_lineup_status(self, broadcast_dossier: Dict[str, Any]) -> str:
+        lineups = broadcast_dossier.get("lineups", {}) if isinstance(broadcast_dossier, dict) else {}
+        confirmed = lineups.get("confirmed", {}) if isinstance(lineups, dict) else {}
+        if isinstance(confirmed, dict) and confirmed:
+            return "confirmed team-sheet data is available in the dossier; check late changes before air."
+        return "leave editable until official team sheets arrive; do not promote researched squads as starters."
+
+    def _format_club_context_pages(
+        self,
+        home_team: str,
+        away_team: str,
+        club_context: Dict[str, Any],
+    ) -> str:
+        rows = []
+        for side, team_name in (("home_team", home_team), ("away_team", away_team)):
+            context = club_context.get(side, {}) if isinstance(club_context, dict) else {}
+            manager = context.get("manager") or "manager not verified in accepted feed"
+            staff = context.get("staff") or []
+            upcoming = context.get("upcoming_fixtures") or []
+            staff_line = ", ".join(str(item) for item in staff[:4]) if isinstance(staff, list) and staff else "staff not verified in accepted feed"
+            fixture_line = ", ".join(str(item) for item in upcoming[:4]) if isinstance(upcoming, list) and upcoming else "upcoming fixtures not promoted in this run"
+            rows.extend([
+                f"{team_name} manager: {manager}",
+                f"{team_name} staff box: {staff_line}",
+                f"{team_name} next fixtures: {fixture_line}",
+            ])
+        return self._format_bullets(rows)
+
+    def _format_statistics_context(self, statistics_context: Dict[str, Any]) -> str:
+        if not isinstance(statistics_context, dict):
+            return ""
+        lines = []
+        for key in ("home_form", "away_form"):
+            if statistics_context.get(key):
+                lines.append(str(statistics_context[key]))
+        for duel in statistics_context.get("key_duels", [])[:6]:
+            lines.append(f"Key duel index: {duel}")
+        for storyline in statistics_context.get("storylines", [])[:6]:
+            lines.append(f"Historical/storyline card: {storyline}")
+        if not lines:
+            return ""
+        return "#### Statistics & Story Cards\n\n" + self._format_bullets(lines)
+
+    def _format_compact_stats(self, stats: Dict[str, Any]) -> str:
+        if not isinstance(stats, dict) or not stats:
+            return "season stats not verified"
+        parts = []
+        for key, label in (("appearances", "apps"), ("goals", "goals"), ("assists", "assists")):
+            value = stats.get(key)
+            if value is not None and value != "":
+                parts.append(f"{value} {label}")
+        return ", ".join(parts) if parts else "season stats not verified"
 
     def _format_possible_lineups(
         self,
@@ -1515,7 +1635,7 @@ Unavailable or uncertain facts:
         for zone in zone_order:
             zone_data = positional_strength.get(zone, {})
             verdict = zone_data.get("verdict")
-            if verdict:
+            if verdict and not self._is_low_quality_text(verdict):
                 zone_edges.append(verdict)
         return zone_edges or [
             "Defense: read the first build-out under pressure.",
@@ -1715,6 +1835,10 @@ Unavailable or uncertain facts:
             return True
         if "lacking available performance metrics" in lower:
             return True
+        if "balanced on verified data" in lower:
+            return True
+        if "no verified season-stat edge" in lower:
+            return True
         if lower.startswith("as an elite"):
             return True
         if "limited historical data" in lower:
@@ -1776,6 +1900,46 @@ Unavailable or uncertain facts:
         if not cleaned or cleaned.lower() == "unknown":
             return True
         if cleaned.endswith("-"):
+            return True
+        blocked_exact = {
+            "against bayern",
+            "and andy",
+            "assistant referee bastian dankert",
+            "bayern munich",
+            "french ligue",
+            "holders paris",
+            "les parisiens",
+            "marc atkins",
+            "mark leech",
+            "paris st germain",
+            "pass-happy psg",
+            "real madrid",
+            "stamford bridge",
+            "the gunners",
+            "uefa champions league round",
+        }
+        if cleaned.lower() in blocked_exact:
+            return True
+        prefix = cleaned.split()[0]
+        if prefix in {"Against", "And", "Assistant", "French", "Holders", "Pass-happy", "The"}:
+            return True
+        blocked_tokens = {
+            "AFP",
+            "Assistant",
+            "Bridge",
+            "Champions",
+            "FIFE",
+            "Fourth",
+            "GER",
+            "League",
+            "Referee",
+            "Round",
+            "Stamford",
+            "SUI",
+            "UEFA",
+            "Video",
+        }
+        if any(token in blocked_tokens for token in cleaned.split()):
             return True
         if any(token in {"Getty", "Reuters", "Image", "Images", "Photo", "For"} for token in cleaned.split()):
             return True

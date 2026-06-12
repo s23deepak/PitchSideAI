@@ -95,6 +95,34 @@ def test_sunderland_chelsea_quality_gate_rejects_polluted_claims():
     assert "Sunderland vs Chelsea verified H2H" in report["unavailable_facts"]
 
 
+def test_structured_squad_research_counts_as_accepted_evidence():
+    outputs = {
+        "home_team": "Arsenal",
+        "away_team": "Paris Saint-Germain",
+        "player_research": {
+            "home_team": {
+                "team_name": "Arsenal",
+                "players": [{"name": f"Arsenal Player {i}"} for i in range(1, 12)],
+                "data_sources": ["ESPN"],
+                "data_status": "accepted",
+            },
+            "away_team": {
+                "team_name": "Paris Saint-Germain",
+                "players": [{"name": f"PSG Player {i}"} for i in range(1, 12)],
+                "data_sources": ["ESPN"],
+                "data_status": "accepted",
+            },
+        },
+    }
+
+    report = build_evidence_quality_report(outputs, mutate=True)
+
+    assert report["accepted_evidence_count"] == 2
+    assert {item["topic"] for item in report["accepted_evidence"]} == {"player_research"}
+    assert outputs["player_research"]["home_team"]["validation_status"] == "accepted"
+    assert outputs["player_research"]["away_team"]["verified_player_count"] == 11
+
+
 def test_scraped_content_validator_rejects_other_fixture_and_other_sport():
     assert validate_scraped_content(
         "Chelsea vs Tottenham team news",

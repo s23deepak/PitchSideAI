@@ -4,6 +4,7 @@ from agents.specialized_commentary.matchup_analysis_agent import MatchupAnalysis
 from agents.specialized_commentary.news_agent import NewsAgent
 from agents.specialized_commentary.player_research_agent import PlayerResearchAgent
 from agents.specialized_commentary.team_form_agent import TeamFormAgent
+from data_sources.espn_retriever import ESPNDataRetriever, _get_serie_a_slug
 from data_sources.fixture_resolver import FixtureResolver
 from quality.evidence import build_evidence_quality_report, filter_allowed_search_results, validate_search_result
 from workflows.commentary_notes_workflow import CommentaryNotesState, CommentaryNotesWorkflow
@@ -54,6 +55,113 @@ def test_trusted_media_team_news_is_accepted_but_official_sources_rank_first():
 
     assert rejected == []
     assert [item["source_tier"] for item in accepted] == ["official", "trusted_media"]
+
+
+def test_source_policy_accepts_lineup_media_and_rejects_other_sports_noise():
+    accepted, rejected = filter_allowed_search_results(
+        [
+            {
+                "title": "PSG vs Arsenal predicted lineups, team news",
+                "content": "Arsenal predicted lineup and PSG predicted lineup for the Champions League final.",
+                "url": "https://www.nbcsports.com/soccer/news/psg-vs-arsenal-predicted-lineups-team-news-analysis-for-epic-champions-league-final",
+                "score": 0.9,
+            },
+            {
+                "title": "F1: Lewis Hamilton hunts down Max Verstappen at Canadian GP",
+                "content": "Arsenal video playlist item mixed into a Sky page.",
+                "url": "https://www.skysports.com/f1/video/30998/hamilton-verstappen-canadian-gp",
+                "score": 0.95,
+            },
+        ],
+        home_team="Arsenal",
+        away_team="Paris Saint-Germain",
+        topic="lineup",
+        max_results=2,
+    )
+
+    assert accepted[0]["source_tier"] == "trusted_media"
+    assert accepted[0]["url"].startswith("https://www.nbcsports.com/")
+    assert rejected[0].reason == "other_sport"
+
+
+def test_news_agent_extracts_match_level_predicted_lineups():
+    agent = NewsAgent(sport="soccer", search_service=None)
+    text = (
+        "PSG vs Arsenal predicted lineups, team news, analysis for epic Champions League final. "
+        "## Arsenal predicted lineup ——- Raya ——- —— Timber —- Saliba —- Gabriel —- Calafiori —- "
+        "—— Odegaard —- Rice —- Eze —— —— Saka —— Havertz —— Trossard —— [...] "
+        "## PSG predicted lineup —— Safonov ——- —- Hakimi —- Marquinhos —- Pacho —— Mendes —— "
+        "—— Neves —- Ruiz —- Vitinha —— —— Doue —- Dembele —- Kvaratskhelia —— [...]"
+    )
+
+    assert agent._extract_predicted_lineup_block(text, ["Arsenal"]) == [
+        "Raya",
+        "Timber",
+        "Saliba",
+        "Gabriel",
+        "Calafiori",
+        "Odegaard",
+        "Rice",
+        "Eze",
+        "Saka",
+        "Havertz",
+        "Trossard",
+    ]
+    assert agent._extract_predicted_lineup_block(text, ["PSG"]) == [
+        "Safonov",
+        "Hakimi",
+        "Marquinhos",
+        "Pacho",
+        "Mendes",
+        "Neves",
+        "Ruiz",
+        "Vitinha",
+        "Doue",
+        "Dembele",
+        "Kvaratskhelia",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_espn_resolves_psg_against_ligue_1_slug(monkeypatch):
+    retriever = ESPNDataRetriever()
+    calls = []
+
+    async def fake_get(url, params=None):
+        calls.append(url)
+        return {
+            "sports": [{
+                "leagues": [{
+                    "teams": [{
+                        "team": {"id": "160", "displayName": "Paris Saint-Germain"}
+                    }]
+                }]
+            }]
+        }
+
+    monkeypatch.setattr(retriever, "_get", fake_get)
+
+    assert _get_serie_a_slug("Paris Saint-Germain") == "fra.1"
+    assert await retriever._resolve_team_id("Paris Saint-Germain", "soccer", "fra.1") == "160"
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_espn_resolves_croatia_belgium_against_world_slug(monkeypatch):
+    retriever = ESPNDataRetriever()
+    calls = []
+
+    async def fake_get(url, params=None):
+        calls.append(url)
+        return {}
+
+    monkeypatch.setattr(retriever, "_get", fake_get)
+
+    assert _get_serie_a_slug("Croatia") == "fifa.world"
+    assert _get_serie_a_slug("Belgium") == "fifa.world"
+    assert await retriever._resolve_team_id("Croatia", "soccer", "fifa.world") == "477"
+    assert await retriever._resolve_team_id("Belgium", "soccer", "fifa.world") == "459"
+    assert calls == []
 
 
 def test_evidence_gate_clears_synthesis_when_news_inputs_were_rejected():
@@ -361,6 +469,44 @@ async def test_fixture_resolver_prefers_uefa_source_for_champions_league_fixture
     assert result["sources"][0]["source_tier"] == "official"
 
 
+@pytest.mark.asyncio
+async def test_fixture_resolver_rejects_stale_official_club_page_for_final():
+    class FakeSearch:
+        async def search(self, *args, **kwargs):
+            return {
+                "results": [
+                    {
+                        "title": "Arsenal vs Paris Saint-Germain | UEFA Champions League | April 29 2025",
+                        "content": "Arsenal faced Paris Saint-Germain at Arsenal Stadium on Tuesday, April 29, 2025.",
+                        "url": "https://www.arsenal.com/fixture/arsenal/2025-Apr-29/paris-saint-germain-fc",
+                        "score": 0.99,
+                    },
+                    {
+                        "title": "Paris vs Arsenal | The final | UEFA Champions League 2025/26 Final",
+                        "content": "Paris vs Arsenal UEFA Champions League Final at Puskas Arena on Saturday, May 30, 2026 at 18:00 CEST.",
+                        "url": "https://www.uefa.com/uefachampionsleague/match/2047742--paris-vs-arsenal/final/",
+                        "source": "UEFA",
+                        "score": 0.1,
+                    },
+                ],
+                "answer": "",
+            }
+
+    resolver = FixtureResolver(search_service=FakeSearch())
+
+    result = await resolver.resolve(
+        home_team="Arsenal",
+        away_team="Paris Saint-Germain",
+        sport="soccer",
+        competition="UEFA Champions League Final",
+    )
+
+    assert result["status"] == "accepted"
+    assert result["venue"] == "Puskas Arena"
+    assert result["match_datetime"].startswith("2026-05-30T18:00:00+02:00")
+    assert result["sources"][0]["url"] == "https://www.uefa.com/uefachampionsleague/match/2047742--paris-vs-arsenal/final/"
+
+
 def test_fixture_resolver_prefers_fixture_date_over_article_publish_date():
     resolver = FixtureResolver(search_service=None)
     text = (
@@ -394,6 +540,22 @@ def test_fixture_resolver_keeps_hyphenated_player_names_and_rejects_photo_credit
 
     assert "Warren Zaire-Emery" in names
     assert "Getty For" not in names
+
+
+def test_fixture_resolver_rejects_caption_club_and_official_phrases_as_players():
+    resolver = FixtureResolver(search_service=None)
+    names = resolver._extract_person_names(
+        (
+            "Holders Paris meet Real Madrid references in the guide. "
+            "Photo by FRANCK FIFE / AFP via Getty Images lists Rafael Foltyn GER Fourth official "
+            "and Assistant Referee Bastian Dankert. And Andy, midfield, right, is a transcript fragment."
+        ),
+        "Arsenal",
+        "Paris Saint-Germain",
+        "Champions League Final",
+    )
+
+    assert names == []
 
 
 @pytest.mark.asyncio

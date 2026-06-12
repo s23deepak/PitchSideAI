@@ -417,12 +417,20 @@ class CommentaryNotesWorkflow:
             "matchups": state.matchup_analysis,
             "news": state.team_news,
         }
+        if isinstance(state.team_news, dict) and state.team_news.get("possible_lineups"):
+            all_outputs["possible_lineups"] = state.team_news["possible_lineups"]
 
         try:
             evidence_report = build_evidence_quality_report(all_outputs, mutate=True)
             state.quality_report = evidence_report
             from agents.deep_notes_agent import DeepNotesResearchAgent
+            from workflows.broadcast_dossier import build_broadcast_dossier
 
+            all_outputs["broadcast_dossier"] = build_broadcast_dossier(all_outputs)
+            all_outputs.setdefault(
+                "plausible_lineups",
+                all_outputs["broadcast_dossier"].get("lineups", {}).get("plausible", {}),
+            )
             deep_notes = await DeepNotesResearchAgent().enrich(all_outputs)
             all_outputs["deep_notes"] = deep_notes
             if not deep_notes.get("enabled") and "package unavailable" in str(deep_notes.get("reason", "")):

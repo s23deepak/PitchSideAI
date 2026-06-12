@@ -36,6 +36,7 @@ TRUSTED_STRUCTURED_DOMAINS = {
     "espn.co.uk",
     "football-data.org",
     "statsbomb.com",
+    "theanalyst.com",
     "fbref.com",
     "transfermarkt.com",
     "transfermarkt.co.uk",
@@ -54,6 +55,8 @@ TRUSTED_MEDIA_DOMAINS = {
     "theguardian.com",
     "theathletic.com",
     "nytimes.com",
+    "nbcsports.com",
+    "sportsmole.co.uk",
     "espn.com",
     "espn.co.uk",
 }
@@ -73,6 +76,12 @@ OTHER_SPORT_TERMS = {
     "rcb",
     "srh",
     "tennis",
+    "f1",
+    "formula 1",
+    "formula one",
+    "verstappen",
+    "hamilton",
+    "canadian gp",
 }
 
 
@@ -121,6 +130,7 @@ def build_evidence_quality_report(
     _gate_news(target.get("news", {}), home_team, away_team, match_scope, accepted, rejected, degraded_sections, unavailable_facts)
     _gate_weather(target.get("weather", {}), match_scope, accepted, rejected, degraded_sections, unavailable_facts)
     _gate_historical(target.get("historical", {}), home_team, away_team, match_scope, accepted, rejected, degraded_sections, unavailable_facts)
+    _gate_player_research(target.get("player_research", {}), home_team, away_team, match_scope, accepted, degraded_sections, unavailable_facts)
 
     report = {
         "accepted_evidence_count": len(accepted),
@@ -176,6 +186,9 @@ def preferred_domains_for_topic(topic: str, competition: str = "") -> list[str]:
             "premierleague.com",
             "bbc.co.uk",
             "skysports.com",
+            "theanalyst.com",
+            "nbcsports.com",
+            "sportsmole.co.uk",
             "reuters.com",
             "theguardian.com",
             "theathletic.com",
@@ -461,6 +474,57 @@ def _gate_historical(
     if not kept_storylines:
         degraded_sections.append("storylines")
         unavailable_facts.append("verified match storylines")
+
+
+def _gate_player_research(
+    player_research: dict[str, Any],
+    home_team: str,
+    away_team: str,
+    match_scope: str,
+    accepted: list[EvidenceItem],
+    degraded_sections: list[str],
+    unavailable_facts: list[str],
+) -> None:
+    if not isinstance(player_research, dict):
+        return
+
+    for side, team in (("home_team", home_team), ("away_team", away_team)):
+        squad = player_research.get(side)
+        if not isinstance(squad, dict):
+            continue
+
+        players = squad.get("players") if isinstance(squad.get("players"), list) else []
+        valid_players = [
+            player for player in players
+            if isinstance(player, dict)
+            and str(player.get("name") or "").strip()
+            and str(player.get("name") or "").strip().lower() != "unknown"
+        ]
+        sources = {
+            str(source).strip().lower()
+            for source in (squad.get("data_sources") or [])
+            if str(source).strip()
+        }
+        has_structured_source = bool(sources & {"espn", "fbref", "football-data", "football_data", "transfermarkt"})
+
+        if len(valid_players) >= 11 and (has_structured_source or squad.get("data_status") == "accepted"):
+            squad["validation_status"] = "accepted"
+            squad["verified_player_count"] = len(valid_players)
+            accepted.append(EvidenceItem(
+                claim=f"{team} structured squad list available with {len(valid_players)} players",
+                source_name="ESPN" if "espn" in sources or not sources else ", ".join(sorted(sources)),
+                source_tier="structured",
+                topic="player_research",
+                team_scope=team,
+                match_scope=match_scope,
+                confidence=0.88,
+                validation_status="accepted",
+            ))
+            continue
+
+        squad["validation_status"] = "degraded"
+        degraded_sections.append(f"player_research:{team}")
+        unavailable_facts.append(f"{team} verified squad list")
 
 
 def _looks_like_other_fixture(text: str, home_team: str, away_team: str) -> bool:

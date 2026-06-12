@@ -1,6 +1,7 @@
 import pytest
 
 from agents.specialized_commentary.note_organizer_agent import CommentaryNoteOrganizerAgent
+from workflows.broadcast_dossier import build_broadcast_dossier
 
 
 @pytest.mark.asyncio
@@ -749,3 +750,102 @@ async def test_note_organizer_suppresses_placeholder_players_in_notes_and_beats(
     assert "Arsenal Player 1" not in rendered
     assert "Paris Saint-Germain Player 1" not in beat_text
     assert "0G 0A" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_arsenal_psg_goal_quality_broadcast_dossier_shape():
+    organizer = CommentaryNoteOrganizerAgent(sport="soccer")
+
+    def players(team):
+        positions = ["GK", "RB", "CB", "CB", "LB", "CM", "CM", "AM", "RW", "ST", "LW"]
+        names = [
+            "David Raya", "Jurrien Timber", "William Saliba", "Gabriel", "Riccardo Calafiori",
+            "Declan Rice", "Martin Odegaard", "Bukayo Saka", "Viktor Gyokeres", "Gabriel Martinelli",
+            "Leandro Trossard", "Kai Havertz", "Eberechi Eze", "Mikel Merino", "Martin Zubimendi",
+            "Noni Madueke", "Ben White", "Piero Hincapie", "Gabriel Jesus", "Kepa Arrizabalaga",
+        ] if team == "Arsenal" else [
+            "Matvei Safonov", "Achraf Hakimi", "Marquinhos", "Willian Pacho", "Nuno Mendes",
+            "Warren Zaire-Emery", "Vitinha", "Joao Neves", "Desire Doue", "Ousmane Dembele",
+            "Khvicha Kvaratskhelia", "Bradley Barcola", "Goncalo Ramos", "Fabian Ruiz", "Lee Kang-in",
+            "Lucas Hernandez", "Beraldo", "Zabarnyi", "Mayulu", "Chevalier",
+        ]
+        return [
+            {
+                "name": name,
+                "position": positions[index % len(positions)],
+                "squad_number": index + 1,
+                "age": 22 + (index % 9),
+                "nationality": "ENG" if team == "Arsenal" else "FRA",
+                "stats": {"appearances": 10 + index, "goals": index % 7, "assists": index % 5},
+                "profile": f"{name} gives {team} a verified {positions[index % len(positions)]} cue for the broadcast sheet.",
+                "source_urls": ["https://www.uefa.com/uefachampionsleague/"],
+                "confidence": 0.8,
+            }
+            for index, name in enumerate(names)
+        ]
+
+    outputs = {
+        "home_team": "Arsenal",
+        "away_team": "Paris Saint-Germain",
+        "competition": "Champions League Final",
+        "match_datetime": "2026-05-30T18:00:00+02:00",
+        "venue": "Puskas Arena",
+        "fixture_context": {
+            "officials": {"referee": "Daniel Siebert", "var": "Bastian Dankert"},
+            "sources": [{"url": "https://www.uefa.com/uefachampionsleague/match/2047742--paris-vs-arsenal/"}],
+        },
+        "quality_report": {
+            "strict_mode": True,
+            "accepted_evidence_count": 5,
+            "accepted_evidence": [{
+                "claim": "UEFA confirms Paris vs Arsenal at Puskas Arena.",
+                "source_name": "UEFA",
+                "source_tier": "official",
+            }],
+            "degraded_sections": [],
+            "unavailable_facts": [],
+        },
+        "player_research": {
+            "home_team": {"team_name": "Arsenal", "manager": "Mikel Arteta", "players": players("Arsenal")},
+            "away_team": {"team_name": "Paris Saint-Germain", "manager": "Luis Enrique", "players": players("Paris Saint-Germain")},
+        },
+        "team_form": {
+            "home_team": {"team_name": "Arsenal", "recent_form": {"record": {"wins": 4, "draws": 1, "losses": 0}}},
+            "away_team": {"team_name": "Paris Saint-Germain", "recent_form": {"record": {"wins": 3, "draws": 1, "losses": 1}}},
+            "comparative_analysis": {"comparative_assessment": "The central question is Arsenal control against Paris transition speed."},
+        },
+        "historical": {
+            "h2h_history": {"team1_wins": 2, "team2_wins": 2, "draws": 3},
+            "narrative": "UEFA lists seven previous meetings, split evenly enough to keep the final framed around the present.",
+            "storylines": [{"title": "Arsenal chase a first European Cup while Paris protect the crown."}],
+        },
+        "matchups": {
+            "critical_matchups": [{
+                "player1": "Bukayo Saka",
+                "player2": "Nuno Mendes",
+                "analysis": "This duel decides whether Arsenal pin Paris back or Paris release pressure into transition.",
+            }],
+            "tactical_implications": "Expect Arsenal control against Paris transition speed to shape the rhythm.",
+        },
+        "weather": {"narrative": "Clear conditions should allow a quick passing tempo."},
+        "news": {},
+    }
+    outputs["broadcast_dossier"] = build_broadcast_dossier(outputs)
+
+    notes = await organizer.synthesize_to_notes_store(outputs)
+    markdown = notes.raw_markdown
+
+    assert "Broadcast page role: **Match Overview & Lineups**" in markdown
+    assert "Daniel Siebert" in markdown
+    assert "Bastian Dankert" in markdown
+    assert "#### Page 2: Arsenal Deep-Dive" in markdown
+    assert "#### Page 3: Paris Saint-Germain Deep-Dive" in markdown
+    assert "### Page 4: Club Context & Staff" in markdown
+    assert "Broadcast page role: **Pages 5-6: Statistics & Historical Context**" in markdown
+    assert "Mikel Arteta" in markdown
+    assert "Luis Enrique" in markdown
+    assert "Opening Lines Bank" in markdown
+    assert "Bukayo Saka vs Nuno Mendes" in markdown
+    assert markdown.count("Cue:") >= 36
+    assert "no player grid promoted" not in markdown
+    assert "placeholder" not in markdown.lower()

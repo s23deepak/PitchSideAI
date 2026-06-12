@@ -34,6 +34,8 @@ Built for the **AMD Developer Hackathon (May 2026)**. PitchSideAI gives fans and
 
 Production planning handoff: see [Production Notes + Live VLM Loop Vertical Slice Plan](docs/production-notes-live-vlm-vertical-slice-plan.md).
 
+Current production priorities: close the live VLM context reinjection loop, make live notes patches section-aware, and keep commentary-note evidence gates green before adding more UI polish.
+
 ---
 
 ## Quick Start
@@ -230,6 +232,8 @@ Scheduled production flow:
 - Celery Beat scans every minute and enqueues notes 12 hours before kickoff.
 - `GET /api/v1/matches/{match_id}/vlm-context` serves Redis-cached VLM context with Postgres fallback.
 - `POST /api/v1/matches/{match_id}/events` stores live events and triggers LangGraph live notes patches.
+
+Current gap: VLM context is versioned, cached, and exposed, but the streaming worker still needs a version-aware subscription/reinjection loop for Redis `notes_updated` events.
 
 ---
 
@@ -499,6 +503,10 @@ python3 -m unittest agents/__tests__/test_qa_agent.py -v
 # Integration tests
 python3 scripts/test_fallback_chain.py
 python3 scripts/chaos_test.py
+
+# Commentary notes evidence regression
+source .venv/bin/activate
+python -m pytest -p no:rerunfailures --capture=no agents/__tests__/test_commentary_notes_quality_gates.py::test_news_agent_filters_polluted_espn_headlines_before_llm -q
 ```
 
 ### Agent-assisted development

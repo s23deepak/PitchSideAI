@@ -43,7 +43,7 @@ async def test_commentary_notes_workflow_end_to_end_fast_path(monkeypatch):
             "narrative": "This fixture has usually balanced control with sudden shifts.",
         }
 
-    async def fake_players(self, home_team, away_team):
+    async def fake_players(self, home_team, away_team, fixture_context=None):
         def player(name, position, team):
             return {
                 "name": name,

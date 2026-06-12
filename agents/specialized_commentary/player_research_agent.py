@@ -10,6 +10,7 @@ from datetime import datetime
 import asyncio
 import json
 import logging
+import os
 import re
 from agents.base import BaseAgent
 from data_sources import DataCache, WikipediaRetriever
@@ -141,10 +142,11 @@ class PlayerResearchAgent(BaseAgent):
         # ESPN's fallback can fabricate "{team} Player 1" rows. Treat those as
         # unavailable evidence instead of allowing mock names into notes.
         raw_players = espn_squad.get("players", [])
+        player_limit = self._player_limit()
         players = [
             player for player in raw_players
             if not self._is_placeholder_player(player, team_name)
-        ][:5]  # 5 for local dev (bump to 25 for production)
+        ][:player_limit]
 
         enriched_players = await asyncio.gather(
             *[self._research_player_detailed(p, team_name) for p in players],
@@ -198,9 +200,16 @@ class PlayerResearchAgent(BaseAgent):
                 continue
             merged.append(self._fixture_candidate(player, team_name))
             seen.add(name_key)
-            if len(merged) >= 8:
+            if len(merged) >= self._player_limit():
                 break
         return merged
+
+    def _player_limit(self) -> int:
+        """Production notes need a real squad grid; tests/dev can lower this via env."""
+        try:
+            return max(1, min(25, int(os.getenv("COMMENTARY_NOTES_PLAYER_LIMIT", "25"))))
+        except ValueError:
+            return 25
 
     def _fixture_candidate(self, player: Dict[str, Any], team_name: str) -> Dict[str, Any]:
         evidence = str(player.get("evidence") or player.get("profile") or "").strip()
@@ -353,7 +362,8 @@ Players:
 """
 
         try:
-            response = await self.call_llm(prompt=prompt, temperature=0.3, max_tokens=420)
+            max_tokens = min(1800, max(420, len(payload) * 90))
+            response = await self.call_llm(prompt=prompt, temperature=0.3, max_tokens=max_tokens)
             parsed = await self.parse_json_response(response)
             profile_by_name = {
                 item.get("name", ""): item.get("profile", "")

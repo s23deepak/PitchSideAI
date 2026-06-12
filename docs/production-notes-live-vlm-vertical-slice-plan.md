@@ -241,6 +241,11 @@ Code map:
 
 ## Current Handoff State
 
+Status update, June 5, 2026:
+- The `NewsAgent(search_service=None)` regression was fixed so explicit `None` disables web-search fallback in tests and fixture-scoped validation. This prevents unrelated Tavily/news items from leaking into accepted team-news evidence when a test or caller intentionally supplies only structured retriever data.
+- The targeted evidence regression is covered by `agents/__tests__/test_commentary_notes_quality_gates.py::test_news_agent_filters_polluted_espn_headlines_before_llm`.
+- The main remaining architecture gaps are still the live VLM context reinjection loop and section-aware live notes patching.
+
 The current working tree contains an implementation of the main backend/data/LLM pieces for the slice:
 - Scheduled match storage and Celery Beat dispatch.
 - LangGraph-based pre-match notes workflow.
@@ -260,6 +265,7 @@ Use these commands from the repo root:
 ```bash
 source .venv/bin/activate
 python -m pytest -p no:rerunfailures agents/__tests__ tests/models/test_notes_store.py tests/models/test_live_agent.py -q
+python -m pytest -p no:rerunfailures --capture=no agents/__tests__/test_commentary_notes_quality_gates.py::test_news_agent_filters_polluted_espn_headlines_before_llm -q
 python -m py_compile agents/deep_notes_agent.py agents/qa_agent.py agents/specialized_commentary/note_organizer_agent.py api/server.py jobs/celery_app.py jobs/notes_cache.py jobs/notes_tasks.py models/notes_jobs.py quality/notes_quality.py workflows/commentary_notes_workflow.py workflows/live_notes_patch_workflow.py
 git diff --check
 ```
@@ -329,9 +335,11 @@ curl -X POST http://localhost:8000/api/v1/matches/{match_id}/events \
 
 ## Next Codex CLI Tasks
 
-1. Verify frontend with a working Linux Node runtime.
-2. Add Playwright coverage for Notes Hub scheduled, failed, ready, and live-updated states.
-3. Add Postgres integration tests for duplicate schedule/job prevention and version fallback.
-4. Add Redis integration tests for cache rebuild and `notes_updated` pub/sub.
-5. Add a fixture-based quality evaluation suite under `quality/fixtures/`.
-6. Decide whether DeepAgents should default off in production until enough evals prove quality gains.
+1. Close the live VLM context loop: load `/api/v1/matches/{match_id}/vlm-context` before analysis, track `vlm_context_version`, subscribe to Redis `notes_updated`, and ignore stale updates.
+2. Make `LiveNotesPatchWorkflow` section-aware instead of append-only: substitutions should update lineup/player/tactical sections, red cards should update tactical risk, and goals should update storylines/match dynamics.
+3. Verify frontend with a working Linux Node runtime.
+4. Add Playwright coverage for Notes Hub scheduled, failed, ready, and live-updated states.
+5. Add Postgres integration tests for duplicate schedule/job prevention and version fallback.
+6. Add Redis integration tests for cache rebuild and `notes_updated` pub/sub.
+7. Add a fixture-based quality evaluation suite under `quality/fixtures/`.
+8. Decide whether DeepAgents should default off in production until enough evals prove quality gains.

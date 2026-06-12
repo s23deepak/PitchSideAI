@@ -68,10 +68,31 @@ TEAM_ID_CACHE: Dict[str, str] = {
     # Bundesliga
     "bayern munich": "132",
     "borussia dortmund": "124",
+    # National teams
+    "belgium": "459",
+    "croatia": "477",
+    # Ligue 1
+    "paris saint-germain": "160",
+    "paris saint germain": "160",
+    "psg": "160",
     # Serie A
     "juventus": "111",
     "ac milan": "103",
     "inter milan": "110",
+}
+
+TEAM_LEAGUE_CACHE: Dict[str, str] = {
+    "paris saint-germain": "fra.1",
+    "paris saint germain": "fra.1",
+    "psg": "fra.1",
+    "barcelona": "esp.1",
+    "real madrid": "esp.1",
+    "atletico madrid": "esp.1",
+    "sevilla": "esp.1",
+    "bayern munich": "ger.1",
+    "borussia dortmund": "ger.1",
+    "belgium": "fifa.world",
+    "croatia": "fifa.world",
 }
 
 # Which ESPN league does a given sport map to for roster/schedule calls?
@@ -96,6 +117,9 @@ def _get_stat(stats: List[Dict], name: str) -> float:
 
 def _get_serie_a_slug(team_name: str) -> str:
     """Get Serie A slug for Italian teams, otherwise use league-specific lookup."""
+    normalized = team_name.lower().strip()
+    if normalized in TEAM_LEAGUE_CACHE:
+        return TEAM_LEAGUE_CACHE[normalized]
     italian_teams = {
         "ac milan", "inter milan", "juventus", "napoli", "roma",
         "lazio", "atalanta", "fiorentina", "torino", "bologna",
@@ -103,7 +127,7 @@ def _get_serie_a_slug(team_name: str) -> str:
         "verona", "spezia", "empoli", "salernitana", "monza",
         "como", "parma", "lecce", "venezia"
     }
-    if team_name.lower().strip() in italian_teams:
+    if normalized in italian_teams:
         return SERIE_A_SLUG
     return "eng.1"  # Premier League default
 
