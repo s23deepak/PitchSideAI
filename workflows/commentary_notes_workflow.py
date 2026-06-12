@@ -7,12 +7,13 @@ parallel execution, and error handling.
 
 from dataclasses import dataclass, field, fields as dataclass_fields
 from typing import Dict, List, Any, Optional, Callable, Awaitable
-from datetime import datetime
+from datetime import datetime, timezone
 import asyncio
 import logging
 from pathlib import Path
 import sys
 from enum import Enum
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -83,9 +84,13 @@ class CommentaryNotesState:
     notes_store: Optional[Any] = None  # NotesStore with O(1) lookup
     source_provenance: Dict[str, Any] = field(default_factory=dict)
     quality_report: Dict[str, Any] = field(default_factory=dict)
+    targeted_evidence: Dict[str, Any] = field(default_factory=dict)
+    fact_ledger: Dict[str, Any] = field(default_factory=dict)
+    notes_evaluation: Dict[str, Any] = field(default_factory=dict)
     vlm_context: Dict[str, Any] = field(default_factory=dict)
     notes_version: int = 0
     vlm_context_version: int = 0
+    revision_count: int = 0
 
     # === Error Tracking ===
     errors: List[str] = field(default_factory=list)
@@ -279,6 +284,66 @@ class CommentaryNotesWorkflow:
         await self._emit("parallel_phase", "Parallel research phase complete", done=True)
         return state
 
+    async def targeted_evidence_search(self, state: CommentaryNotesState) -> CommentaryNotesState:
+        """Use Exa as a quota-conscious gap filler when strict evidence is thin."""
+        _ensure_project_root_on_path()
+        import copy
+        from data_sources.factory import get_exa_search_service
+        from quality.evidence import (
+            build_evidence_quality_report,
+            filter_allowed_search_results,
+        )
+
+        current_outputs = copy.deepcopy(self._build_all_outputs(state))
+        current_report = build_evidence_quality_report(current_outputs, mutate=False)
+        accepted_count = int(current_report.get("accepted_evidence_count") or 0)
+        exa = get_exa_search_service()
+        if accepted_count >= 4 or not exa.is_available:
+            state.targeted_evidence = {
+                "enabled": exa.is_available,
+                "skipped": True,
+                "reason": "accepted evidence threshold met" if accepted_count >= 4 else "EXA_API_KEY/EXA_API not configured",
+                "accepted_evidence_count": accepted_count,
+                "results_by_topic": {},
+            }
+            return state
+
+        await self._emit("targeted_evidence", "Searching Exa for missing source-backed facts...")
+        routes = self._exa_query_routes(state)
+        results_by_topic: Dict[str, List[Dict[str, Any]]] = {}
+        rejected_by_topic: Dict[str, List[Dict[str, Any]]] = {}
+        for topic, route in routes.items():
+            search = await exa.search(
+                route["query"],
+                topic=topic,
+                search_type=route.get("search_type", "auto"),
+                max_results=route.get("max_results", 4),
+                include_domains=route.get("include_domains", []),
+                start_published_date=route.get("start_published_date"),
+                cache_namespace="exa_commentary_notes",
+            )
+            accepted, rejected = filter_allowed_search_results(
+                search.get("results", []),
+                home_team=state.home_team,
+                away_team=state.away_team,
+                topic="team_news" if topic == "team_news" else ("storylines" if topic in {"fixture", "h2h", "tactical"} else topic),
+                max_results=4,
+            )
+            results_by_topic[topic] = accepted
+            rejected_by_topic[topic] = [item.to_dict() for item in rejected]
+
+        self._merge_targeted_evidence(state, results_by_topic)
+        state.targeted_evidence = {
+            "enabled": True,
+            "skipped": False,
+            "provider": "exa",
+            "accepted_evidence_count_before": accepted_count,
+            "results_by_topic": results_by_topic,
+            "rejected_by_topic": rejected_by_topic,
+        }
+        await self._emit("targeted_evidence", "Exa evidence search complete", done=True)
+        return state
+
     async def research_squads(self, state: CommentaryNotesState) -> CommentaryNotesState:
         """
         Phase 2: Research both squads in parallel.
@@ -402,30 +467,19 @@ class CommentaryNotesWorkflow:
         state.phase = WorkflowPhase.SYNTHESIS
         state.in_progress_agents = ["note_organizer"]
 
-        all_outputs = {
-            "home_team": state.home_team,
-            "away_team": state.away_team,
-            "sport": state.sport,
-            "competition": state.competition,
-            "match_datetime": state.match_datetime,
-            "venue": state.venue,
-            "fixture_context": state.fixture_context,
-            "player_research": state.player_research,
-            "team_form": state.team_form,
-            "historical": state.historical_context,
-            "weather": state.weather_context,
-            "matchups": state.matchup_analysis,
-            "news": state.team_news,
-        }
+        all_outputs = self._build_all_outputs(state)
         if isinstance(state.team_news, dict) and state.team_news.get("possible_lineups"):
             all_outputs["possible_lineups"] = state.team_news["possible_lineups"]
 
         try:
             evidence_report = build_evidence_quality_report(all_outputs, mutate=True)
             state.quality_report = evidence_report
+            from quality.fact_ledger import build_fact_ledger
             from agents.deep_notes_agent import DeepNotesResearchAgent
             from workflows.broadcast_dossier import build_broadcast_dossier
 
+            all_outputs["fact_ledger"] = build_fact_ledger(all_outputs)
+            state.fact_ledger = all_outputs["fact_ledger"]
             all_outputs["broadcast_dossier"] = build_broadcast_dossier(all_outputs)
             all_outputs.setdefault(
                 "plausible_lineups",
@@ -442,6 +496,7 @@ class CommentaryNotesWorkflow:
             state.source_provenance = self._build_source_provenance(all_outputs)
             state.quality_report = {
                 **evidence_report,
+                "fact_ledger": state.fact_ledger,
                 "notes_metrics": self._build_quality_report(state, notes_store),
             }
             state.vlm_context = self._build_vlm_context(notes_store)
@@ -463,6 +518,59 @@ class CommentaryNotesWorkflow:
         logger.info(f"[{state.workflow_id}] Workflow complete")
         return state
 
+    async def evaluate_notes(self, state: CommentaryNotesState) -> CommentaryNotesState:
+        """Evaluate the whole markdown artifact against format and fact-ledger rules."""
+        _ensure_project_root_on_path()
+        from quality.notes_refinement import evaluate_notes_document
+
+        notes_store = state.notes_store
+        if not notes_store:
+            state.notes_evaluation = {
+                "needs_revision": False,
+                "missing_sections": [],
+                "unsupported_claims": [],
+                "error": "notes_store unavailable",
+            }
+            return state
+        beats_payload = self._beats_payload(notes_store)
+        state.notes_evaluation = evaluate_notes_document(
+            getattr(notes_store, "raw_markdown", "") or "",
+            fact_ledger=state.fact_ledger,
+            quality_report=state.quality_report,
+            beats=beats_payload,
+        )
+        state.quality_report = {
+            **state.quality_report,
+            "notes_evaluation": state.notes_evaluation,
+        }
+        return state
+
+    async def revise_notes(self, state: CommentaryNotesState) -> CommentaryNotesState:
+        """Revise the whole markdown block using the latest evaluation."""
+        _ensure_project_root_on_path()
+        from models.notes_store import NotesStore
+        from quality.notes_refinement import refine_notes_document
+
+        if not state.notes_store:
+            return state
+        refined = refine_notes_document(
+            getattr(state.notes_store, "raw_markdown", "") or "",
+            evaluation=state.notes_evaluation,
+            fact_ledger=state.fact_ledger,
+            home_team=state.home_team,
+            away_team=state.away_team,
+        )
+        state.revision_count += 1
+        state.notes_store = NotesStore(raw_markdown=refined, beats=getattr(state.notes_store, "beats", []) or [])
+        state.markdown_notes = refined
+        state.quality_report = {
+            **state.quality_report,
+            "notes_metrics": self._build_quality_report(state, state.notes_store),
+            "revision_count": state.revision_count,
+        }
+        state.vlm_context = self._build_vlm_context(state.notes_store)
+        return state
+
     def _build_source_provenance(self, all_outputs: Dict[str, Any]) -> Dict[str, Any]:
         provenance: Dict[str, Any] = {}
         for key, value in all_outputs.items():
@@ -479,9 +587,222 @@ class CommentaryNotesWorkflow:
             }
         return provenance
 
-    def _build_quality_report(self, state: CommentaryNotesState, notes_store: Any) -> Dict[str, Any]:
-        from quality.notes_quality import score_notes
+    def _build_all_outputs(self, state: CommentaryNotesState) -> Dict[str, Any]:
+        return {
+            "home_team": state.home_team,
+            "away_team": state.away_team,
+            "sport": state.sport,
+            "competition": state.competition,
+            "match_datetime": state.match_datetime,
+            "venue": state.venue,
+            "fixture_context": state.fixture_context,
+            "player_research": state.player_research,
+            "team_form": state.team_form,
+            "historical": state.historical_context,
+            "weather": state.weather_context,
+            "matchups": state.matchup_analysis,
+            "news": state.team_news,
+            "targeted_evidence": state.targeted_evidence,
+        }
 
+    def _exa_query_routes(self, state: CommentaryNotesState) -> Dict[str, Dict[str, Any]]:
+        fixture_domains = ["fifa.com", "espn.com", "bbc.co.uk", "skysports.com"]
+        preferred_news_domains = [
+            "fifa.com",
+            "espn.com",
+            "reuters.com",
+            "apnews.com",
+            "bbc.co.uk",
+            "bbc.com",
+            "skysports.com",
+            "theathletic.com",
+            "sportsmole.co.uk",
+        ]
+        h2h_domains = ["fifa.com", "espn.com", "11v11.com", "eu-football.info", "worldfootball.net"]
+        tactical_domains = ["espn.com", "theanalyst.com", "skysports.com", "sportsmole.co.uk", "nbcsports.com"]
+        match = f"{state.home_team} vs {state.away_team}"
+        competition = state.competition or "football"
+        return {
+            "fixture": {
+                "query": f"{match} {competition} kickoff venue date official",
+                "include_domains": fixture_domains,
+                "max_results": 3,
+            },
+            "team_news": {
+                "query": f"{match} {competition} team news injuries predicted lineups latest",
+                "include_domains": preferred_news_domains,
+                "max_results": 4,
+            },
+            "h2h": {
+                "query": f"{match} head to head record previous meetings football",
+                "include_domains": h2h_domains,
+                "max_results": 4,
+            },
+            "tactical": {
+                "query": f"{match} {competition} tactical preview set pieces key battles",
+                "include_domains": tactical_domains,
+                "max_results": 4,
+            },
+        }
+
+    def _merge_targeted_evidence(
+        self,
+        state: CommentaryNotesState,
+        results_by_topic: Dict[str, List[Dict[str, Any]]],
+    ) -> None:
+        if results_by_topic.get("team_news"):
+            state.team_news = state.team_news if isinstance(state.team_news, dict) else {}
+            for side, team in (("home_team", state.home_team), ("away_team", state.away_team)):
+                team_news = state.team_news.setdefault(side, {"team_name": team, "news_items": []})
+                team_news.setdefault("team_name", team)
+                team_news.setdefault("news_items", [])
+                existing_urls = {str(item.get("url") or "") for item in team_news["news_items"] if isinstance(item, dict)}
+                for item in results_by_topic["team_news"]:
+                    if item.get("url") not in existing_urls:
+                        team_news["news_items"].append({**item, "source": item.get("source") or "exa"})
+
+        historical_targets = []
+        for topic in ("fixture", "h2h", "tactical"):
+            historical_targets.extend(results_by_topic.get(topic, []))
+        if historical_targets:
+            state.historical_context = state.historical_context if isinstance(state.historical_context, dict) else {}
+            storylines = state.historical_context.setdefault("storylines", [])
+            existing_urls = {str(item.get("url") or "") for item in storylines if isinstance(item, dict)}
+            for item in historical_targets:
+                if item.get("url") in existing_urls:
+                    continue
+                storylines.append({
+                    "title": item.get("title") or "Targeted evidence",
+                    "description": item.get("content") or "",
+                    "url": item.get("url") or "",
+                    "source": item.get("source") or "exa",
+                    "topic": item.get("topic") or "targeted_evidence",
+                })
+        if results_by_topic.get("h2h"):
+            state.historical_context = state.historical_context if isinstance(state.historical_context, dict) else {}
+            h2h = state.historical_context.setdefault("h2h_history", {})
+            if isinstance(h2h, dict):
+                h2h.update({
+                    "status": "source_available",
+                    "source_urls": [
+                        item.get("url")
+                        for item in results_by_topic["h2h"]
+                        if item.get("url")
+                    ],
+                    "note": "Trusted H2H sources were found; use exact counts only when parsed from structured data.",
+                })
+        fixture_updates = self._extract_fixture_updates(results_by_topic.get("fixture", []))
+        if fixture_updates:
+            state.fixture_context = state.fixture_context if isinstance(state.fixture_context, dict) else {}
+            state.fixture_context.update(fixture_updates)
+            if not state.match_datetime and fixture_updates.get("match_datetime"):
+                state.match_datetime = fixture_updates["match_datetime"]
+            if not state.venue and fixture_updates.get("venue"):
+                state.venue = fixture_updates["venue"]
+            if fixture_updates.get("source_url"):
+                state.fixture_context["source_url"] = fixture_updates["source_url"]
+
+    def _extract_fixture_updates(self, fixture_results: List[Dict[str, Any]]) -> Dict[str, Any]:
+        updates: Dict[str, Any] = {}
+        for item in fixture_results or []:
+            text = " ".join(
+                str(item.get(key) or "")
+                for key in ("title", "content", "url")
+            )
+            if not updates.get("venue"):
+                venue = self._extract_venue_from_text(text)
+                if venue:
+                    updates["venue"] = venue
+            if not updates.get("match_datetime"):
+                match_datetime = self._extract_datetime_from_text(text)
+                if match_datetime:
+                    updates["match_datetime"] = match_datetime
+            if not updates.get("source_url") and item.get("url"):
+                updates["source_url"] = item["url"]
+            if updates.get("venue") and updates.get("match_datetime"):
+                break
+        if updates:
+            updates["status"] = "accepted"
+            updates["source"] = "exa"
+        return updates
+
+    def _extract_venue_from_text(self, text: str) -> str:
+        known_venues = (
+            "Los Angeles Stadium",
+            "Guadalajara Stadium",
+            "Estadio Akron",
+            "Akron Stadium",
+            "Puskas Arena",
+            "Stadium of Light",
+        )
+        lower = text.lower()
+        for venue in known_venues:
+            if venue.lower() in lower:
+                return venue
+        match = re.search(r"\b([A-Z][A-Za-z .'-]{2,50}\s(?:Stadium|Arena))\b", text)
+        return match.group(1).strip() if match else ""
+
+    def _extract_datetime_from_text(self, text: str) -> str:
+        month_lookup = {
+            "jan": 1,
+            "january": 1,
+            "feb": 2,
+            "february": 2,
+            "mar": 3,
+            "march": 3,
+            "apr": 4,
+            "april": 4,
+            "may": 5,
+            "jun": 6,
+            "june": 6,
+            "jul": 7,
+            "july": 7,
+            "aug": 8,
+            "august": 8,
+            "sep": 9,
+            "september": 9,
+            "oct": 10,
+            "october": 10,
+            "nov": 11,
+            "november": 11,
+            "dec": 12,
+            "december": 12,
+        }
+        utc_match = re.search(
+            r"\b(\d{1,2}):(\d{2})\s+(?:UTC\s*)?(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})\b",
+            text,
+            flags=re.I,
+        )
+        if utc_match:
+            hour, minute, day, month_name, year = utc_match.groups()
+            month = month_lookup.get(month_name.lower())
+            if month:
+                return datetime(
+                    int(year),
+                    month,
+                    int(day),
+                    int(hour),
+                    int(minute),
+                    tzinfo=timezone.utc,
+                ).isoformat()
+        local_match = re.search(
+            r"\b([A-Za-z]{3,9})\s+(\d{1,2}),?\s+(\d{4})\s+at\s+(\d{1,2}):(\d{2})\s*(AM|PM)\b",
+            text,
+            flags=re.I,
+        )
+        if local_match:
+            month_name, day, year, hour, minute, meridiem = local_match.groups()
+            month = month_lookup.get(month_name.lower())
+            if month:
+                hour_int = int(hour)
+                if meridiem.lower() == "pm" and hour_int != 12:
+                    hour_int += 12
+                if meridiem.lower() == "am" and hour_int == 12:
+                    hour_int = 0
+                return datetime(int(year), month, int(day), hour_int, int(minute)).isoformat()
+        return ""
+
+    def _beats_payload(self, notes_store: Any) -> List[Dict[str, Any]]:
         beats_payload = []
         for beat in getattr(notes_store, "beats", []) or []:
             if hasattr(beat, "to_dict"):
@@ -492,6 +813,12 @@ class CommentaryNotesWorkflow:
                     "source_urls": getattr(beat, "source_urls", []),
                     "source_attribution": getattr(beat, "source_attribution", []),
                 })
+        return beats_payload
+
+    def _build_quality_report(self, state: CommentaryNotesState, notes_store: Any) -> Dict[str, Any]:
+        from quality.notes_quality import score_notes
+
+        beats_payload = self._beats_payload(notes_store)
         quality_score = score_notes(
             getattr(notes_store, "raw_markdown", "") or "",
             {"beats": beats_payload, "quality_report": state.quality_report},
@@ -597,13 +924,38 @@ def build_langgraph(workflow: Optional[CommentaryNotesWorkflow] = None):
 
     graph.add_node("initialize", runner.initialize_workflow)
     graph.add_node("parallel_research", runner.parallel_research)
+    graph.add_node("targeted_evidence_search", runner.targeted_evidence_search)
     graph.add_node("matchup_analysis", runner.analyze_matchups)
     graph.add_node("synthesize", runner.synthesize_notes)
+    graph.add_node("evaluate_notes", runner.evaluate_notes)
+    graph.add_node("revise_notes", runner.revise_notes)
 
     graph.add_edge(START, "initialize")
     graph.add_edge("initialize", "parallel_research")
-    graph.add_edge("parallel_research", "matchup_analysis")
+    graph.add_edge("parallel_research", "targeted_evidence_search")
+    graph.add_edge("targeted_evidence_search", "matchup_analysis")
     graph.add_edge("matchup_analysis", "synthesize")
-    graph.add_edge("synthesize", END)
+    graph.add_edge("synthesize", "evaluate_notes")
+    graph.add_conditional_edges(
+        "evaluate_notes",
+        _route_notes_revision,
+        {
+            "revise_notes": "revise_notes",
+            "end": END,
+        },
+    )
+    graph.add_edge("revise_notes", "evaluate_notes")
 
     return graph.compile()
+
+
+def _route_notes_revision(state: Any) -> str:
+    if isinstance(state, dict):
+        evaluation = state.get("notes_evaluation") or {}
+        revision_count = int(state.get("revision_count") or 0)
+    else:
+        evaluation = getattr(state, "notes_evaluation", {}) or {}
+        revision_count = int(getattr(state, "revision_count", 0) or 0)
+    if evaluation.get("needs_revision") and revision_count < 2:
+        return "revise_notes"
+    return "end"

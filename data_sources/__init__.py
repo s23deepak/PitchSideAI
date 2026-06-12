@@ -19,6 +19,7 @@ from data_sources.weather_retriever import WeatherDataRetriever
 from data_sources.sports_specific_retriever import SportsSpecificRetriever
 from data_sources.wikipedia_retriever import WikipediaRetriever
 from data_sources.tavily_search_service import TavilySearchService
+from data_sources.exa_search_service import ExaSearchService
 from data_sources.statsbomb_retriever import StatsBombRetriever
 from data_sources.firecrawl_retriever import FirecrawlRetriever
 from data_sources.football_data_retriever import FootballDataRetriever
@@ -35,6 +36,7 @@ __all__ = [
     "SportsSpecificRetriever",
     "WikipediaRetriever",
     "TavilySearchService",
+    "ExaSearchService",
     "StatsBombRetriever",
     "FirecrawlRetriever",
     "FootballDataRetriever",

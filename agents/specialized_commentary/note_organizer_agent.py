@@ -506,16 +506,24 @@ H2H Record: **{h2h_record}**
         h2h_available = h2h and h2h.get("status") != "unavailable" and (
             (h2h.get("team1_wins") or 0) + (h2h.get("team2_wins") or 0) + (h2h.get("draws") or 0)
         ) > 0
+        source_backed = h2h.get("status") == "source_available" or bool(h2h.get("source_urls"))
         record = (
             f"{h2h.get('team1_wins', 0)}-{h2h.get('draws', 0)}-{h2h.get('team2_wins', 0)}"
             if h2h_available
+            else "Trusted H2H source available; exact record not extracted"
+            if source_backed
             else "Unavailable from trusted sources in this run"
         )
         narrative = self._clean_historical_narrative(historical.get("narrative", ""), home_team, away_team)
         if not narrative:
             narrative = (
-                f"No verified head-to-head narrative was accepted for {home_team} vs {away_team}; "
-                "lean on live tactical control, crowd tone, and momentum swings."
+                f"Trusted H2H evidence was found for {home_team} vs {away_team}, but exact counts were not extracted; "
+                "avoid exact-record language until the count is parsed."
+                if source_backed
+                else (
+                    f"No verified head-to-head narrative was accepted for {home_team} vs {away_team}; "
+                    "lean on live tactical control, crowd tone, and momentum swings."
+                )
             )
         return record, narrative
 

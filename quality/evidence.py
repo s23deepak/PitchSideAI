@@ -40,6 +40,10 @@ TRUSTED_STRUCTURED_DOMAINS = {
     "fbref.com",
     "transfermarkt.com",
     "transfermarkt.co.uk",
+    "11v11.com",
+    "eu-football.info",
+    "worldfootball.net",
+    "mlssoccer.com",
 }
 TRUSTED_WEATHER_DOMAINS = {
     "metoffice.gov.uk",
@@ -57,6 +61,7 @@ TRUSTED_MEDIA_DOMAINS = {
     "nytimes.com",
     "nbcsports.com",
     "sportsmole.co.uk",
+    "rotowire.com",
     "espn.com",
     "espn.co.uk",
 }

@@ -23,6 +23,7 @@ _multi_source_retriever = None
 _statsbomb_retriever = None
 _football_data_retriever = None
 _brightdata_mcp_retriever = None
+_exa_search_service = None
 
 
 def get_search_service(cache: Optional[DataCache] = None):
@@ -32,6 +33,15 @@ def get_search_service(cache: Optional[DataCache] = None):
         from .tavily_search_service import TavilySearchService
         _search_service = TavilySearchService(cache=cache)
     return _search_service
+
+
+def get_exa_search_service(cache: Optional[DataCache] = None):
+    """Get or create the shared ExaSearchService singleton."""
+    global _exa_search_service
+    if _exa_search_service is None:
+        from .exa_search_service import ExaSearchService
+        _exa_search_service = ExaSearchService(cache=cache)
+    return _exa_search_service
 
 
 def get_statsbomb_retriever(cache: Optional[DataCache] = None):
