@@ -120,12 +120,72 @@ def _source_urls(value: Any) -> list[str]:
 
 
 def _build_plausible_lineups(home_players: list[dict[str, Any]], away_players: list[dict[str, Any]]) -> dict[str, Any]:
+    home_lineup = _select_balanced_xi(home_players)
+    away_lineup = _select_balanced_xi(away_players)
     return {
-        "basis": "researched squad order and role continuity; unconfirmed until team sheets",
-        "confidence": "medium" if len(home_players) >= 11 and len(away_players) >= 11 else "low",
-        "home_team": {"players": _names(home_players[:11])},
-        "away_team": {"players": _names(away_players[:11])},
+        "basis": "role-balanced researched squad order; unconfirmed until team sheets",
+        "confidence": "medium" if len(home_lineup) >= 11 and len(away_lineup) >= 11 else "low",
+        "home_team": _lineup_payload(home_lineup),
+        "away_team": _lineup_payload(away_lineup),
     }
+
+
+def _select_balanced_xi(players: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Build an XI-shaped list instead of taking the first 11 squad rows."""
+    role_targets = (("goalkeeper", 1), ("defender", 4), ("midfielder", 3), ("forward", 3))
+    selected: list[dict[str, Any]] = []
+    selected_names: set[str] = set()
+
+    for role, target in role_targets:
+        for player in players:
+            if len([item for item in selected if _role(item) == role]) >= target:
+                break
+            name = str(player.get("name") or "").strip() if isinstance(player, dict) else ""
+            if not name or name.lower() == "unknown" or name in selected_names:
+                continue
+            if _role(player) != role:
+                continue
+            selected.append(player)
+            selected_names.add(name)
+
+    for player in players:
+        if len(selected) >= 11:
+            break
+        name = str(player.get("name") or "").strip() if isinstance(player, dict) else ""
+        if not name or name.lower() == "unknown" or name in selected_names:
+            continue
+        selected.append(player)
+        selected_names.add(name)
+
+    return selected[:11]
+
+
+def _lineup_payload(players: list[dict[str, Any]]) -> dict[str, Any]:
+    grouped = {
+        "goalkeeper": _names([player for player in players if _role(player) == "goalkeeper"]),
+        "defenders": _names([player for player in players if _role(player) == "defender"]),
+        "midfielders": _names([player for player in players if _role(player) == "midfielder"]),
+        "forwards": _names([player for player in players if _role(player) == "forward"]),
+    }
+    return {
+        "formation": "4-3-3" if len(players) >= 11 else "",
+        "players": _names(players),
+        "roles": grouped,
+        "caveat": "role-balanced projection from researched squad order; not a confirmed XI",
+    }
+
+
+def _role(player: dict[str, Any]) -> str:
+    position = str(player.get("position") or "").strip().lower()
+    if position in {"gk", "goalkeeper", "keeper"}:
+        return "goalkeeper"
+    if any(token in position for token in ("defender", "back", "cb", "lb", "rb", "lwb", "rwb")):
+        return "defender"
+    if any(token in position for token in ("midfielder", "midfield", "cm", "dm", "am", "lm", "rm")):
+        return "midfielder"
+    if any(token in position for token in ("forward", "striker", "attacker", "winger", "wing", "st", "cf")):
+        return "forward"
+    return "midfielder"
 
 
 def _confirmed_lineups_from_news(news: dict[str, Any]) -> dict[str, Any]:

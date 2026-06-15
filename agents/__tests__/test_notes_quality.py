@@ -8,16 +8,22 @@ def test_notes_quality_flags_structured_tactical_notes_as_low_risk():
 ## Match Frame
 - 4-3-3 against 4-2-3-1.
 
-## Tactical Themes
+## Narrative Spine
+- Build the story from verified team sheets.
+
+## Tactical Dossier
 - The press starts from the first line and protects midfield access.
 
-## Key Player Battles
+### Set-Piece Watch
+- First corner decides the first pressure read.
+
+### Key Player Battles
 - Watch the fullback height, transition defence, zone control, tempo, set piece marking, and the key duel.
 
 ## Team News Caveats
 - Confirmed notes only.
 
-## Live-Trigger Beats
+## Live Trigger Lines
 - First set piece.
 """
     payload = {
@@ -35,7 +41,7 @@ def test_notes_quality_flags_structured_tactical_notes_as_low_risk():
 
 
 def test_notes_quality_does_not_count_empty_source_attribution_as_provenance():
-    score = score_notes("## Match Frame\n## Tactical Themes", {
+    score = score_notes("## Match Frame\n## Tactical Dossier", {
         "beats": [{"text": "Cue", "source": "research", "source_attribution": [{"label": "research", "url": ""}]}],
     })
 
@@ -55,12 +61,13 @@ def test_notes_quality_caps_green_score_when_evidence_count_is_zero():
 - Ready to say: fixture frame only.
 - Watch, say, prove: midfield pressure.
 - Wait for confirmation: team news.
-## Match Frame
-## Tactical Themes
-press transition midfield zone duel set piece tempo line shape fullback
-## Key Player Battles
-## Team News Caveats
-## Live-Trigger Beats
+    ## Match Frame
+    ## Narrative Spine
+    ## Tactical Dossier
+    press transition midfield zone duel set piece tempo line shape fullback
+    ### Set-Piece Watch
+    ## Team News Caveats
+    ## Live Trigger Lines
 """
     score = score_notes(markdown, {
         "beats": [{"text": "Cue", "source_urls": ["https://www.uefa.com/test"]}],

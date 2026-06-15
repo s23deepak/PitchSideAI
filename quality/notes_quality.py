@@ -20,10 +20,11 @@ RISK_PATTERNS = (
 REQUIRED_SECTIONS = (
     "MATCH FRAME",
     "AIR-READY RUNDOWN",
-    "TACTICAL THEMES",
-    "KEY PLAYER BATTLES",
+    "NARRATIVE SPINE",
+    "TACTICAL DOSSIER",
+    "SET-PIECE WATCH",
     "TEAM NEWS CAVEATS",
-    "LIVE-TRIGGER BEATS",
+    "LIVE TRIGGER LINES",
 )
 
 
@@ -115,7 +116,7 @@ def score_notes(markdown: str, notes_payload: dict[str, Any] | None = None) -> N
         "ready to say",
         "watch, say, prove",
         "wait for confirmation",
-        "live-trigger beats",
+        "live trigger lines",
         "15-second opener",
     )
     on_air_usability = min(1.0, sum(1 for marker in on_air_markers if marker in lowered) / 4)

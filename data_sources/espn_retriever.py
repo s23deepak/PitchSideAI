@@ -71,6 +71,11 @@ TEAM_ID_CACHE: Dict[str, str] = {
     # National teams
     "belgium": "459",
     "croatia": "477",
+    "paraguay": "210",
+    "usa": "660",
+    "united states": "660",
+    "united states of america": "660",
+    "usmnt": "660",
     # Ligue 1
     "paris saint-germain": "160",
     "paris saint germain": "160",
@@ -93,6 +98,11 @@ TEAM_LEAGUE_CACHE: Dict[str, str] = {
     "borussia dortmund": "ger.1",
     "belgium": "fifa.world",
     "croatia": "fifa.world",
+    "paraguay": "fifa.world",
+    "usa": "fifa.world",
+    "united states": "fifa.world",
+    "united states of america": "fifa.world",
+    "usmnt": "fifa.world",
 }
 
 # Which ESPN league does a given sport map to for roster/schedule calls?

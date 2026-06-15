@@ -110,8 +110,8 @@ async def test_commentary_notes_workflow_end_to_end_fast_path(monkeypatch):
     assert result.markdown_notes
     assert "Champions League Final" in result.markdown_notes
     assert "## Match Frame" in result.markdown_notes
-    assert "## Tactical Themes" in result.markdown_notes
-    assert "## Live-Trigger Beats" in result.markdown_notes
+    assert "## Tactical Dossier" in result.markdown_notes
+    assert "## Live Trigger Lines" in result.markdown_notes
     assert "professional_score" in result.quality_report["notes_metrics"]
     assert result.notes_store is not None
     assert len(result.notes_store.beats) >= 3

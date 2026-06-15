@@ -82,15 +82,18 @@ async def test_professional_final_notes_include_competition_frame_and_no_scaffol
 
     assert "Champions League Final" in markdown
     assert "## Match Frame" in markdown
-    assert "## Tactical Themes" in markdown
-    assert "## Key Player Battles" in markdown
+    assert "## Narrative Spine" in markdown
+    assert "## Tactical Dossier" in markdown
+    assert "### Key Player Battles" in markdown
+    assert "### Set-Piece Watch" in markdown
     assert "## Team News Caveats" in markdown
     assert "## Broadcast Folder Pages" in markdown
     assert "### Page 1: Team Sheets And Officials" in markdown
-    assert "### Pages 2-3: Individual Player Profiles" in markdown
-    assert "### Pages 4-5: Tactical And Historical Context" in markdown
+    assert "### Pages 2-3: Player Cards" in markdown
+    assert "### Pages 5-6: Tactical And Historical Context" in markdown
     assert "### Archival Trivia" in markdown
-    assert "## Live-Trigger Beats" in markdown
+    assert "## Pronunciation" in markdown
+    assert "## Live Trigger Lines" in markdown
     assert "## Halftime And Postgame Angles" in markdown
     assert "Bukayo Saka vs Achraf Hakimi" in markdown
     assert len(notes.beats) >= 3
@@ -552,11 +555,52 @@ async def test_broadcast_folder_pages_match_a4_reference_structure():
     assert "https://theanalyst.com/articles/psg-vs-arsenal-prediction-champions-league-final-05-2026" in markdown
     assert "https://www.skysports.com/football/news/11095/13548482/champions-league-final-who-does-mikel-arteta-pick-in-his-arsenal-starting-xi-to-face-psg-in-budapest" in markdown
     assert "https://www.nbcsports.com/soccer/news/psg-vs-arsenal-predicted-lineups-team-news-analysis-for-epic-champions-league-final" in markdown
-    assert "### Pages 2-3: Individual Player Profiles" in markdown
-    assert "### Pages 4-5: Tactical And Historical Context" in markdown
+    assert "### Pages 2-3: Player Cards" in markdown
+    assert "### Pages 5-6: Tactical And Historical Context" in markdown
     assert "Paris and Arsenal meet in a European final" in markdown
     assert "Bukayo Saka vs Nuno Mendes" in markdown
     assert "2-3-2" in markdown
+
+
+def test_broadcast_dossier_builds_role_balanced_plausible_xi():
+    def player(name, position):
+        return {"name": name, "position": position}
+
+    home_players = (
+        [player("Home GK 1", "Goalkeeper"), player("Home GK 2", "Goalkeeper")]
+        + [player(f"Home Defender {index}", "Defender") for index in range(1, 7)]
+        + [player(f"Home Midfielder {index}", "Midfielder") for index in range(1, 5)]
+        + [player(f"Home Forward {index}", "Forward") for index in range(1, 5)]
+    )
+    away_players = (
+        [player("Away GK 1", "Goalkeeper"), player("Away GK 2", "Goalkeeper")]
+        + [player(f"Away Defender {index}", "Defender") for index in range(1, 7)]
+        + [player(f"Away Midfielder {index}", "Midfielder") for index in range(1, 5)]
+        + [player(f"Away Forward {index}", "Forward") for index in range(1, 5)]
+    )
+
+    dossier = build_broadcast_dossier({
+        "home_team": "Home",
+        "away_team": "Away",
+        "player_research": {
+            "home_team": {"players": home_players},
+            "away_team": {"players": away_players},
+        },
+    })
+
+    home = dossier["lineups"]["plausible"]["home_team"]
+    away = dossier["lineups"]["plausible"]["away_team"]
+
+    assert home["formation"] == "4-3-3"
+    assert away["formation"] == "4-3-3"
+    assert len(home["roles"]["goalkeeper"]) == 1
+    assert len(home["roles"]["defenders"]) == 4
+    assert len(home["roles"]["midfielders"]) == 3
+    assert len(home["roles"]["forwards"]) == 3
+    assert len(away["roles"]["goalkeeper"]) == 1
+    assert len(away["roles"]["defenders"]) == 4
+    assert len(away["roles"]["midfielders"]) == 3
+    assert len(away["roles"]["forwards"]) == 3
 
 
 def test_unknown_venue_is_rendered_as_broadcast_angle_not_placeholder():

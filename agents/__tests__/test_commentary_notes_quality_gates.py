@@ -164,6 +164,26 @@ async def test_espn_resolves_croatia_belgium_against_world_slug(monkeypatch):
     assert calls == []
 
 
+@pytest.mark.asyncio
+async def test_espn_resolves_usa_paraguay_against_world_slug(monkeypatch):
+    retriever = ESPNDataRetriever()
+    calls = []
+
+    async def fake_get(url, params=None):
+        calls.append(url)
+        return {}
+
+    monkeypatch.setattr(retriever, "_get", fake_get)
+
+    assert _get_serie_a_slug("USA") == "fifa.world"
+    assert _get_serie_a_slug("United States") == "fifa.world"
+    assert _get_serie_a_slug("Paraguay") == "fifa.world"
+    assert await retriever._resolve_team_id("USA", "soccer", "fifa.world") == "660"
+    assert await retriever._resolve_team_id("United States", "soccer", "fifa.world") == "660"
+    assert await retriever._resolve_team_id("Paraguay", "soccer", "fifa.world") == "210"
+    assert calls == []
+
+
 def test_evidence_gate_clears_synthesis_when_news_inputs_were_rejected():
     outputs = {
         "home_team": "Sunderland",

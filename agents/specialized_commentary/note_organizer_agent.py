@@ -399,6 +399,8 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
         )
         deep_notes = self._format_deep_notes_section(all_outputs.get("deep_notes", {}))
 
+        tactical_summary = self._clean_section_text(tactical_brief.get("summary", ""))
+
         return f"""# Broadcast Prep: {home_team} vs {away_team}
 #### {competition_line}{friendly_date} | {venue_label}
 
@@ -416,17 +418,29 @@ class CommentaryNoteOrganizerAgent(BaseAgent):
 - Broadcast frame: {final_stakes}
 - Lineups: see Broadcast Folder Page 1; treat plausible and source-predicted XIs as unconfirmed until team sheets arrive.
 
-## Tactical Themes
+## Narrative Spine
 
-{tactical_brief.get('summary', '')}
+- Opening frame: {final_stakes}
+- First read: confirm whether the match settles into controlled buildup, fast transition, or set-piece pressure.
+- Evidence posture: use confirmed team sheets and live pictures before making hard claims about form, injuries, or tactical intent.
+
+## Tactical Dossier
+
+{tactical_summary}
 
 ### Zone Watch
 
 {self._format_bullets(tactical_brief.get('zone_edges', []))}
 
-## Key Player Battles
+### Key Player Battles
 
 {self._format_matchups(matchups.get('critical_matchups', []))}
+
+### Set-Piece Watch
+
+- First corner: identify marking type, delivery side, primary runner, and second-ball reaction.
+- First wide free kick: call whether the defensive line holds, drops, or leaves the back-post channel open.
+- First attacking throw-in: watch whether either side can lock the ball in or force a clean escape.
 
 ## Form, History And Conditions
 
@@ -459,7 +473,12 @@ H2H Record: **{h2h_record}**
 
 {broadcast_folder_pages}
 
-## Live-Trigger Beats
+## Pronunciation
+
+- Confirm names from official broadcast/team media before adding phonetic spellings.
+- Avoid guessing pronunciation for players without an accepted source.
+
+## Live Trigger Lines
 
 {self._format_bullets(self._build_live_trigger_beats(home_team, away_team, tactical_brief, home_players, away_players))}
 
@@ -856,7 +875,15 @@ Recent H2H Narrative:
             or "vulnerabilities" in lower
             or "based on the identification" in lower
             or "five critical battles" in lower
+            or "critical matchups" in lower
+            or "tactical analysis:" in lower
         )
+
+    def _clean_section_text(self, text: Any) -> str:
+        cleaned = self._clean_analysis_text(text)
+        cleaned = re.sub(r"(?m)^#{1,6}\s*", "", cleaned)
+        cleaned = re.sub(r"(?i)\btactical analysis:\s*", "", cleaned).strip()
+        return cleaned
 
     def _format_evidence_status(self, quality_report: Dict[str, Any]) -> str:
         """Expose degraded sections without turning weak evidence into claims."""
@@ -1040,7 +1067,7 @@ Broadcast page role: **Match Overview & Lineups**
 
 {self._format_source_lineup_delta(possible_lineups, plausible_lineups, home_team, away_team)}
 
-### Pages 2-3: Individual Player Profiles
+### Pages 2-3: Player Cards
 
 #### Page 2: {home_team} Deep-Dive
 
@@ -1054,7 +1081,7 @@ Broadcast page role: **Match Overview & Lineups**
 
 {self._format_club_context_pages(home_team, away_team, club_context)}
 
-### Pages 4-5: Tactical And Historical Context
+### Pages 5-6: Tactical And Historical Context
 
 Broadcast page role: **Pages 5-6: Statistics & Historical Context**
 
@@ -1279,8 +1306,11 @@ Broadcast page role: **Pages 5-6: Statistics & Historical Context**
                 continue
             formation = side_data.get("formation") if isinstance(side_data, dict) else ""
             formation_part = f", {formation}" if formation else ""
+            roles = side_data.get("roles") if isinstance(side_data, dict) else {}
+            role_line = self._format_lineup_role_groups(roles) if isinstance(roles, dict) else ""
+            player_line = role_line or ", ".join(names)
             lines.append(
-                f"{team_name} plausible XI ({basis}{formation_part}; confidence {confidence}): {', '.join(names)}."
+                f"{team_name} plausible XI ({basis}{formation_part}; confidence {confidence}): {player_line}."
             )
             caveat = side_data.get("caveat") if isinstance(side_data, dict) else ""
             if isinstance(caveat, str) and caveat.strip():
@@ -1289,6 +1319,27 @@ Broadcast page role: **Pages 5-6: Statistics & Historical Context**
         if lines:
             return self._format_bullets(lines)
         return "- Plausible XI model not run in this sample; use recent starts, minutes, role continuity, and availability before air."
+
+    def _format_lineup_role_groups(self, roles: Dict[str, Any]) -> str:
+        labels = (
+            ("goalkeeper", "GK"),
+            ("defenders", "DEF"),
+            ("midfielders", "MID"),
+            ("forwards", "FWD"),
+        )
+        parts = []
+        for key, label in labels:
+            values = roles.get(key)
+            if not isinstance(values, list):
+                continue
+            names = [
+                str(value).strip()
+                for value in values
+                if isinstance(value, str) and value.strip() and not self._is_placeholder_player_name(value)
+            ]
+            if names:
+                parts.append(f"{label}: {', '.join(names)}")
+        return "; ".join(parts)
 
     def _format_folder_tactical_pages(
         self,
@@ -1314,7 +1365,7 @@ Broadcast page role: **Pages 5-6: Statistics & Historical Context**
         if not historical_line:
             historical_line = "No verified historical narrative promoted beyond the H2H record."
         items = [
-            "Tactical spine: use Tactical Themes above for the full read.",
+            "Tactical spine: use Tactical Dossier above for the full read.",
             f"Form cards: {home_form}; {away_form}",
             f"H2H: {h2h_record}",
             f"Historical cue: {historical_line}",

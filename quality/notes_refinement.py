@@ -101,7 +101,7 @@ def refine_notes_document(
 
     missing_sections = evaluation.get("missing_sections", []) if isinstance(evaluation, dict) else []
     if missing_sections:
-        refined = refined.rstrip() + "\n\n---\n\n## FORMAT COMPLETION PASS\n\n"
+        refined = refined.rstrip() + "\n\n---\n\n## Editorial Completion Notes\n\n"
         for section in missing_sections:
             refined += _section_stub(section, home_team, away_team)
 

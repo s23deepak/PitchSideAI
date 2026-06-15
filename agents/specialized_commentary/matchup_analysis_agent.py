@@ -110,29 +110,35 @@ class MatchupAnalysisAgent(BaseAgent):
         away_by_position = self._players_by_position(away_lineup)
         home_by_position = self._players_by_position(home_lineup)
         seen_pairs: set[tuple[str, str]] = set()
+        used_names: set[str] = set()
 
         def add_pair(player1: Dict[str, str], player2: Optional[Dict[str, str]]) -> None:
             if not player2:
                 return
             if self._is_placeholder_player(player1) or self._is_placeholder_player(player2):
                 return
-            pair_key = tuple(sorted((player1.get("name", ""), player2.get("name", ""))))
+            p1_name = player1.get("name", "")
+            p2_name = player2.get("name", "")
+            if p1_name in used_names or p2_name in used_names:
+                return
+            pair_key = tuple(sorted((p1_name, p2_name)))
             if not pair_key[0] or not pair_key[1] or pair_key in seen_pairs:
                 return
             seen_pairs.add(pair_key)
+            used_names.update(pair_key)
             matchup_tasks.append(self._analyze_player_matchup(player1, player2))
 
         # Match home attackers against away defenders
         for home_player in home_lineup:
             home_pos = home_player.get("position", "").upper()
             if home_pos not in {"GK", "GOALKEEPER"}:
-                add_pair(home_player, self._find_opponent(home_pos, away_by_position))
+                add_pair(home_player, self._find_opponent(home_pos, away_by_position, used_names))
 
         # Also catch away attackers against home defenders; the first pass can miss these.
         for away_player in away_lineup:
             away_pos = away_player.get("position", "").upper()
             if away_pos not in {"GK", "GOALKEEPER"}:
-                add_pair(away_player, self._find_opponent(away_pos, home_by_position))
+                add_pair(away_player, self._find_opponent(away_pos, home_by_position, used_names))
 
         # Execute all matchup analyses IN PARALLEL
         if matchup_tasks:
@@ -154,11 +160,14 @@ class MatchupAnalysisAgent(BaseAgent):
         self,
         players_by_position: Dict[str, List[Dict[str, str]]],
         positions: List[str],
+        excluded_names: Optional[set[str]] = None,
     ) -> Optional[Dict[str, str]]:
+        excluded_names = excluded_names or set()
         for position in positions:
             players = players_by_position.get(position)
-            if players:
-                return players[0]
+            for player in players or []:
+                if player.get("name", "") not in excluded_names:
+                    return player
         return None
 
     def _is_placeholder_player(self, player: Dict[str, Any]) -> bool:
@@ -217,18 +226,19 @@ class MatchupAnalysisAgent(BaseAgent):
         self,
         position: str,
         opponents_by_position: Dict[str, List[Dict[str, str]]],
+        excluded_names: Optional[set[str]] = None,
     ) -> Optional[Dict[str, str]]:
         pos = (position or "").upper()
         if pos in {"ST", "CF", "FW", "FWD", "STRIKER", "FORWARD"}:
-            return self._first_for_positions(opponents_by_position, ["CB", "DEFENDER", "LCB", "RCB"])
+            return self._first_for_positions(opponents_by_position, ["CB", "DEFENDER", "LCB", "RCB"], excluded_names)
         if pos in {"LW", "LM"}:
-            return self._first_for_positions(opponents_by_position, ["RB", "RWB", "DEFENDER"])
+            return self._first_for_positions(opponents_by_position, ["RB", "RWB", "DEFENDER"], excluded_names)
         if pos in {"RW", "RM", "WINGER"}:
-            return self._first_for_positions(opponents_by_position, ["LB", "LWB", "DEFENDER"])
+            return self._first_for_positions(opponents_by_position, ["LB", "LWB", "DEFENDER"], excluded_names)
         if pos in {"CAM", "AM"}:
-            return self._first_for_positions(opponents_by_position, ["CDM", "DM", "CM", "MIDFIELDER"])
+            return self._first_for_positions(opponents_by_position, ["CDM", "DM", "CM", "MIDFIELDER"], excluded_names)
         if pos in {"CM", "CDM", "DM", "MIDFIELDER", "MF"}:
-            return self._first_for_positions(opponents_by_position, ["CM", "CDM", "DM", "CAM", "MIDFIELDER", "MF"])
+            return self._first_for_positions(opponents_by_position, ["CM", "CDM", "DM", "CAM", "MIDFIELDER", "MF"], excluded_names)
         return None
 
     async def _analyze_player_matchup(
