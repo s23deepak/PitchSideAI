@@ -151,7 +151,7 @@ class FootballDataRetriever:
     ):
         self.api_key = api_key or os.getenv("FOOTBALL_DATA_API_KEY", "")
         self.cache = cache or DataCache(ttl_seconds=1800)   # 30 min default
-        self._sem = asyncio.Semaphore(10)   # max 10 concurrent requests
+        self._semaphores: Dict[asyncio.AbstractEventLoop, asyncio.Semaphore] = {}
         self._last_req_times: List[float] = []
 
     @property
@@ -166,7 +166,7 @@ class FootballDataRetriever:
             logger.warning("FOOTBALL_DATA_API_KEY not set — skipping request")
             return {}
 
-        async with self._sem:
+        async with self._get_semaphore():
             # Enforce ≤10 requests per 60 seconds
             now = time.monotonic()
             self._last_req_times = [t for t in self._last_req_times if now - t < 60]
@@ -192,6 +192,20 @@ class FootballDataRetriever:
             except Exception as exc:
                 logger.warning("football-data.org request failed [%s]: %s", path, exc)
                 return {}
+
+    def _get_semaphore(self) -> asyncio.Semaphore:
+        """Return a rate-limit semaphore bound to the current event loop."""
+        loop = asyncio.get_running_loop()
+        semaphore = self._semaphores.get(loop)
+        if semaphore is None:
+            self._semaphores = {
+                cached_loop: cached_semaphore
+                for cached_loop, cached_semaphore in self._semaphores.items()
+                if not cached_loop.is_closed()
+            }
+            semaphore = asyncio.Semaphore(10)
+            self._semaphores[loop] = semaphore
+        return semaphore
 
     # ── standings ─────────────────────────────────────────────────────────────
 
@@ -275,10 +289,10 @@ class FootballDataRetriever:
     # ── H2H ──────────────────────────────────────────────────────────────────
 
     async def get_head_to_head(
-        self, team1: str, team2: str, sport: str = "soccer"
+        self, team1: str, team2: str, sport: str = "soccer", limit: int = 10
     ) -> Dict[str, Any]:
         """Wrapper for MultiSourceRetriever compatibility (sport param ignored)."""
-        return await self._get_head_to_head_impl(team1, team2, limit=10)
+        return await self._get_head_to_head_impl(team1, team2, limit=limit)
 
     async def get_player_stats(
         self, player_name: str, team_name: str, sport: str = "soccer"

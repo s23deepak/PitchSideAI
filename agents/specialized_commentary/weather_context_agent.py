@@ -128,6 +128,8 @@ class WeatherContextAgent(BaseAgent):
             "forecast": forecast.get("forecast_hours", []),
             "sport_impact": impact,
             "narrative": weather_narrative,
+            "data_source": weather_data.get("data_source") or forecast.get("data_source") or "unavailable",
+            "source_urls": weather_data.get("source_urls") or forecast.get("source_urls") or [],
             "timestamp": datetime.utcnow().isoformat(),
         }
 
@@ -148,6 +150,9 @@ class WeatherContextAgent(BaseAgent):
         Returns:
             Weather commentary narrative
         """
+        if weather_data.get("data_source") == "unavailable":
+            return "Weather details are unavailable from accepted sources for this fixture."
+
         temp = weather_data.get("temp_c")
         conditions = weather_data.get("conditions") or weather_data.get("weather_summary", "Weather unavailable")
         wind = weather_data.get("wind_kmh")

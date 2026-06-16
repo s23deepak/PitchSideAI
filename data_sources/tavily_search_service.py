@@ -40,6 +40,7 @@ class TavilySearchService:
         self._client = None          # lazy — tavily.TavilyClient
         self._lc_tool = None         # lazy — langchain_community TavilySearchResults
         self._available: Optional[bool] = None  # None = unchecked
+        self._unavailable_reason: str = ""
 
     # ── availability ──────────────────────────────────────────────────────────
 
@@ -145,6 +146,7 @@ class TavilySearchService:
                     "cache_namespace": cache_namespace,
                     "include_domains": include_domains,
                     "available": False,
+                    "unavailable_reason": self._unavailable_reason,
                 },
                 result=result,
                 duration_ms=0,
@@ -196,6 +198,7 @@ class TavilySearchService:
             )
             return result
         except Exception as exc:
+            self._mark_unavailable_if_plan_limited(exc)
             logger.error("Tavily search failed for '%s': %s", query, exc)
             result = self._empty(query)
             await audit_retrieval(
@@ -209,6 +212,7 @@ class TavilySearchService:
                     "include_answer": include_answer,
                     "cache_namespace": cache_namespace,
                     "include_domains": include_domains,
+                    "unavailable_reason": self._unavailable_reason,
                 },
                 result=result,
                 error=exc,
@@ -243,7 +247,12 @@ class TavilySearchService:
             await audit_retrieval(
                 provider="tavily",
                 method="search_langchain",
-                params={"query": query, "cache_namespace": cache_namespace, "available": False},
+                params={
+                    "query": query,
+                    "cache_namespace": cache_namespace,
+                    "available": False,
+                    "unavailable_reason": self._unavailable_reason,
+                },
                 result=[],
                 duration_ms=0,
                 source="search_service",
@@ -266,11 +275,16 @@ class TavilySearchService:
             )
             return results
         except Exception as exc:
+            self._mark_unavailable_if_plan_limited(exc)
             logger.error("LangChain Tavily search failed: %s", exc)
             await audit_retrieval(
                 provider="tavily",
                 method="search_langchain",
-                params={"query": query, "cache_namespace": cache_namespace},
+                params={
+                    "query": query,
+                    "cache_namespace": cache_namespace,
+                    "unavailable_reason": self._unavailable_reason,
+                },
                 result=[],
                 error=exc,
                 duration_ms=monotonic_ms() - start_ms,
@@ -432,3 +446,23 @@ class TavilySearchService:
     def _empty(self, query: str) -> Dict[str, Any]:
         """Return empty result when search is unavailable (no fabrication)."""
         return {"answer": "", "results": [], "query": query, "source": "fallback"}
+
+    def _mark_unavailable_if_plan_limited(self, exc: Exception) -> None:
+        """Disable further Tavily calls for this service after hard quota failures."""
+        text = " ".join(str(part) for part in (exc, getattr(exc, "response", ""), getattr(exc, "args", ""))).lower()
+        if any(
+            marker in text
+            for marker in (
+                "plan limit",
+                "usage limit",
+                "quota",
+                "monthly limit",
+                "credit limit",
+                "insufficient credits",
+                "status_code=403",
+                "403 forbidden",
+            )
+        ):
+            self._available = False
+            self._unavailable_reason = "plan_or_quota_limit"
+            logger.warning("Tavily disabled for this run after quota/plan-limit response")

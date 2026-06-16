@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -85,7 +86,7 @@ class ExaSearchService:
 
         start_ms = monotonic_ms()
         try:
-            response = await asyncio.to_thread(self._post_search, body)
+            response = await asyncio.to_thread(self._post_search_with_domain_retry, body)
             results = [self._normalize_result(item, topic) for item in response.get("results", [])]
             result = {
                 "query": query,
@@ -135,6 +136,53 @@ class ExaSearchService:
             response = client.post(self.base_url, json=body, headers=headers)
             response.raise_for_status()
             return response.json()
+
+    def _post_search_with_domain_retry(self, body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return self._post_search(body)
+        except httpx.HTTPStatusError as exc:
+            blocked_domains = self._blocked_domains_from_response(exc.response)
+            include_domains = body.get("includeDomains")
+            if exc.response.status_code != 403 or not blocked_domains or not isinstance(include_domains, list):
+                raise
+            allowed_domains = [
+                domain for domain in include_domains
+                if str(domain).lower() not in blocked_domains
+            ]
+            if len(allowed_domains) == len(include_domains):
+                raise
+            retry_body = {**body}
+            if allowed_domains:
+                retry_body["includeDomains"] = allowed_domains
+            else:
+                retry_body.pop("includeDomains", None)
+            logger.info(
+                "Retrying Exa search without unavailable domains: %s",
+                ", ".join(sorted(blocked_domains)),
+            )
+            return self._post_search(retry_body)
+
+    @staticmethod
+    def _blocked_domains_from_response(response: httpx.Response) -> set[str]:
+        try:
+            payload = response.json()
+        except Exception:
+            payload = {}
+        if isinstance(payload, dict) and payload.get("tag") != "SOURCE_NOT_AVAILABLE":
+            return set()
+        error_text = str(payload.get("error") if isinstance(payload, dict) else response.text)
+        match = re.search(
+            r"requested domains are not available:\s*(.*?)(?:\.\s*Remove|\.$|$)",
+            error_text,
+            re.I,
+        )
+        if not match:
+            return set()
+        return {
+            domain.strip().lower()
+            for domain in re.split(r",|\band\b", match.group(1))
+            if domain.strip()
+        }
 
     @staticmethod
     def _normalize_result(item: dict[str, Any], topic: str) -> dict[str, Any]:

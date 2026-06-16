@@ -49,6 +49,7 @@ TRUSTED_WEATHER_DOMAINS = {
     "metoffice.gov.uk",
     "weather.com",
     "accuweather.com",
+    "open-meteo.com",
 }
 TRUSTED_MEDIA_DOMAINS = {
     "bbc.co.uk",

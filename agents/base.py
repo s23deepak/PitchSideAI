@@ -59,7 +59,7 @@ VIDEO_DATA_URL_MIME_TYPES = {
     "webm": "video/webm",
     "wmv": "video/x-ms-wmv",
 }
-_COMMENTARY_NOTES_WAFER_SEMAPHORES: dict[int, asyncio.Semaphore] = {}
+_COMMENTARY_NOTES_WAFER_SEMAPHORES: dict[tuple[int, asyncio.AbstractEventLoop], asyncio.Semaphore] = {}
 
 
 def _get_video_data_url_mime_type(video_format: Optional[str]) -> str:
@@ -79,11 +79,19 @@ def _get_commentary_notes_wafer_semaphore() -> Optional[asyncio.Semaphore]:
     limit = int(os.getenv(COMMENTARY_NOTES_WAFER_CONCURRENCY_ENV, "2"))
     if limit <= 0:
         return None
-    semaphore = _COMMENTARY_NOTES_WAFER_SEMAPHORES.get(limit)
+    loop = asyncio.get_running_loop()
+    key = (limit, loop)
+    semaphore = _COMMENTARY_NOTES_WAFER_SEMAPHORES.get(key)
     if semaphore is None:
         semaphore = asyncio.Semaphore(limit)
-        _COMMENTARY_NOTES_WAFER_SEMAPHORES.clear()
-        _COMMENTARY_NOTES_WAFER_SEMAPHORES[limit] = semaphore
+        stale_keys = [
+            cached_key
+            for cached_key in _COMMENTARY_NOTES_WAFER_SEMAPHORES
+            if cached_key[0] != limit or cached_key[1].is_closed()
+        ]
+        for stale_key in stale_keys:
+            _COMMENTARY_NOTES_WAFER_SEMAPHORES.pop(stale_key, None)
+        _COMMENTARY_NOTES_WAFER_SEMAPHORES[key] = semaphore
     return semaphore
 
 

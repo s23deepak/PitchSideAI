@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from dateutil import parser as date_parser
 
 from data_sources.cache import DataCache
+from data_sources.exa_search_service import ExaSearchService
 from data_sources.tavily_search_service import TavilySearchService
 from quality.evidence import classify_source_tier, preferred_domains_for_topic, source_tier_priority
 
@@ -53,6 +54,10 @@ TZINFOS = {
 PERSON_PATTERN = re.compile(
     r"\b([A-ZÀ-Þ][A-Za-zÀ-ÿ'’.-]+(?:\s+[A-ZÀ-Þ][A-Za-zÀ-ÿ'’.-]+){1,3})\b"
 )
+GLUED_POSITION_PERSON_PATTERN = re.compile(
+    r"\b(?:GK|RWB|LWB|LCB|RCB|RB|CB|LB|CDM|CAM|CM|DM|AM|LM|RM|LW|RW|FWD|FW|CF|ST)"
+    r"([A-ZÀ-Þ][A-Za-zÀ-ÿ'’.-]{2,})\b"
+)
 POSITION_KEYWORDS = {
     "goalkeeper": "GK",
     "keeper": "GK",
@@ -84,8 +89,10 @@ NON_PERSON_TERMS = {
     "Quarter Final",
     "Match Preview",
     "Kick Off",
+    "Predicted XI",
     "Team News",
     "Match News",
+    "Talking Points",
     "Kickoff",
     "Pass-happy PSG",
     "Paris St Germain",
@@ -99,6 +106,7 @@ NON_PERSON_TERMS = {
     "UEFA Champions League Round",
 }
 PERSON_PREFIX_STOPWORDS = {
+    "Advertisement",
     "Against",
     "And",
     "Assistant",
@@ -116,6 +124,37 @@ PERSON_PREFIX_STOPWORDS = {
     "Holders",
     "Pass-happy",
     "The",
+    "While",
+}
+PERSON_POSITION_PREFIXES = {
+    "GK",
+    "Goalkeeper",
+    "Keeper",
+    "RB",
+    "RWB",
+    "CB",
+    "LCB",
+    "RCB",
+    "LB",
+    "LWB",
+    "Defender",
+    "DM",
+    "CDM",
+    "CM",
+    "AM",
+    "CAM",
+    "LM",
+    "RM",
+    "Midfielder",
+    "LW",
+    "RW",
+    "Winger",
+    "FW",
+    "FWD",
+    "CF",
+    "ST",
+    "Forward",
+    "Striker",
 }
 PERSON_TOKEN_STOPWORDS = {
     "AFP",
@@ -129,7 +168,10 @@ PERSON_TOKEN_STOPWORDS = {
     "Image",
     "Images",
     "League",
+    "Liverpool",
+    "Manchester",
     "Photo",
+    "Points",
     "Referee",
     "Reuters",
     "Round",
@@ -138,6 +180,31 @@ PERSON_TOKEN_STOPWORDS = {
     "UEFA",
     "Video",
     "For",
+    "XI",
+    "Advertisement",
+    "App",
+    "Cup",
+    "Date",
+    "Field",
+    "Leading",
+    "Privacy",
+    "Sports",
+    "Stats",
+    "World",
+    "City",
+}
+TEAM_OR_CONTEXT_TOKENS = {
+    "belgium",
+    "egypt",
+    "fifa",
+    "world",
+    "cup",
+    "group",
+    "stage",
+    "competition",
+    "privacy",
+    "advertisement",
+    "leading",
 }
 NON_PLAYER_SENTENCE_MARKERS = (
     "afp via getty",
@@ -210,9 +277,11 @@ class FixtureResolver:
         *,
         cache: Optional[DataCache] = None,
         search_service: Optional[TavilySearchService] = None,
+        exa_search_service: Optional[ExaSearchService] = None,
     ) -> None:
         self.cache = cache or DataCache(ttl_seconds=3600)
         self.search_service = search_service or TavilySearchService(cache=self.cache)
+        self.exa_search_service = exa_search_service or ExaSearchService(cache=self.cache)
 
     async def resolve(
         self,
@@ -227,10 +296,20 @@ class FixtureResolver:
         if cached:
             return cached
 
+        fixture_domains = preferred_domains_for_topic("fixture", competition)
         query = (
             f"{home_team} vs {away_team} {competition} {sport} official "
             "fixture venue date kickoff match preview squads key players"
         ).strip()
+        exa_query = (
+            f"\"{home_team} vs {away_team}\" \"{competition}\" "
+            "kickoff venue date team news predicted lineups preview"
+        ).strip()
+
+        exa_search = await self._search_exa_first(
+            query=exa_query,
+            include_domains=fixture_domains,
+        )
         search = await self.search_service.search(
             query,
             search_depth="advanced",
@@ -238,19 +317,60 @@ class FixtureResolver:
             max_results=8,
             include_answer=True,
             cache_namespace="fixture_resolution_search",
-            include_domains=preferred_domains_for_topic("fixture", competition),
+            include_domains=fixture_domains,
         )
 
+        exa_results = exa_search.get("results", []) if isinstance(exa_search, dict) else []
+        fallback_results = search.get("results", []) if isinstance(search, dict) else []
         resolution = self._resolve_from_results(
             home_team=home_team,
             away_team=away_team,
             competition=competition,
-            results=search.get("results", []),
+            results=self._dedupe_results([*exa_results, *fallback_results]),
             answer=search.get("answer", ""),
         )
         payload = resolution.to_dict()
+        payload["search_provenance"] = {
+            "fixture_first_provider": "exa",
+            "exa_available": bool(getattr(self.exa_search_service, "is_available", False)),
+            "exa_source": exa_search.get("source", "") if isinstance(exa_search, dict) else "",
+            "exa_result_count": len(exa_results),
+            "fallback_provider": "tavily",
+            "fallback_result_count": len(fallback_results),
+        }
         self.cache.set("fixture_resolution", cache_key, payload)
         return payload
+
+    async def _search_exa_first(
+        self,
+        *,
+        query: str,
+        include_domains: List[str],
+    ) -> Dict[str, Any]:
+        """Run match-scoped Exa search before broader fixture fallback search."""
+        service = self.exa_search_service
+        if not service or not getattr(service, "is_available", False):
+            return {"results": [], "source": "unavailable"}
+        return await service.search(
+            query,
+            topic="fixture",
+            search_type="auto",
+            max_results=5,
+            include_domains=include_domains,
+            cache_namespace="fixture_resolution_exa_first",
+        )
+
+    def _dedupe_results(self, results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        deduped: List[Dict[str, Any]] = []
+        seen_urls: set[str] = set()
+        for result in results:
+            url = str(result.get("url") or "")
+            key = url or f"{result.get('title', '')}|{result.get('content', '')[:120]}"
+            if key in seen_urls:
+                continue
+            seen_urls.add(key)
+            deduped.append(result)
+        return deduped
 
     def _resolve_from_results(
         self,
@@ -480,8 +600,30 @@ class FixtureResolver:
         text: str,
         source: Dict[str, str],
     ) -> None:
+        extracted_from_team_segments = False
+        for side, segment in self._team_player_segments(text, home_team, away_team):
+            for sentence in self._sentences(segment):
+                for name in self._extract_person_names(sentence, home_team, away_team, competition):
+                    if self._player_seen(resolution, name):
+                        continue
+                    player = ResolvedPlayer(
+                        name=name,
+                        team_side=side,
+                        position=self._infer_position(sentence),
+                        source_url=source.get("url", ""),
+                        source_title=source.get("title", ""),
+                        evidence=sentence[:260],
+                        confidence=0.72,
+                    )
+                    resolution.players.setdefault(side, []).append(player)
+                    extracted_from_team_segments = True
+
         for sentence in self._sentences(text):
+            if extracted_from_team_segments and self._looks_like_lineup_sentence(sentence):
+                continue
             side = self._sentence_side(sentence, home_team, away_team)
+            if side == "unknown" and self._looks_like_lineup_sentence(sentence):
+                continue
             for name in self._extract_person_names(sentence, home_team, away_team, competition):
                 if self._player_seen(resolution, name):
                     continue
@@ -495,6 +637,38 @@ class FixtureResolver:
                     confidence=0.7 if side in {"home_team", "away_team"} else 0.55,
                 )
                 resolution.players.setdefault(side, []).append(player)
+
+    def _team_player_segments(self, text: str, home_team: str, away_team: str) -> List[Tuple[str, str]]:
+        compact = re.sub(r"\s+", " ", text)
+        markers: List[Tuple[int, int, str]] = []
+        for side, team in (("home_team", home_team), ("away_team", away_team)):
+            aliases = sorted(self._team_aliases(team), key=len, reverse=True)
+            for alias in aliases:
+                if len(alias) < 3:
+                    continue
+                pattern = re.compile(rf"\b{re.escape(alias)}\b", re.I)
+                for match in pattern.finditer(compact):
+                    context = compact[max(0, match.start() - 45): min(len(compact), match.end() + 45)].lower()
+                    if re.search(r"\b(?:vs|v|against)\s*$", compact[max(0, match.start() - 12):match.start()].lower()):
+                        continue
+                    if re.search(r"^\s*(?:vs|v|against)\b", compact[match.end():min(len(compact), match.end() + 12)].lower()):
+                        continue
+                    if not re.search(r"\b(?:team news|predicted|line-?ups?|xi|squad|goalkeepers?|defenders?|midfielders?|forwards?|home team|away team|guide)\b", context):
+                        continue
+                    markers.append((match.start(), match.end(), side))
+
+        markers = sorted(markers, key=lambda item: item[0])
+        segments: List[Tuple[str, str]] = []
+        for idx, (start, end, side) in enumerate(markers):
+            next_start = markers[idx + 1][0] if idx + 1 < len(markers) else min(len(compact), end + 700)
+            segment = compact[end:next_start].strip(" :-")
+            if self._looks_like_lineup_sentence(segment):
+                segments.append((side, segment))
+        return segments
+
+    def _looks_like_lineup_sentence(self, sentence: str) -> bool:
+        lowered = sentence.lower()
+        return bool(re.search(r"\b(?:predicted\s+xi|line-?ups?|squad|goalkeepers?|defenders?|midfielders?|forwards?|home team|away team)\b", lowered))
 
     def _sentences(self, text: str) -> List[str]:
         compact = re.sub(r"\s+", " ", text)
@@ -520,11 +694,44 @@ class FixtureResolver:
         names: List[str] = []
         excluded = self._excluded_name_phrases(home_team, away_team, competition)
         for match in PERSON_PATTERN.finditer(sentence):
+            if self._inside_parenthetical(sentence, match.start(), match.end()):
+                continue
+            name = self._clean_person_candidate(match.group(1).strip())
+            if self._is_non_player_name(name, sentence, excluded):
+                continue
+            names.append(name)
+        for match in GLUED_POSITION_PERSON_PATTERN.finditer(sentence):
+            if self._inside_parenthetical(sentence, match.start(), match.end()):
+                continue
             name = match.group(1).strip()
             if self._is_non_player_name(name, sentence, excluded):
                 continue
             names.append(name)
         return names
+
+    def _inside_parenthetical(self, text: str, start: int, end: int) -> bool:
+        left = text.rfind("(", 0, start)
+        right_before = text.rfind(")", 0, start)
+        if left <= right_before:
+            return False
+        right_after = text.find(")", end)
+        return right_after != -1
+
+    def _clean_person_candidate(self, name: str) -> str:
+        tokens = name.split()
+        while len(tokens) > 1 and tokens[0].strip(".:-") in PERSON_POSITION_PREFIXES:
+            tokens = tokens[1:]
+        while len(tokens) > 1 and tokens[-1].strip(".:-") in PERSON_POSITION_PREFIXES:
+            tokens = tokens[:-1]
+        cleaned = " ".join(tokens)
+        glued = re.match(
+            r"^(?:GK|RWB|LWB|LCB|RCB|RB|CB|LB|CDM|CAM|CM|DM|AM|LM|RM|LW|RW|FWD|FW|CF|ST)"
+            r"([A-ZÀ-Þ][A-Za-zÀ-ÿ'’.-]+(?:\s+[A-ZÀ-Þ][A-Za-zÀ-ÿ'’.-]+){0,2})$",
+            cleaned,
+        )
+        if glued:
+            return glued.group(1)
+        return cleaned
 
     def _is_non_player_name(self, name: str, sentence: str, excluded: set[str]) -> bool:
         if name in excluded or any(name.lower() == item.lower() for item in excluded):
@@ -543,6 +750,10 @@ class FixtureResolver:
         if tokens[0] in PERSON_PREFIX_STOPWORDS:
             return True
         if any(token in PERSON_TOKEN_STOPWORDS for token in tokens):
+            return True
+        if any(token.lower().strip(".:-") in TEAM_OR_CONTEXT_TOKENS for token in tokens):
+            return True
+        if len(set(token.lower() for token in tokens)) < len(tokens):
             return True
         return False
 

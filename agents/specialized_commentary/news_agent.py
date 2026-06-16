@@ -18,6 +18,35 @@ from quality.evidence import classify_source_tier, filter_allowed_search_results
 logger = logging.getLogger(__name__)
 
 _DEFAULT_SEARCH_SERVICE = object()
+LINEUP_POSITION_LABELS = {
+    "GK": "GK",
+    "GOALKEEPER": "GK",
+    "RB": "RB",
+    "RWB": "RWB",
+    "CB": "CB",
+    "LCB": "CB",
+    "RCB": "CB",
+    "LB": "LB",
+    "LWB": "LWB",
+    "DM": "DM",
+    "CDM": "DM",
+    "CM": "CM",
+    "AM": "AM",
+    "CAM": "AM",
+    "LM": "LM",
+    "RM": "RM",
+    "LW": "LW",
+    "RW": "RW",
+    "FW": "FW",
+    "FWD": "FW",
+    "CF": "FW",
+    "ST": "ST",
+    "STRIKER": "ST",
+    "FORWARD": "FW",
+    "WINGER": "Winger",
+    "DEFENDER": "Defender",
+    "MIDFIELDER": "Midfielder",
+}
 
 
 class NewsAgent(BaseAgent):
@@ -326,9 +355,18 @@ Keep to 3-4 sentences."""
                 "source_urls": source_urls[:4],
             }
             if home_players:
-                payload["home_team"] = {"players": home_players[:11]}
+                payload["home_team"] = {
+                    "players": home_players[:11],
+                    "lineup": self._lineup_entries_from_results(accepted_results, [home_team, "Arsenal"])[:11],
+                }
             if away_players:
-                payload["away_team"] = {"players": away_players[:11]}
+                payload["away_team"] = {
+                    "players": away_players[:11],
+                    "lineup": self._lineup_entries_from_results(
+                        accepted_results,
+                        [away_team, "Paris Saint-Germain", "PSG", "Paris"],
+                    )[:11],
+                }
             return payload
         except Exception as exc:
             logger.warning("Match predicted-lineup search failed for %s vs %s: %s", home_team, away_team, exc)
@@ -351,6 +389,24 @@ Keep to 3-4 sentences."""
         return []
 
     def _lineup_names_from_segment(self, segment: str) -> List[str]:
+        return [entry["name"] for entry in self._lineup_entries_from_segment(segment)]
+
+    def _lineup_entries_from_results(
+        self,
+        results: List[Dict[str, Any]],
+        labels: List[str],
+    ) -> List[Dict[str, str]]:
+        for result in results:
+            text = " ".join(str(result.get(key) or "") for key in ("title", "content", "raw_content"))
+            for label in labels:
+                pattern = re.compile(rf"{re.escape(label)}\s+predicted\s+line(?:up|-up)s?\b|{re.escape(label)}\s+predicted\s+xi\b", re.I)
+                for match in pattern.finditer(text):
+                    entries = self._lineup_entries_from_segment(text[match.end(): match.end() + 900])
+                    if len(entries) >= 7:
+                        return entries
+        return []
+
+    def _lineup_entries_from_segment(self, segment: str) -> List[Dict[str, str]]:
         cleaned = (
             segment.replace("——-", "|")
             .replace("——", "|")
@@ -358,7 +414,6 @@ Keep to 3-4 sentences."""
             .replace("—", "|")
             .replace("[...]", "|")
         )
-        names: List[str] = []
         blocked = {
             "arsenal",
             "psg",
@@ -368,21 +423,71 @@ Keep to 3-4 sentences."""
             "xi",
             "team",
             "news",
+            "predicted xi",
+            "predicted lineup",
+            "probable xi",
+            "possible xi",
+            "starting xi",
         }
+        entries: List[Dict[str, str]] = []
         for part in re.split(r"[|,;/\n]+", cleaned):
             candidate = " ".join(part.split()).strip(" .:-")
-            if not candidate or candidate.lower() in blocked:
+            parsed = self._parse_lineup_candidate(candidate)
+            if not parsed:
                 continue
-            if len(candidate) > 32 or len(candidate) < 3:
+            name = parsed["name"]
+            if name.lower() in blocked:
                 continue
-            if not re.fullmatch(r"[A-Za-zÀ-ÿ'’.-]+(?:\s+[A-Za-zÀ-ÿ'’.-]+){0,2}", candidate):
+            if any(entry["name"].lower() == name.lower() for entry in entries):
                 continue
-            if candidate.lower() in blocked:
-                continue
-            names.append(candidate)
-            if len(names) >= 11:
+            entries.append(parsed)
+            if len(entries) >= 11:
                 break
-        return list(dict.fromkeys(names))
+        return entries
+
+    def _parse_lineup_candidate(self, candidate: str) -> Optional[Dict[str, str]]:
+        candidate = re.sub(
+            r"\b(?:predicted|probable|possible|starting)\s+(?:line(?:up|-up)|xi)\b",
+            "",
+            candidate,
+            flags=re.I,
+        )
+        candidate = re.sub(r"^\(?\d{1,2}\)?\s*", "", candidate).strip(" .:-")
+        if not candidate or len(candidate) > 48 or len(candidate) < 3:
+            return None
+
+        position = ""
+        label_pattern = "|".join(
+            sorted((re.escape(label) for label in LINEUP_POSITION_LABELS), key=len, reverse=True)
+        )
+        separated = re.match(rf"^(?P<label>{label_pattern})[\s:.-]+(?P<name>.+)$", candidate, flags=re.I)
+        glued = re.match(
+            rf"^(?P<label>GK|RWB|LWB|LCB|RCB|RB|CB|LB|CDM|CAM|CM|DM|AM|LM|RM|LW|RW|FWD|FW|CF|ST)"
+            rf"(?P<name>[A-ZÀ-Þ][A-Za-zÀ-ÿ'’.-]+(?:\s+[A-ZÀ-Þ][A-Za-zÀ-ÿ'’.-]+){{0,2}})$",
+            candidate,
+        )
+        if separated:
+            label = separated.group("label").upper()
+            position = LINEUP_POSITION_LABELS.get(label, label)
+            candidate = separated.group("name")
+        elif glued:
+            label = glued.group("label").upper()
+            position = LINEUP_POSITION_LABELS.get(label, label)
+            candidate = glued.group("name")
+
+        candidate = " ".join(candidate.split()).strip(" .:-")
+        blocked = {
+            "predicted xi",
+            "predicted lineup",
+            "probable xi",
+            "starting xi",
+            "team news",
+        }
+        if candidate.lower() in blocked:
+            return None
+        if not re.fullmatch(r"[A-Za-zÀ-ÿ'’.-]+(?:\s+[A-Za-zÀ-ÿ'’.-]+){0,2}", candidate):
+            return None
+        return {"name": candidate, "position": position}
 
     def _extract_names_from_lineup_answer(self, answer: str, team_name: str) -> List[str]:
         lowered = answer.lower()

@@ -21,6 +21,29 @@ async def test_commentary_notes_workflow_end_to_end_fast_path(monkeypatch):
 
     monkeypatch.setattr(factory, "get_retriever", lambda sport, cache=None: FakeRetriever())
 
+    class FakeExaSearch:
+        is_available = True
+
+        async def search(self, query, **kwargs):
+            if kwargs.get("topic") != "fixture":
+                return {"source": "exa", "results": [], "query": query}
+            return {
+                "source": "exa",
+                "results": [{
+                    "title": "Home FC vs Away FC Champions League Final fixture guide",
+                    "content": (
+                        "Home FC vs Away FC Champions League Final kicks off at Test Stadium "
+                        "on Sunday, May 10, 2026 at 19:00 UTC."
+                    ),
+                    "url": "https://www.espn.com/soccer/story/exa-fixture-guide",
+                    "source": "exa",
+                    "score": 0.9,
+                }],
+                "query": query,
+            }
+
+    monkeypatch.setattr(factory, "get_exa_search_service", lambda cache=None: FakeExaSearch())
+
     async def fake_news(self, home_team, away_team):
         return {
             "home_team": {"synthesis": f"{home_team} news clear", "news_items": [], "injuries": []},
@@ -115,6 +138,13 @@ async def test_commentary_notes_workflow_end_to_end_fast_path(monkeypatch):
     assert "professional_score" in result.quality_report["notes_metrics"]
     assert result.notes_store is not None
     assert len(result.notes_store.beats) >= 3
+    assert result.targeted_evidence["results_by_topic"]["fixture"][0]["url"] == (
+        "https://www.espn.com/soccer/story/exa-fixture-guide"
+    )
+    assert any(
+        "https://www.espn.com/soccer/story/exa-fixture-guide" in getattr(beat, "source_urls", [])
+        for beat in result.notes_store.beats
+    )
     assert "team_form" in result.completed_agents
     assert "matchup_analysis" in result.completed_agents
     assert any(phase == "parallel_phase" for phase, _message, _extra in progress)

@@ -195,6 +195,8 @@ class PlayerResearchAgent(BaseAgent):
         for player in fixture_players:
             if not isinstance(player, dict) or self._is_placeholder_player(player, team_name):
                 continue
+            if self._is_ambiguous_fixture_candidate(player):
+                continue
             name_key = self._normalize_player_name(player.get("name", ""))
             if not name_key or name_key in seen:
                 continue
@@ -203,6 +205,13 @@ class PlayerResearchAgent(BaseAgent):
             if len(merged) >= self._player_limit():
                 break
         return merged
+
+    def _is_ambiguous_fixture_candidate(self, player: Dict[str, Any]) -> bool:
+        name = str(player.get("name") or "").strip()
+        tokens = name.split()
+        if len(tokens) == 2 and tokens[0] in {"De", "Van", "Der", "Le", "El", "Al"}:
+            return True
+        return False
 
     def _player_limit(self) -> int:
         """Production notes need a real squad grid; tests/dev can lower this via env."""
@@ -213,6 +222,11 @@ class PlayerResearchAgent(BaseAgent):
 
     def _fixture_candidate(self, player: Dict[str, Any], team_name: str) -> Dict[str, Any]:
         evidence = str(player.get("evidence") or player.get("profile") or "").strip()
+        name = player.get("name", "This player")
+        safe_profile = (
+            f"{name} is a fixture-evidence candidate for {team_name}; "
+            "role and starter status are not verified."
+        )
         return {
             "name": player.get("name", "Unknown"),
             "position": player.get("position") or "Unknown",
@@ -222,10 +236,7 @@ class PlayerResearchAgent(BaseAgent):
             "biography": "",
             "nationality": "N/A",
             "injury_status": "Not verified",
-            "profile": evidence[:180] or (
-                f"{player.get('name', 'This player')} is a fixture-evidence candidate for "
-                f"{team_name}; role and starter status are not verified."
-            ),
+            "profile": safe_profile,
             "data_source": player.get("data_source") or "fixture_resolver",
             "source_urls": player.get("source_urls") or [],
             "evidence": evidence,

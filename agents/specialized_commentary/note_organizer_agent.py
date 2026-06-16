@@ -459,7 +459,7 @@ H2H Record: **{h2h_record}**
 
 ### Weather / Surface
 
-{weather_narrative or 'No verified weather edge was accepted in this run; call visible tempo, footing, and ball speed if conditions become part of the match.'}
+{weather_narrative or 'Weather unavailable from accepted evidence.'}
 
 ## Team News Caveats
 
@@ -535,15 +535,7 @@ H2H Record: **{h2h_record}**
         )
         narrative = self._clean_historical_narrative(historical.get("narrative", ""), home_team, away_team)
         if not narrative:
-            narrative = (
-                f"Trusted H2H evidence was found for {home_team} vs {away_team}, but exact counts were not extracted; "
-                "avoid exact-record language until the count is parsed."
-                if source_backed
-                else (
-                    f"No verified head-to-head narrative was accepted for {home_team} vs {away_team}; "
-                    "lean on live tactical control, crowd tone, and momentum swings."
-                )
-            )
+            narrative = "Historical H2H unavailable from accepted evidence."
         return record, narrative
 
     def _build_live_trigger_beats(
@@ -808,7 +800,7 @@ Recent H2H Narrative:
 
 #### Weather Impact
 
-{weather_narrative or 'No weather edge is active in the collected feed; call the match through tempo, surface speed, and player footing if conditions become visible.'}
+{weather_narrative or 'Weather unavailable from accepted evidence.'}
 
 #### Expected Match Dynamic
 
@@ -874,6 +866,12 @@ Recent H2H Narrative:
             "weak points" in lower
             or "vulnerabilities" in lower
             or "based on the identification" in lower
+            or "based on the limited information" in lower
+            or "in your prompt" in lower
+            or "i cannot" in lower
+            or "i can't" in lower
+            or "unable to provide" in lower
+            or "cannot generate" in lower
             or "five critical battles" in lower
             or "critical matchups" in lower
             or "tactical analysis:" in lower
@@ -961,6 +959,7 @@ Unavailable or uncertain facts:
 
     def _source_backed_facts(self, accepted: Any) -> List[str]:
         facts = []
+        seen = set()
         if isinstance(accepted, list):
             sorted_items = sorted(
                 (item for item in accepted if isinstance(item, dict)),
@@ -970,8 +969,10 @@ Unavailable or uncertain facts:
                 claim = self._clean_analysis_text(item.get("claim", "")).strip()
                 tier = item.get("source_tier") or "source"
                 source = item.get("source_name") or item.get("url") or "source"
-                if claim and not self._is_low_quality_text(claim):
+                key = re.sub(r"\W+", "", claim.lower())
+                if claim and key not in seen and not self._is_low_quality_text(claim) and not self._is_unrelated_storyline(claim):
                     facts.append(f"{claim} ({tier}: {source})")
+                    seen.add(key)
         return facts[:5]
 
     def _build_opening_lines_bank(self, home_team: str, away_team: str, competition: str) -> List[str]:
@@ -984,22 +985,38 @@ Unavailable or uncertain facts:
 
     def _source_backed_storylines(self, historical: Dict[str, Any], news: Dict[str, Any]) -> List[str]:
         storylines = []
+        seen = set()
+
+        def add_storyline(title: Any, label: str) -> None:
+            cleaned_title = self._clean_analysis_text(title).strip()
+            key = re.sub(r"\W+", "", cleaned_title.lower())
+            if not cleaned_title or key in seen or self._is_unrelated_storyline(cleaned_title):
+                return
+            seen.add(key)
+            storylines.append(f"Ready to say: {cleaned_title} ({label}).")
+
         historical_storylines = historical.get("storylines", []) if isinstance(historical, dict) else []
         for story in historical_storylines:
-            title = self._clean_analysis_text(story.get("title", "")).strip()
             label = story.get("source_policy_label") or story.get("source_tier") or story.get("source") or "accepted source"
-            if title:
-                storylines.append(f"Ready to say: {title} ({label}).")
+            add_storyline(story.get("title", ""), label)
         for side in ("home_team", "away_team"):
             team_news = news.get(side, {}) if isinstance(news, dict) else {}
             for item in team_news.get("news_items", [])[:2]:
-                title = self._clean_analysis_text(item.get("title", "")).strip()
                 label = item.get("source_policy_label") or item.get("source_tier") or item.get("source") or "accepted source"
-                if title:
-                    storylines.append(f"Ready to say: {title} ({label}).")
+                add_storyline(item.get("title", ""), label)
         if storylines:
             return storylines[:5]
         return ["No source-backed storyline is strong enough yet; sell the opening through live tempo, territory, and confirmed team-sheet facts."]
+
+    def _is_unrelated_storyline(self, text: str) -> bool:
+        lower = (text or "").lower()
+        return any(marker in lower for marker in (
+            "kimmich",
+            "germany don't have",
+            "germany dont have",
+            "teenage prodigy bouaddi",
+            "england players shelter",
+        ))
 
     def _format_broadcast_folder_pages(
         self,
@@ -1095,20 +1112,27 @@ Broadcast page role: **Pages 5-6: Statistics & Historical Context**
 
     def _format_player_profile_grid(self, players: List[Dict[str, Any]], team_name: str) -> str:
         rows = []
+        seen_names: set[str] = set()
         for player in players or []:
             name = player.get("name", "")
             if self._is_placeholder_player_name(name):
                 continue
+            canonical = self._canonical_player_name(name)
+            if canonical in seen_names:
+                continue
+            seen_names.add(canonical)
             number = player.get("squad_number") or player.get("shirt_number") or "tbc"
-            position = player.get("position") or "role tbc"
-            age = player.get("age") or "age tbc"
-            nationality = player.get("nationality") or ""
+            position = self._clean_player_field(player.get("position"), fallback="fixture-evidence role")
+            age = self._clean_player_field(player.get("age"), fallback="")
+            nationality = self._clean_player_field(player.get("nationality"), fallback=team_name)
             stats_line = player.get("stats_line")
             if not stats_line:
                 stats = player.get("stats", {}) if isinstance(player.get("stats"), dict) else {}
                 stats_line = self._format_compact_stats(stats)
+            if stats_line == "season stats not verified":
+                stats_line = "season stats tbc"
             cue = self._first_sentence(str(player.get("cue") or player.get("profile") or player.get("evidence") or "")).strip()
-            if not cue or self._is_low_quality_text(cue):
+            if not cue or self._is_low_quality_text(cue) or self._is_bad_player_cue(cue):
                 cue = "Use only confirmed live role, touch map, and matchup evidence."
             bio_bits = " | ".join(str(bit) for bit in (position, age, nationality, stats_line) if bit)
             rows.append(f"No. {number} | {name} | {bio_bits} | Cue: {cue}")
@@ -1118,9 +1142,31 @@ Broadcast page role: **Pages 5-6: Statistics & Historical Context**
             return self._format_bullets(rows)
         return f"- {team_name}: no player grid promoted yet; fill from confirmed team sheet and verified squad notes."
 
+    def _clean_player_field(self, value: Any, fallback: str = "") -> str:
+        text = str(value or "").strip()
+        if not text or text.lower() in {"unknown", "n/a", "none", "null"}:
+            return fallback
+        return text
+
+    def _canonical_player_name(self, name: Any) -> str:
+        text = re.sub(r"\s+", " ", str(name or "").strip().lower())
+        text = re.sub(r"^mo\s+salah$", "mohamed salah", text)
+        return text
+
+    def _is_bad_player_cue(self, cue: str) -> bool:
+        lower = (cue or "").lower()
+        return (
+            "[...]" in cue
+            or "..." in cue
+            or " i know " in f" {lower} "
+            or "as i coached" in lower
+            or " in your prompt" in lower
+            or lower.count('"') == 1
+        )
+
     def _format_officials_summary(self, officials: Any) -> str:
         if not isinstance(officials, dict) or not officials:
-            return "add referee, VAR, and assistants only when confirmed by an official or trusted source"
+            return "officials not confirmed in accepted evidence"
         labels = []
         for key, label in (
             ("referee", "Referee"),
@@ -1168,13 +1214,20 @@ Broadcast page role: **Pages 5-6: Statistics & Historical Context**
         if not isinstance(statistics_context, dict):
             return ""
         lines = []
+        seen = set()
+        def add_line(line: str) -> None:
+            key = re.sub(r"\W+", "", line.lower())
+            if not key or key in seen or self._is_unrelated_storyline(line):
+                return
+            seen.add(key)
+            lines.append(line)
         for key in ("home_form", "away_form"):
             if statistics_context.get(key):
-                lines.append(str(statistics_context[key]))
+                add_line(str(statistics_context[key]))
         for duel in statistics_context.get("key_duels", [])[:6]:
-            lines.append(f"Key duel index: {duel}")
+            add_line(f"Key duel index: {duel}")
         for storyline in statistics_context.get("storylines", [])[:6]:
-            lines.append(f"Historical/storyline card: {storyline}")
+            add_line(f"Historical/storyline card: {storyline}")
         if not lines:
             return ""
         return "#### Statistics & Story Cards\n\n" + self._format_bullets(lines)
@@ -1268,14 +1321,23 @@ Broadcast page role: **Pages 5-6: Statistics & Historical Context**
         return self._format_bullets(lines) or "- No source-predicted XI promoted separately in this run."
 
     def _lineup_names(self, lineup: Any) -> List[str]:
-        players = lineup.get("players") if isinstance(lineup, dict) else None
+        if not isinstance(lineup, dict):
+            return []
+        structured_players = lineup.get("lineup")
+        players = structured_players if isinstance(structured_players, list) and structured_players else lineup.get("players")
         if not isinstance(players, list):
             return []
-        return [
-            str(player).strip()
-            for player in players
-            if isinstance(player, str) and player.strip() and not self._is_placeholder_player_name(player)
-        ]
+        names = []
+        for player in players:
+            if isinstance(player, dict):
+                name = str(player.get("name") or "").strip()
+            elif isinstance(player, str):
+                name = player.strip()
+            else:
+                continue
+            if name and not self._is_placeholder_player_name(name):
+                names.append(name)
+        return names
 
     def _only_none_values(self, values: List[Any]) -> bool:
         return all(str(value).strip().lower() in {"none", "n/a", "no", "nil"} for value in values)
@@ -1307,6 +1369,11 @@ Broadcast page role: **Pages 5-6: Statistics & Historical Context**
             formation = side_data.get("formation") if isinstance(side_data, dict) else ""
             formation_part = f", {formation}" if formation else ""
             roles = side_data.get("roles") if isinstance(side_data, dict) else {}
+            if isinstance(roles, dict) and roles and not self._lineup_roles_usable(roles):
+                lines.append(
+                    f"{team_name} plausible XI not promoted: researched squad order is not role-balanced enough; wait for a confirmed or trusted predicted XI."
+                )
+                continue
             role_line = self._format_lineup_role_groups(roles) if isinstance(roles, dict) else ""
             player_line = role_line or ", ".join(names)
             lines.append(
@@ -1320,6 +1387,30 @@ Broadcast page role: **Pages 5-6: Statistics & Historical Context**
             return self._format_bullets(lines)
         return "- Plausible XI model not run in this sample; use recent starts, minutes, role continuity, and availability before air."
 
+    def _lineup_roles_usable(self, roles: Dict[str, Any]) -> bool:
+        goalkeepers = self._unique_player_names(roles.get("goalkeeper"))
+        defenders = self._unique_player_names(roles.get("defenders"))
+        midfielders = self._unique_player_names(roles.get("midfielders"))
+        forwards = self._unique_player_names(roles.get("forwards"))
+        total = len(goalkeepers) + len(defenders) + len(midfielders) + len(forwards)
+        return len(goalkeepers) == 1 and len(defenders) >= 3 and len(midfielders) >= 2 and len(forwards) >= 1 and 10 <= total <= 11
+
+    def _unique_player_names(self, values: Any) -> List[str]:
+        if not isinstance(values, list):
+            return []
+        names = []
+        seen: set[str] = set()
+        for value in values:
+            if not isinstance(value, str):
+                continue
+            name = value.strip()
+            canonical = self._canonical_player_name(name)
+            if not name or self._is_placeholder_player_name(name) or canonical in seen:
+                continue
+            seen.add(canonical)
+            names.append(name)
+        return names
+
     def _format_lineup_role_groups(self, roles: Dict[str, Any]) -> str:
         labels = (
             ("goalkeeper", "GK"),
@@ -1330,13 +1421,7 @@ Broadcast page role: **Pages 5-6: Statistics & Historical Context**
         parts = []
         for key, label in labels:
             values = roles.get(key)
-            if not isinstance(values, list):
-                continue
-            names = [
-                str(value).strip()
-                for value in values
-                if isinstance(value, str) and value.strip() and not self._is_placeholder_player_name(value)
-            ]
+            names = self._unique_player_names(values)
             if names:
                 parts.append(f"{label}: {', '.join(names)}")
         return "; ".join(parts)
@@ -1370,7 +1455,7 @@ Broadcast page role: **Pages 5-6: Statistics & Historical Context**
             f"H2H: {h2h_record}",
             f"Historical cue: {historical_line}",
             f"Matchup index: {matchup_index}",
-            "Manager/shape box: fill with confirmed team shapes at kickoff, then update if the press or buildup changes.",
+            "Team-shape box: confirm formations at kickoff, then update if the press or buildup changes.",
         ]
         return self._format_bullets(items)
 
@@ -1448,20 +1533,17 @@ Broadcast page role: **Pages 5-6: Statistics & Historical Context**
 
         synthesis = self._clean_news_text(synthesis)
 
+        if degraded or self._has_only_unconfirmed_team_news(news):
+            return self._build_team_news_fallback(team_name, side_label)
+
         if not synthesis and not news_items and not injuries:
-            if degraded:
-                return f"No verified {team_name or 'team'} team-news update was accepted in this run."
             return self._build_team_news_fallback(team_name, side_label)
 
         output = ""
         if synthesis:
             output = f"{synthesis}\n\n"
         else:
-            fallback = (
-                f"No verified {team_name or 'team'} team-news update was accepted in this run."
-                if degraded
-                else self._build_team_news_fallback(team_name, side_label)
-            )
+            fallback = self._build_team_news_fallback(team_name, side_label)
             output = f"{fallback}\n\n"
 
         if news_items:
@@ -1499,18 +1581,38 @@ Broadcast page role: **Pages 5-6: Statistics & Historical Context**
         )
 
     def _build_team_news_fallback(self, team_name: str, side_label: str) -> str:
-        """Write team-news fallback as commentary direction, not a duplicated status line."""
+        """Write a concise team-news fallback that does not imply unverified context."""
         is_away = side_label == "away"
         label = team_name or ("Away side" if is_away else "home side")
-        if is_away:
-            return (
-                f"No verified {label} team-news update was accepted in this run. Frame their first spell through "
-                "travel composure, defensive spacing, and whether the outlet runner gives them relief."
-            )
-        return (
-            f"No verified {label} team-news update was accepted in this run. Frame their first spell through "
-            "home tempo, territory, and whether the on-ball structure gives them early control."
+        return f"No verified {label} team-news update was accepted in this run."
+
+    def _has_only_unconfirmed_team_news(self, news: Dict[str, Any]) -> bool:
+        lineup_status = news.get("lineup_status")
+        lineup_value = ""
+        if isinstance(lineup_status, dict):
+            lineup_value = str(lineup_status.get("status") or "")
+        elif lineup_status:
+            lineup_value = str(lineup_status)
+
+        has_confirmed_lineup = lineup_value.lower() in {"confirmed", "official"}
+        if has_confirmed_lineup or news.get("injuries"):
+            return False
+
+        news_items = news.get("news_items") or []
+        titles = " ".join(str(item.get("title") or "") for item in news_items if isinstance(item, dict)).lower()
+        if not titles:
+            return bool(lineup_value)
+
+        unconfirmed_markers = (
+            "predicted",
+            "how to watch",
+            "tv channel",
+            "live stream",
+            "schedule",
+            "live",
+            "preview",
         )
+        return any(marker in titles for marker in unconfirmed_markers)
 
     def _build_team_tactical_profile(
         self,

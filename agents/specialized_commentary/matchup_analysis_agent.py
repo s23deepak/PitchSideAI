@@ -18,6 +18,17 @@ from data_sources.player_profile_db import get_player_db
 
 logger = logging.getLogger(__name__)
 
+TACTICAL_REFUSAL_PATTERNS = (
+    "i'm unable",
+    "i am unable",
+    "i can't provide",
+    "i cannot provide",
+    "unable to provide",
+    "cannot analyze",
+    "can't analyze",
+    "not enough information to provide",
+)
+
 
 class MatchupAnalysisAgent(BaseAgent):
     """Analyze key player matchups and positional battles."""
@@ -481,7 +492,20 @@ Provide expected tactical adjustments and key battles to watch."""
             max_tokens=100,  # 100 for local dev (200 in production)
         )
 
+        if self._is_refusal_text(implications):
+            return self._degraded_tactical_implications()
+
         return implications
+
+    def _is_refusal_text(self, text: str) -> bool:
+        normalized = re.sub(r"\s+", " ", (text or "").strip().lower())
+        return any(pattern in normalized for pattern in TACTICAL_REFUSAL_PATTERNS)
+
+    def _degraded_tactical_implications(self) -> str:
+        return (
+            "Tactical implications are limited because verified matchup detail is incomplete. "
+            "Use the listed duels as live watchpoints and update once confirmed team shapes are available."
+        )
 
     async def close(self):
         """Clean up resources."""

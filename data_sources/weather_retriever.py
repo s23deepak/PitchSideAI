@@ -9,8 +9,9 @@ Integrates with Tavily to get:
 import logging
 import re
 from typing import Any, Dict, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
+import httpx
 from data_sources.cache import DataCache
 
 logger = logging.getLogger(__name__)
@@ -79,6 +80,14 @@ class WeatherDataRetriever:
                     exc,
                 )
 
+        if not weather_data:
+            weather_data = await self._fetch_open_meteo_weather(
+                venue_name,
+                latitude,
+                longitude,
+                match_datetime,
+            )
+
         # Return empty if search failed
         if not weather_data:
             weather_data = self._make_empty_weather(venue_name, latitude, longitude, match_datetime)
@@ -130,6 +139,15 @@ class WeatherDataRetriever:
             except Exception as exc:
                 logger.warning("Tavily forecast search failed for %s: %s", venue_name, exc)
 
+        if not forecast_data:
+            forecast_data = await self._fetch_open_meteo_forecast(
+                venue_name,
+                latitude,
+                longitude,
+                match_datetime,
+                hours_window,
+            )
+
         # Return empty if unavailable
         if not forecast_data:
             forecast_data = {
@@ -158,6 +176,9 @@ class WeatherDataRetriever:
         Returns:
             Impact analysis (how weather affects tactical play)
         """
+        if weather_data.get("data_source") == "unavailable":
+            return {"general": "Weather impact unavailable from accepted sources."}
+
         raw_conditions = weather_data.get("conditions") or ""
         conditions = str(raw_conditions).lower()
         wind_kmh = self._safe_float(weather_data.get("wind_kmh"), default=0.0)
@@ -288,6 +309,123 @@ class WeatherDataRetriever:
             "data_source": "tavily_search",
         }
 
+    async def _fetch_open_meteo_weather(
+        self,
+        venue_name: str,
+        latitude: float,
+        longitude: float,
+        match_datetime: str,
+    ) -> Dict[str, Any]:
+        """Fetch no-key hourly weather by coordinates when venue coords are known."""
+        if not self._has_coordinates(latitude, longitude) or not match_datetime:
+            return {}
+        forecast = await self._open_meteo_hourly(venue_name, latitude, longitude, match_datetime)
+        hours = forecast.get("forecast_hours") or []
+        if not hours:
+            return {}
+        selected = min(hours, key=lambda row: abs(row.get("offset_seconds", 10**12)))
+        return {
+            "venue": venue_name,
+            "coordinates": {"lat": latitude, "lon": longitude},
+            "match_datetime": match_datetime,
+            "conditions": selected.get("conditions", ""),
+            "temp_c": selected.get("temp_c"),
+            "humidity": selected.get("humidity"),
+            "wind_kmh": selected.get("wind_kmh"),
+            "weather_summary": selected.get("summary", ""),
+            "source_urls": ["https://open-meteo.com/"],
+            "last_updated": datetime.utcnow().isoformat(),
+            "data_source": "open_meteo",
+        }
+
+    async def _fetch_open_meteo_forecast(
+        self,
+        venue_name: str,
+        latitude: float,
+        longitude: float,
+        match_datetime: str,
+        hours_window: int,
+    ) -> Dict[str, Any]:
+        """Fetch a compact forecast window around kickoff from Open-Meteo."""
+        if not self._has_coordinates(latitude, longitude) or not match_datetime:
+            return {}
+        forecast = await self._open_meteo_hourly(venue_name, latitude, longitude, match_datetime)
+        hours = [
+            {key: value for key, value in row.items() if key != "offset_seconds"}
+            for row in forecast.get("forecast_hours", [])
+            if abs(row.get("offset_seconds", 10**12)) <= hours_window * 3600
+        ]
+        if not hours:
+            return {}
+        conditions = [row.get("conditions") for row in hours if row.get("conditions")]
+        winds = [row.get("wind_kmh") for row in hours if row.get("wind_kmh") is not None]
+        trend_bits = []
+        if conditions:
+            trend_bits.append(f"{conditions[0]} around kickoff")
+        if winds:
+            trend_bits.append(f"wind {max(winds):.1f} km/h peak in window")
+        return {
+            "venue": venue_name,
+            "match_datetime": match_datetime,
+            "forecast_hours": hours,
+            "general_trend": "; ".join(trend_bits),
+            "source_urls": ["https://open-meteo.com/"],
+            "data_source": "open_meteo",
+        }
+
+    async def _open_meteo_hourly(
+        self,
+        venue_name: str,
+        latitude: float,
+        longitude: float,
+        match_datetime: str,
+    ) -> Dict[str, Any]:
+        cache_key = f"{venue_name}_{latitude}_{longitude}_{match_datetime}"
+        cached = self.cache.get("open_meteo_hourly", cache_key)
+        if cached:
+            return cached
+
+        kickoff = self._parse_datetime(match_datetime)
+        if not kickoff:
+            return {}
+        params = {
+            "latitude": latitude,
+            "longitude": longitude,
+            "hourly": "temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code",
+            "start_date": kickoff.date().isoformat(),
+            "end_date": kickoff.date().isoformat(),
+            "timezone": "UTC",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get("https://api.open-meteo.com/v1/forecast", params=params)
+                response.raise_for_status()
+                payload = response.json()
+        except Exception as exc:
+            logger.warning("Open-Meteo weather lookup failed for %s: %s", venue_name, exc)
+            return {}
+
+        hourly = payload.get("hourly") or {}
+        rows = []
+        for idx, time_value in enumerate(hourly.get("time") or []):
+            row_dt = self._parse_datetime(time_value)
+            if not row_dt:
+                continue
+            code = self._list_get(hourly.get("weather_code"), idx)
+            conditions = self._conditions_from_weather_code(code)
+            rows.append({
+                "time": row_dt.isoformat(),
+                "temp_c": self._list_get(hourly.get("temperature_2m"), idx),
+                "humidity": self._list_get(hourly.get("relative_humidity_2m"), idx),
+                "wind_kmh": self._list_get(hourly.get("wind_speed_10m"), idx),
+                "conditions": conditions,
+                "summary": f"{conditions or 'weather'} at {row_dt.strftime('%H:%M UTC')}",
+                "offset_seconds": (row_dt - kickoff).total_seconds(),
+            })
+        result = {"forecast_hours": rows, "data_source": "open_meteo"}
+        self.cache.set("open_meteo_hourly", cache_key, result)
+        return result
+
     def _make_empty_weather(
         self,
         venue_name: str,
@@ -309,6 +447,49 @@ class WeatherDataRetriever:
             "last_updated": datetime.utcnow().isoformat(),
             "data_source": "unavailable",
         }
+
+    def _has_coordinates(self, latitude: float, longitude: float) -> bool:
+        return bool(latitude and longitude and abs(latitude) <= 90 and abs(longitude) <= 180)
+
+    def _parse_datetime(self, value: str) -> Optional[datetime]:
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+        except ValueError:
+            try:
+                return datetime.fromisoformat(f"{value}T00:00:00+00:00")
+            except ValueError:
+                return None
+
+    def _list_get(self, values: Any, index: int) -> Any:
+        if not isinstance(values, list) or index >= len(values):
+            return None
+        return values[index]
+
+    def _conditions_from_weather_code(self, code: Any) -> str:
+        try:
+            code_int = int(code)
+        except (TypeError, ValueError):
+            return ""
+        if code_int == 0:
+            return "clear"
+        if code_int in {1, 2}:
+            return "partly_cloudy"
+        if code_int == 3:
+            return "cloudy"
+        if code_int in {45, 48}:
+            return "fog"
+        if code_int in {51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82}:
+            return "rain"
+        if code_int in {71, 73, 75, 77, 85, 86}:
+            return "snow"
+        if code_int in {95, 96, 99}:
+            return "thunderstorm"
+        return ""
 
     def _extract_conditions(self, text: str) -> str:
         """Extract a simple weather condition from free text."""

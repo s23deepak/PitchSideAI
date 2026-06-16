@@ -251,15 +251,36 @@ def _form_card(form_data: dict[str, Any], team_name: str) -> str:
 
 def _storylines(historical: dict[str, Any], news: dict[str, Any]) -> list[str]:
     items: list[str] = []
+
+    def add(title: Any) -> None:
+        value = str(title or "").strip()
+        key = "".join(ch for ch in value.lower() if ch.isalnum())
+        if not value or key in {"".join(ch for ch in item.lower() if ch.isalnum()) for item in items}:
+            return
+        if _is_unrelated_storyline(value):
+            return
+        items.append(value)
+
     for story in historical.get("storylines", []) if isinstance(historical.get("storylines"), list) else []:
         if isinstance(story, dict) and story.get("title"):
-            items.append(str(story["title"]))
+            add(story["title"])
     for side in ("home_team", "away_team"):
         side_news = news.get(side, {}) if isinstance(news.get(side), dict) else {}
         for item in side_news.get("news_items", [])[:3]:
             if isinstance(item, dict) and item.get("title"):
-                items.append(str(item["title"]))
+                add(item["title"])
     return items[:10]
+
+
+def _is_unrelated_storyline(text: str) -> bool:
+    lower = (text or "").lower()
+    return any(marker in lower for marker in (
+        "kimmich",
+        "germany don't have",
+        "germany dont have",
+        "teenage prodigy bouaddi",
+        "england players shelter",
+    ))
 
 
 def _key_duels(matchups: dict[str, Any]) -> list[str]:
@@ -271,7 +292,16 @@ def _key_duels(matchups: dict[str, Any]) -> list[str]:
 
 
 def _names(players: list[dict[str, Any]]) -> list[str]:
-    return [str(player.get("name")).strip() for player in players if isinstance(player, dict) and player.get("name")]
+    names = []
+    for player in players:
+        if not isinstance(player, dict) or not player.get("name"):
+            continue
+        name = str(player.get("name")).strip()
+        tokens = name.split()
+        if len(tokens) == 2 and tokens[0] in {"De", "Van", "Der", "Le", "El", "Al"}:
+            continue
+        names.append(name)
+    return names
 
 
 def _stats_line(stats: dict[str, Any]) -> str:
@@ -286,6 +316,8 @@ def _stats_line(stats: dict[str, Any]) -> str:
 def _first_sentence(text: Any) -> str:
     cleaned = " ".join(str(text or "").split())
     if not cleaned:
+        return ""
+    if cleaned.startswith("[...]") or " as I coached " in f" {cleaned} " or " as i coached " in f" {cleaned.lower()} ":
         return ""
     for sep in (". ", "! ", "? "):
         if sep in cleaned:
