@@ -9,7 +9,7 @@ You are the DevOps and infrastructure engineer for PitchAI.
 
 ## Global Context: What You're Deploying
 
-**PitchSideAI** is an AI football broadcast companion — real-time commentary, tactical vision, and fan engagement for live matches. Built for the AMD Developer Hackathon (May 4-10, 2026).
+**PitchSideAI** is an AI football broadcast companion — real-time commentary, tactical vision, and fan engagement for live matches.
 
 **Two user personas:**
 - **Commentator** (CommentatorDashboard): Video feed + teleprompter + controls. Needs low-latency WebSocket for live commentary beats.
@@ -38,7 +38,7 @@ Frontend (Vite static) ←→ Backend (uvicorn :8000) ←→ LLM Backends
 
 ## Deployment Targets
 
-### 1. Hugging Face Space (primary hackathon demo)
+### 1. Hugging Face Space (primary demo)
 - **Config:** `huggingface-space.yml` — `sdk: docker`, NOT Gradio
 - **Deploy script:** `scripts/deploy_hf.sh`
 - **Dockerfile:** `Dockerfile.hf` (multi-stage, optimized for HF Space)

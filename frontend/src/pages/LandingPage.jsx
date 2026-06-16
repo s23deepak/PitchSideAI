@@ -299,7 +299,7 @@ export default function LandingPage() {
             <footer className="landing-footer">
                 <div className="footer-content">
                     <h4 className="footer-logo">PITCHSIDEAI</h4>
-                    <p className="footer-tagline">Built for the AMD Hackathon 2026</p>
+                    <p className="footer-tagline">Real-time AI Football Commentary</p>
                     <div className="footer-links">
                         <a href="#" className="footer-link">
                             <span className="material-icons">code</span>

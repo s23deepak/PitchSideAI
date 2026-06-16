@@ -2,8 +2,7 @@
 
 ## Project Overview
 
-PitchSideAI is an AI football broadcast companion for the AMD Developer Hackathon (May 4–10, 2026).
-Real-time commentary notes, live tactical vision Q&A, and Fan Lens broadcast mode.
+PitchSideAI is an AI football broadcast companion — real-time commentary notes, live tactical vision Q&A, and Fan Lens broadcast mode.
 
 **Quick Start:**
 ```bash

@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { backendWsUrl } from '@/lib/backend-url'
 
 /**
- * StreamingCommentary — Hackathon Track 3 component.
+ * StreamingCommentary — StreamingVisionBridge component.
  *
  * Connects to /ws/video/streaming (StreamingVisionBridge backend)
  * for real-time continuous video understanding with KV-cache management.

@@ -417,9 +417,9 @@ class LatencyBenchmarker:
 
 - [ ] All latency NFRs pass
 - [ ] Results reviewed and approved
-- [ ] Ready for hackathon demo
+- [ ] All latency requirements met
 
-**Ready for hackathon demo:** Yes / No
+**All latency requirements met:** Yes / No
 """
 
         with open(output_path, 'w') as f:

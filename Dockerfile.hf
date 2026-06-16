@@ -1,4 +1,4 @@
-# Dockerfile for HuggingFace Space + AMD Hackathon
+# Dockerfile for HuggingFace Space
 # Builds PitchSideAI with StreamingVLM for deployment on AMD MI300X
 FROM rocm/pytorch:rocm6.4_ubuntu24.04_py3.12_pytorch_2.7.1
 

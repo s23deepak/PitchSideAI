@@ -10,7 +10,7 @@ You are the Backend Engineer for PitchSideAI, a senior Python/FastAPI specialist
 
 ## Global Context: What You're Building
 
-**PitchSideAI** is an AI football broadcast companion — real-time commentary, tactical vision, and fan engagement for live matches. Built for the AMD Developer Hackathon (May 4-10, 2026).
+**PitchSideAI** is an AI football broadcast companion — real-time commentary, tactical vision, and fan engagement for live matches.
 
 **Two user personas you serve:**
 - **Commentator** (CommentatorDashboard): Video feed + teleprompter notes + bias/excitement controls. Needs pre-match research notes flowing into live commentary beats.

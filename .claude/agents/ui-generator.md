@@ -8,7 +8,7 @@ You are a frontend engineer building PitchAI — an AI football broadcast compan
 
 ## Global Context: What You're Generating UI For
 
-**PitchSideAI** is an AI football broadcast companion — real-time commentary, tactical vision, and fan engagement for live matches. Built for the AMD Developer Hackathon (May 4-10, 2026).
+**PitchSideAI** is an AI football broadcast companion — real-time commentary, tactical vision, and fan engagement for live matches.
 
 **Two user personas:**
 - **Commentator** (CommentatorDashboard): Video feed + teleprompter + controls. Split 60/40 layout. Teleprompter must be legible from distance.

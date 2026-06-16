@@ -1,17 +1,8 @@
-# StreamingVLM Research for AMD Hackathon
+# StreamingVLM Research
 
-## Hackathon Context
+## Context
 
-**AMD Developer Hackathon** ([lablab.ai](https://lablab.ai/ai-hackathons/amd-developer))
-- **Dates**: May 4–10, 2026 (online); May 9-10 (on-site, SF, invitation only)
-- **Compute**: $100 AMD Developer Cloud credits + MI300X GPU access
-- **Prize pool**: $21,500+ + AMD Radeon AI PRO R9700 GPU
-- **Relevant tracks**:
-  - Track 1: AI Agents & Agentic Workflows
-  - Track 3: Vision & Multimodal AI
-- **Sponsor challenge**: Qwen (build with Qwen models)
-- **Requirement**: Join [AMD AI Developer Program](https://www.amd.com/en/developer/ai-dev-program.html)
-- **Hugging Face**: Publish Space to [event org](https://huggingface.co/organizations/lablab-ai-amd-developer-hackathon/share/ELARrxoRIHvseSHRhANJYFEZQazsQIYhJf)
+StreamingVLM enables real-time continuous video understanding with a compact KV-cache algorithm for football broadcast use.
 
 ### Judging Criteria
 1. Application of Technology
@@ -235,7 +226,7 @@ If StreamingVLM ROCm port hits issues:
 
 ---
 
-## Hackathon Implementation Plan
+## Implementation Plan
 
 ### Day 1-2: Environment + Inference
 - Spin up MI300X on AMD Developer Cloud
@@ -271,7 +262,7 @@ If StreamingVLM ROCm port hits issues:
 - [LiveVLM — ReKV (upstream)](https://github.com/Becomebright/ReKV)
 - [StreamMem Paper](https://arxiv.org/abs/2508.15717)
 - [StreamMemBench (related benchmark)](https://github.com/landian60/StreamMemBench)
-- [AMD Developer Hackathon](https://lablab.ai/ai-hackathons/amd-developer)
+
 - [AMD AI Developer Program](https://www.amd.com/en/developer/ai-dev-program.html)
 - [AMD Developer Cloud](https://www.amd.com/en/developer/resources/cloud-access/amd-developer-cloud.html)
 - [ROCm Documentation](https://rocm.docs.amd.com/en/latest/)

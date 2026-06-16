@@ -186,7 +186,7 @@ This split is deliberate: deterministic parsing handles the scoreboard and timel
 
 ## Vision and Video: A Hardware-Aware Fallback Chain
 
-The project was built for the AMD Developer Hackathon, so the vision path needed to be serious about GPU serving. The app supports a streaming backend factory in `streaming/factory.py` with a two-level fallback chain:
+The vision path needed to be serious about GPU serving. The app supports a streaming backend factory in `streaming/factory.py` with a two-level fallback chain:
 
 ```text
 Level 1: StreamingVLM

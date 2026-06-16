@@ -102,7 +102,7 @@ def create_sport_commentary_samples(
     """
     Create or load sports commentary samples for SFT.
 
-    For the hackathon, we use:
+    For initial implementation, we use:
     1. LiveSports3k-cc: StreamingVLM's sports benchmark
     2. Synthetic football commentary (generated from stats)
     3. User-provided match videos + commentary

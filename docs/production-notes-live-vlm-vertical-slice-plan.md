@@ -1,6 +1,6 @@
 # Production Notes + Live VLM Loop Vertical Slice Plan
 
-This plan captures the production-grade direction for PitchSideAI now that the project is no longer hackathon-oriented. The goal is a national/worldwide-ready notes system where Celery provides durable execution, LangGraph provides explicit workflow control, Postgres stores canonical state, Redis keeps hot runtime state, and the VLM loop receives current match context before and during live analysis.
+This plan captures the production-grade direction for PitchSideAI. The goal is a national/worldwide-ready notes system where Celery provides durable execution, LangGraph provides explicit workflow control, Postgres stores canonical state, Redis keeps hot runtime state, and the VLM loop receives current match context before and during live analysis.
 
 ## Product Goal
 

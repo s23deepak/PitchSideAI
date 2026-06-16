@@ -6,7 +6,7 @@ Provides specialized agents for sports analysis:
 - VisionAgent: Real-time frame analysis and tactical recognition
 - LiveAgent: Live match interaction and commentary
 - CommentaryAgent: Match commentary and analysis
-- AgentCoordinator: Multi-agent orchestration for Track 1 hackathon
+- AgentCoordinator: Multi-agent orchestration
 - QAAgent: Story 2.2 Q&A Backend Answer Generation
 - PlayerIDAgent: Story 2.4 Player Identification for Q&A
 

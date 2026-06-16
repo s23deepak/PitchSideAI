@@ -2,8 +2,7 @@
 
 ## Project Overview
 
-PitchSideAI is an AI football broadcast companion for the AMD Developer Hackathon (May 4–10, 2026).
-Real-time commentary notes, live tactical vision Q&A, and Fan Lens broadcast mode.
+PitchSideAI is an AI football broadcast companion — real-time commentary notes, live tactical vision Q&A, and Fan Lens broadcast mode.
 
 **Quick Start:**
 ```bash
@@ -104,11 +103,9 @@ StatsBomb: **historical only** (La Liga 2004–2021, UCL, World Cup, Bundesliga 
 3. **Duplicate WS management** — `App.jsx` AND `LiveSessionContext.jsx` both manage WebSocket.
    The `/dashboard` route uses App.jsx's local WS; `/live` routes use LiveSessionContext.
 
-4. **CommentatorLayout.tsx orphaned** — exists but not imported by CommentatorDashboard.jsx.
+4. **Fan Lens visual gaps** — scoreboard overlay, language toggle pill, vignette missing.
 
-5. **Fan Lens visual gaps** — scoreboard overlay, language toggle pill, vignette missing.
-
-6. **`@/components/ui/Tabs` missing** — imported by TabbedLivePage.tsx but doesn't exist.
+5. **`api/server.py` too large** — 2,500+ lines. Needs splitting into `api/routes/` subpackage with separate route modules (commentary, vision, match, ws).
 
 ---
 

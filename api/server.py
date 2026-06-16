@@ -2167,7 +2167,7 @@ async def _process_video_chunk(
         })
 
 
-# ── WebSocket — StreamingVisionBridge (Hackathon Track 3) ────────────────────
+# ── WebSocket — StreamingVisionBridge ─────────────────────────────────────────
 
 class StreamingVideoConfig(BaseModel):
     """Configuration for StreamingVisionBridge video streaming."""
@@ -2184,7 +2184,7 @@ async def streaming_video_ws(websocket: WebSocket):
     """
     WebSocket for StreamingVisionBridge-based real-time video commentary.
 
-    This is the primary hackathon endpoint — uses StreamingVLM's
+    This is the primary streaming endpoint — uses StreamingVLM's
     compact KV-cache algorithm for truly real-time continuous video understanding.
 
     Client sends:

@@ -1,5 +1,5 @@
-# HuggingFace Space Configuration for AMD Developer Hackathon
-# Deploy with: huggingface-cli upload --repo-type space lablab-ai-amd-developer-hackathon/pitchsideai-streaming
+# HuggingFace Space Configuration
+# Deploy with: huggingface-cli upload --repo-type space pitchsideai/pitchsideai-streaming
 
 title: PitchSideAI — Real-Time Football Commentary with StreamingVLM
 emoji: 🏃
