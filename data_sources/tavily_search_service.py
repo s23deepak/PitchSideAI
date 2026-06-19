@@ -14,7 +14,9 @@ import os
 from typing import Any, Dict, List, Optional
 
 from data_sources.cache import DataCache
-from data_sources.retrieval_audit import audit_retrieval, monotonic_ms
+from data_sources.retrieval_audit import audit_retrieval, monotonic_ms, get_audit_run_id
+from core.retrieval_ledger import get_ledger
+from core.source_catalog import get_source_tier
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +43,7 @@ class TavilySearchService:
         self._lc_tool = None         # lazy — langchain_community TavilySearchResults
         self._available: Optional[bool] = None  # None = unchecked
         self._unavailable_reason: str = ""
+        self._ledger = get_ledger()
 
     # ── availability ──────────────────────────────────────────────────────────
 
@@ -130,6 +133,21 @@ class TavilySearchService:
                 duration_ms=0,
                 source="search_service",
             )
+            self._ledger.log_fetch(
+                run_id=get_audit_run_id(),
+                phase="parallel_gather",
+                agent_name="tavily_search",
+                source_name="tavily",
+                source_tier=get_source_tier("tavily"),
+                query_text=query,
+                query_params={"search_depth": search_depth, "topic": topic, "max_results": max_results},
+                duration_ms=0,
+                response_bytes=len(str(result)),
+                status="success",
+                data_completeness=0.9,
+                data_quality=0.9,
+                cache_hit=True,
+            )
             return result
 
         if not self._ensure_client():
@@ -151,6 +169,21 @@ class TavilySearchService:
                 result=result,
                 duration_ms=0,
                 source="search_service",
+            )
+            self._ledger.log_fetch(
+                run_id=get_audit_run_id(),
+                phase="parallel_gather",
+                agent_name="tavily_search",
+                source_name="tavily",
+                source_tier=get_source_tier("tavily"),
+                query_text=query,
+                query_params={"search_depth": search_depth, "topic": topic, "max_results": max_results},
+                duration_ms=0,
+                response_bytes=0,
+                status="empty",
+                error_message=self._unavailable_reason,
+                data_completeness=0.0,
+                data_quality=0.0,
             )
             return result
 
@@ -196,6 +229,21 @@ class TavilySearchService:
                 duration_ms=monotonic_ms() - start_ms,
                 source="search_service",
             )
+            duration_ms = int(monotonic_ms() - start_ms)
+            self._ledger.log_fetch(
+                run_id=get_audit_run_id(),
+                phase="parallel_gather",
+                agent_name="tavily_search",
+                source_name="tavily",
+                source_tier=get_source_tier("tavily"),
+                query_text=query,
+                query_params={"search_depth": search_depth, "topic": topic, "max_results": max_results},
+                duration_ms=duration_ms,
+                response_bytes=len(str(result)),
+                status="success",
+                data_completeness=0.8,
+                data_quality=0.8,
+            )
             return result
         except Exception as exc:
             self._mark_unavailable_if_plan_limited(exc)
@@ -218,6 +266,21 @@ class TavilySearchService:
                 error=exc,
                 duration_ms=monotonic_ms() - start_ms,
                 source="search_service",
+            )
+            self._ledger.log_fetch(
+                run_id=get_audit_run_id(),
+                phase="parallel_gather",
+                agent_name="tavily_search",
+                source_name="tavily",
+                source_tier=get_source_tier("tavily"),
+                query_text=query,
+                query_params={"search_depth": search_depth, "topic": topic, "max_results": max_results},
+                duration_ms=int(monotonic_ms() - start_ms),
+                response_bytes=0,
+                status="error",
+                error_message=str(exc),
+                data_completeness=0.0,
+                data_quality=0.0,
             )
             return result
 

@@ -21,6 +21,12 @@ from agents.specialized_commentary.weather_context_agent import WeatherContextAg
 from agents.specialized_commentary.matchup_analysis_agent import MatchupAnalysisAgent
 from agents.specialized_commentary.news_agent import NewsAgent
 from agents.specialized_commentary.note_organizer_agent import CommentaryNoteOrganizerAgent
+from agents.specialized_commentary.officials_agent import OfficialsAgent
+from agents.specialized_commentary.venue_details_agent import VenueDetailsAgent
+from agents.specialized_commentary.manager_profiles_agent import ManagerProfilesAgent
+from agents.specialized_commentary.club_history_agent import ClubHistoryAgent
+from agents.specialized_commentary.transfers_agent import TransfersAgent
+from agents.specialized_commentary.pronunciation_agent import PronunciationAgent
 
 __all__ = [
     "PlayerResearchAgent",
@@ -30,4 +36,10 @@ __all__ = [
     "MatchupAnalysisAgent",
     "NewsAgent",
     "CommentaryNoteOrganizerAgent",
+    "OfficialsAgent",
+    "VenueDetailsAgent",
+    "ManagerProfilesAgent",
+    "ClubHistoryAgent",
+    "TransfersAgent",
+    "PronunciationAgent",
 ]

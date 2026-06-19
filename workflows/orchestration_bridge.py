@@ -7,10 +7,10 @@ for concurrency control, rate limiting, and distributed execution.
 
 import asyncio
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, List
 from datetime import datetime
 from orchestration.engine import get_orchestrator
-from orchestration.types import WorkflowContext, AgentType
+from orchestration.types import WorkflowContext
 from workflows.commentary_notes_workflow import CommentaryNotesState
 
 logger = logging.getLogger(__name__)

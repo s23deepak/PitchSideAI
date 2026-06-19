@@ -78,6 +78,7 @@ class AgentCoordinator:
         self.sport = sport
         self.use_remote_agents = use_remote_agents
         self._agents: Dict[str, Any] = {}
+        self._enrichment_agents: Dict[str, Any] = {}
         self._initialized = False
 
     async def initialize(self):
@@ -92,6 +93,12 @@ class AgentCoordinator:
         from agents.specialized_commentary.matchup_analysis_agent import MatchupAnalysisAgent
         from agents.specialized_commentary.news_agent import NewsAgent
         from agents.specialized_commentary.note_organizer_agent import CommentaryNoteOrganizerAgent
+        from agents.specialized_commentary.officials_agent import OfficialsAgent
+        from agents.specialized_commentary.venue_details_agent import VenueDetailsAgent
+        from agents.specialized_commentary.manager_profiles_agent import ManagerProfilesAgent
+        from agents.specialized_commentary.club_history_agent import ClubHistoryAgent
+        from agents.specialized_commentary.transfers_agent import TransfersAgent
+        from agents.specialized_commentary.pronunciation_agent import PronunciationAgent
 
         self._agents = {
             "player_research": PlayerResearchAgent(sport=self.sport),
@@ -102,8 +109,19 @@ class AgentCoordinator:
             "news": NewsAgent(sport=self.sport),
             "organizer": CommentaryNoteOrganizerAgent(sport=self.sport),
         }
+        self._enrichment_agents = {
+            "officials": OfficialsAgent(sport=self.sport),
+            "venue_details": VenueDetailsAgent(sport=self.sport),
+            "manager_profiles": ManagerProfilesAgent(sport=self.sport),
+            "club_history": ClubHistoryAgent(sport=self.sport),
+            "transfers": TransfersAgent(sport=self.sport),
+            "pronunciation": PronunciationAgent(sport=self.sport),
+        }
         self._initialized = True
-        logger.info(f"AgentCoordinator initialized with {len(self._agents)} agents")
+        logger.info(
+            f"AgentCoordinator initialized with {len(self._agents)} core agents "
+            f"and {len(self._enrichment_agents)} enrichment agents"
+        )
 
     async def run_parallel_phase(
         self,

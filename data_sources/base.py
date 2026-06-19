@@ -25,6 +25,7 @@ from core.source_catalog import get_source_tier
 from quality.response_scorer import score_response
 from data_sources.result import FetchResult
 from data_sources.rate_limiter import RateLimiter
+from data_sources.retrieval_audit import get_audit_run_id
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +106,7 @@ class BaseRetriever(ABC):
         6. Return FetchResult
         """
         params = params or {}
+        run_id = run_id or get_audit_run_id()
         cache_key = f"{self.source_name}|{query}|{str(sorted(params.items()))}"
 
         cached = self._cache.get(self.source_name, cache_key)

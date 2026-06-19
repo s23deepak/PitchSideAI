@@ -77,6 +77,12 @@ class CommentaryNotesState:
     weather_context: Dict[str, Any] = field(default_factory=dict)
     matchup_analysis: Dict[str, Any] = field(default_factory=dict)
     team_news: Dict[str, Any] = field(default_factory=dict)
+    officials_context: Dict[str, Any] = field(default_factory=dict)
+    venue_details: Dict[str, Any] = field(default_factory=dict)
+    manager_profiles: Dict[str, Any] = field(default_factory=dict)
+    club_history: Dict[str, Any] = field(default_factory=dict)
+    transfers_context: Dict[str, Any] = field(default_factory=dict)
+    pronunciation: Dict[str, Any] = field(default_factory=dict)
 
     # === Final Outputs ===
     markdown_notes: Optional[str] = None
@@ -88,6 +94,7 @@ class CommentaryNotesState:
     fact_ledger: Dict[str, Any] = field(default_factory=dict)
     notes_evaluation: Dict[str, Any] = field(default_factory=dict)
     vlm_context: Dict[str, Any] = field(default_factory=dict)
+    retrieval_summary: Dict[str, Any] = field(default_factory=dict)
     notes_version: int = 0
     vlm_context_version: int = 0
     revision_count: int = 0
@@ -134,6 +141,9 @@ class CommentaryNotesWorkflow:
         state.workflow_id = str(uuid.uuid4())
         state.phase = WorkflowPhase.INITIAL_CONTEXT
         state.start_time = datetime.utcnow()
+
+        from data_sources.retrieval_audit import set_audit_run_id
+        set_audit_run_id(state.workflow_id)
 
         logger.info(
             f"Workflow {state.workflow_id} initialized for {state.home_team} vs {state.away_team}"
@@ -452,6 +462,132 @@ class CommentaryNotesWorkflow:
             logger.warning(f"[{state.workflow_id}] MatchupAnalysisAgent failed: {e}")
         return state
 
+    async def enrich_context(self, state: CommentaryNotesState) -> CommentaryNotesState:
+        """
+        Phase 2b: Deep Enrichment — 6 NEW agents in parallel.
+        - OfficialsAgent, VenueDetailsAgent, ManagerProfilesAgent
+        - ClubHistoryAgent, TransfersAgent, PronunciationAgent
+        All 6 run concurrently via asyncio.gather.
+        """
+        _ensure_project_root_on_path()
+        from agents.specialized_commentary.officials_agent import OfficialsAgent
+        from agents.specialized_commentary.venue_details_agent import VenueDetailsAgent
+        from agents.specialized_commentary.manager_profiles_agent import ManagerProfilesAgent
+        from agents.specialized_commentary.club_history_agent import ClubHistoryAgent
+        from agents.specialized_commentary.transfers_agent import TransfersAgent
+        from agents.specialized_commentary.pronunciation_agent import PronunciationAgent
+
+        logger.info(f"[{state.workflow_id}] Phase 2b: Deep enrichment (6 agents)...")
+        state.in_progress_agents = ["officials", "venue_details", "manager_profiles", "club_history", "transfers", "pronunciation"]
+
+        cache = self._ensure_cache()
+
+        async def _fetch_officials():
+            try:
+                agent = OfficialsAgent(sport=state.sport, cache=cache)
+                result = await agent.execute(
+                    home_team=state.home_team,
+                    away_team=state.away_team,
+                    competition=state.competition,
+                    fixture_context=state.fixture_context,
+                )
+                state.officials_context = result
+                state.completed_agents.append("officials")
+                logger.info(f"[{state.workflow_id}] Officials context gathered")
+            except Exception as e:
+                state.errors.append(f"OfficialsAgent: {e}")
+                state.warnings.append("Officials data unavailable — skipping")
+                logger.warning(f"[{state.workflow_id}] OfficialsAgent failed: {e}")
+
+        async def _fetch_venue_details():
+            try:
+                agent = VenueDetailsAgent(sport=state.sport, cache=cache)
+                result = await agent.execute(
+                    venue=state.venue,
+                    latitude=state.venue_lat,
+                    longitude=state.venue_lon,
+                )
+                state.venue_details = result
+                state.completed_agents.append("venue_details")
+                logger.info(f"[{state.workflow_id}] Venue details gathered")
+            except Exception as e:
+                state.errors.append(f"VenueDetailsAgent: {e}")
+                state.warnings.append("Venue details unavailable — skipping")
+                logger.warning(f"[{state.workflow_id}] VenueDetailsAgent failed: {e}")
+
+        async def _fetch_manager_profiles():
+            try:
+                agent = ManagerProfilesAgent(sport=state.sport, cache=cache)
+                result = await agent.execute(
+                    home_team=state.home_team,
+                    away_team=state.away_team,
+                    players_context=state.player_research,
+                )
+                state.manager_profiles = result
+                state.completed_agents.append("manager_profiles")
+                logger.info(f"[{state.workflow_id}] Manager profiles gathered")
+            except Exception as e:
+                state.errors.append(f"ManagerProfilesAgent: {e}")
+                state.warnings.append("Manager profiles unavailable — skipping")
+                logger.warning(f"[{state.workflow_id}] ManagerProfilesAgent failed: {e}")
+
+        async def _fetch_club_history():
+            try:
+                agent = ClubHistoryAgent(sport=state.sport, cache=cache)
+                result = await agent.execute(state.home_team, state.away_team)
+                state.club_history = result
+                state.completed_agents.append("club_history")
+                logger.info(f"[{state.workflow_id}] Club history gathered")
+            except Exception as e:
+                state.errors.append(f"ClubHistoryAgent: {e}")
+                state.warnings.append("Club history unavailable — skipping")
+                logger.warning(f"[{state.workflow_id}] ClubHistoryAgent failed: {e}")
+
+        async def _fetch_transfers():
+            try:
+                agent = TransfersAgent(sport=state.sport, cache=cache)
+                result = await agent.execute(
+                    home_team=state.home_team,
+                    away_team=state.away_team,
+                    players_context=state.player_research,
+                )
+                state.transfers_context = result
+                state.completed_agents.append("transfers")
+                logger.info(f"[{state.workflow_id}] Transfers context gathered")
+            except Exception as e:
+                state.errors.append(f"TransfersAgent: {e}")
+                state.warnings.append("Transfer data unavailable — skipping")
+                logger.warning(f"[{state.workflow_id}] TransfersAgent failed: {e}")
+
+        async def _fetch_pronunciation():
+            try:
+                home_players = state.player_research.get("home_team", {}).get("players", [])
+                away_players = state.player_research.get("away_team", {}).get("players", [])
+                key_players = (home_players if isinstance(home_players, list) else [])[:8] + (
+                    away_players if isinstance(away_players, list) else []
+                )[:8]
+                agent = PronunciationAgent(sport=state.sport, cache=cache)
+                result = await agent.execute(key_players)
+                state.pronunciation = result
+                state.completed_agents.append("pronunciation")
+                logger.info(f"[{state.workflow_id}] Pronunciation data gathered")
+            except Exception as e:
+                state.errors.append(f"PronunciationAgent: {e}")
+                state.warnings.append("Pronunciation data unavailable — skipping")
+                logger.warning(f"[{state.workflow_id}] PronunciationAgent failed: {e}")
+
+        await asyncio.gather(
+            _fetch_officials(),
+            _fetch_venue_details(),
+            _fetch_manager_profiles(),
+            _fetch_club_history(),
+            _fetch_transfers(),
+            _fetch_pronunciation(),
+        )
+        state.in_progress_agents = []
+        logger.info(f"[{state.workflow_id}] Phase 2b enrichment complete")
+        return state
+
     async def synthesize_notes(self, state: CommentaryNotesState) -> CommentaryNotesState:
         """
         Phase 4: Synthesize all agent outputs into structured NotesStore.
@@ -500,6 +636,10 @@ class CommentaryNotesWorkflow:
                 "notes_metrics": self._build_quality_report(state, notes_store),
             }
             state.vlm_context = self._build_vlm_context(notes_store)
+
+            from workflows.retrieval_summary import build_retrieval_summary
+            state.retrieval_summary = build_retrieval_summary(state.workflow_id)
+
             state.completed_agents.append("note_organizer")
             logger.info(f"[{state.workflow_id}] Notes synthesized ({len(notes_store.raw_markdown)} chars, {len(notes_store.beats)} beats)")
         except Exception as e:
@@ -602,6 +742,12 @@ class CommentaryNotesWorkflow:
             "weather": state.weather_context,
             "matchups": state.matchup_analysis,
             "news": state.team_news,
+            "officials": state.officials_context,
+            "venue_details": state.venue_details,
+            "manager_profiles": state.manager_profiles,
+            "club_history": state.club_history,
+            "transfers": state.transfers_context,
+            "pronunciation": state.pronunciation,
             "targeted_evidence": state.targeted_evidence,
         }
 
@@ -622,9 +768,10 @@ class CommentaryNotesWorkflow:
         tactical_domains = ["espn.com", "theanalyst.com", "skysports.com", "sportsmole.co.uk", "nbcsports.com"]
         match = f"{state.home_team} vs {state.away_team}"
         competition = state.competition or "football"
+        venue = state.venue or ""
         return {
             "fixture": {
-                "query": f"{match} {competition} kickoff venue date official",
+                "query": f"{match} {competition} kickoff venue date official referee",
                 "include_domains": fixture_domains,
                 "max_results": 3,
             },
@@ -642,6 +789,26 @@ class CommentaryNotesWorkflow:
                 "query": f"{match} {competition} tactical preview set pieces key battles",
                 "include_domains": tactical_domains,
                 "max_results": 4,
+            },
+            "officials": {
+                "query": f"{match} {competition} referee VAR officials appointments",
+                "include_domains": ["fifa.com", "espn.com", "bbc.co.uk", "skysports.com", "uefa.com"],
+                "max_results": 3,
+            },
+            "venue_history": {
+                "query": f"{venue} stadium history capacity notable events matches",
+                "include_domains": ["wikipedia.org", "stadiumguide.com", "espn.com", "bbc.co.uk"],
+                "max_results": 3,
+            },
+            "manager_context": {
+                "query": f"{match} managers pre-match press conference tactical preview",
+                "include_domains": ["skysports.com", "bbc.co.uk", "goal.com", "theathletic.com"],
+                "max_results": 3,
+            },
+            "transfer_context": {
+                "query": f"{match} transfer news latest signings contract situations 2026",
+                "include_domains": ["goal.com", "transfermarkt.com", "skysports.com", "bbc.co.uk", "theathletic.com"],
+                "max_results": 3,
             },
         }
 
@@ -662,7 +829,7 @@ class CommentaryNotesWorkflow:
                         team_news["news_items"].append({**item, "source": item.get("source") or "exa"})
 
         historical_targets = []
-        for topic in ("fixture", "h2h", "tactical"):
+        for topic in ("fixture", "h2h", "tactical", "officials", "venue_history", "manager_context", "transfer_context"):
             historical_targets.extend(results_by_topic.get(topic, []))
         if historical_targets:
             state.historical_context = state.historical_context if isinstance(state.historical_context, dict) else {}
@@ -678,6 +845,47 @@ class CommentaryNotesWorkflow:
                     "source": item.get("source") or "exa",
                     "topic": item.get("topic") or "targeted_evidence",
                 })
+
+        if results_by_topic.get("officials"):
+            state.officials_context = state.officials_context if isinstance(state.officials_context, dict) else {}
+            state.officials_context.setdefault("exa_sources", [])
+            for item in results_by_topic["officials"]:
+                state.officials_context["exa_sources"].append({
+                    "title": item.get("title") or "",
+                    "url": item.get("url") or "",
+                    "source": "exa",
+                })
+
+        if results_by_topic.get("venue_history"):
+            state.venue_details = state.venue_details if isinstance(state.venue_details, dict) else {}
+            state.venue_details.setdefault("exa_sources", [])
+            for item in results_by_topic["venue_history"]:
+                state.venue_details["exa_sources"].append({
+                    "title": item.get("title") or "",
+                    "url": item.get("url") or "",
+                    "source": "exa",
+                })
+
+        if results_by_topic.get("manager_context"):
+            state.manager_profiles = state.manager_profiles if isinstance(state.manager_profiles, dict) else {}
+            state.manager_profiles.setdefault("exa_sources", [])
+            for item in results_by_topic["manager_context"]:
+                state.manager_profiles["exa_sources"].append({
+                    "title": item.get("title") or "",
+                    "url": item.get("url") or "",
+                    "source": "exa",
+                })
+
+        if results_by_topic.get("transfer_context"):
+            state.transfers_context = state.transfers_context if isinstance(state.transfers_context, dict) else {}
+            state.transfers_context.setdefault("exa_sources", [])
+            for item in results_by_topic["transfer_context"]:
+                state.transfers_context["exa_sources"].append({
+                    "title": item.get("title") or "",
+                    "url": item.get("url") or "",
+                    "source": "exa",
+                })
+
         if results_by_topic.get("h2h"):
             state.historical_context = state.historical_context if isinstance(state.historical_context, dict) else {}
             h2h = state.historical_context.setdefault("h2h_history", {})
@@ -926,6 +1134,7 @@ def build_langgraph(workflow: Optional[CommentaryNotesWorkflow] = None):
     graph.add_node("parallel_research", runner.parallel_research)
     graph.add_node("targeted_evidence_search", runner.targeted_evidence_search)
     graph.add_node("matchup_analysis", runner.analyze_matchups)
+    graph.add_node("enrich_context", runner.enrich_context)
     graph.add_node("synthesize", runner.synthesize_notes)
     graph.add_node("evaluate_notes", runner.evaluate_notes)
     graph.add_node("revise_notes", runner.revise_notes)
@@ -934,7 +1143,8 @@ def build_langgraph(workflow: Optional[CommentaryNotesWorkflow] = None):
     graph.add_edge("initialize", "parallel_research")
     graph.add_edge("parallel_research", "targeted_evidence_search")
     graph.add_edge("targeted_evidence_search", "matchup_analysis")
-    graph.add_edge("matchup_analysis", "synthesize")
+    graph.add_edge("matchup_analysis", "enrich_context")
+    graph.add_edge("enrich_context", "synthesize")
     graph.add_edge("synthesize", "evaluate_notes")
     graph.add_conditional_edges(
         "evaluate_notes",

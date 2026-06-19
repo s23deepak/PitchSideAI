@@ -40,12 +40,18 @@ WAFER_CONCURRENCY_STATUS_CODES = {429, 503}
 COMMENTARY_NOTES_WAFER_CONCURRENCY_ENV = "COMMENTARY_NOTES_WAFER_MAX_CONCURRENCY"
 OPENAI_COMPATIBLE_NATIVE_VIDEO_BACKENDS = {"vllm"}
 COMMENTARY_NOTES_AGENT_TYPES = {
+    "club_history",
     "historical_context",
+    "manager_profiles",
     "matchup_analysis",
     "news",
     "note_organizer",
+    "officials",
     "player_research",
+    "pronunciation",
     "team_form",
+    "transfers",
+    "venue_details",
     "weather_context",
 }
 VIDEO_DATA_URL_MIME_TYPES = {

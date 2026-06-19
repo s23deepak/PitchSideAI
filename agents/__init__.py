@@ -26,6 +26,19 @@ _LAZY_EXPORTS = {
     "VisionTacticalContext": (".qa_agent", "VisionTacticalContext"),
     "PlayerIDAgent": (".player_id_agent", "PlayerIDAgent"),
     "PlayerIdentification": (".player_id_agent", "PlayerIdentification"),
+    "PlayerResearchAgent": (".specialized_commentary.player_research_agent", "PlayerResearchAgent"),
+    "TeamFormAgent": (".specialized_commentary.team_form_agent", "TeamFormAgent"),
+    "HistoricalContextAgent": (".specialized_commentary.historical_context_agent", "HistoricalContextAgent"),
+    "WeatherContextAgent": (".specialized_commentary.weather_context_agent", "WeatherContextAgent"),
+    "MatchupAnalysisAgent": (".specialized_commentary.matchup_analysis_agent", "MatchupAnalysisAgent"),
+    "NewsAgent": (".specialized_commentary.news_agent", "NewsAgent"),
+    "CommentaryNoteOrganizerAgent": (".specialized_commentary.note_organizer_agent", "CommentaryNoteOrganizerAgent"),
+    "OfficialsAgent": (".specialized_commentary.officials_agent", "OfficialsAgent"),
+    "VenueDetailsAgent": (".specialized_commentary.venue_details_agent", "VenueDetailsAgent"),
+    "ManagerProfilesAgent": (".specialized_commentary.manager_profiles_agent", "ManagerProfilesAgent"),
+    "ClubHistoryAgent": (".specialized_commentary.club_history_agent", "ClubHistoryAgent"),
+    "TransfersAgent": (".specialized_commentary.transfers_agent", "TransfersAgent"),
+    "PronunciationAgent": (".specialized_commentary.pronunciation_agent", "PronunciationAgent"),
 }
 
 
@@ -52,5 +65,18 @@ __all__ = [
     "VisionTacticalContext",
     "PlayerIDAgent",
     "PlayerIdentification",
+    "PlayerResearchAgent",
+    "TeamFormAgent",
+    "HistoricalContextAgent",
+    "WeatherContextAgent",
+    "MatchupAnalysisAgent",
+    "NewsAgent",
+    "CommentaryNoteOrganizerAgent",
+    "OfficialsAgent",
+    "VenueDetailsAgent",
+    "ManagerProfilesAgent",
+    "ClubHistoryAgent",
+    "TransfersAgent",
+    "PronunciationAgent",
 ]
 

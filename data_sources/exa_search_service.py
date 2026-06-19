@@ -12,7 +12,9 @@ from typing import Any
 import httpx
 
 from data_sources.cache import DataCache
-from data_sources.retrieval_audit import audit_retrieval, monotonic_ms
+from data_sources.retrieval_audit import audit_retrieval, monotonic_ms, get_audit_run_id
+from core.retrieval_ledger import get_ledger
+from core.source_catalog import get_source_tier
 
 
 logger = logging.getLogger(__name__)
@@ -34,6 +36,7 @@ class ExaSearchService:
         self.api_key = api_key or os.getenv("EXA_API_KEY") or os.getenv("EXA_API")
         self.base_url = base_url
         self.cache = cache or DataCache(ttl_seconds=MONTHLY_TTL_SECONDS)
+        self._ledger = get_ledger()
 
     @property
     def is_available(self) -> bool:
@@ -66,11 +69,51 @@ class ExaSearchService:
         )
         cached = self.cache.get(cache_namespace, cache_key)
         if cached:
+            self._ledger.log_fetch(
+                run_id=get_audit_run_id(),
+                phase="targeted_evidence",
+                agent_name="exa_search",
+                source_name="exa",
+                source_tier=get_source_tier("exa"),
+                query_text=query,
+                query_params={
+                    "topic": topic,
+                    "search_type": search_type,
+                    "max_results": max_results,
+                    "include_domains": include_domains if include_domains else [],
+                },
+                duration_ms=0,
+                response_bytes=len(str(cached)),
+                status="success",
+                data_completeness=0.9,
+                data_quality=0.9,
+                cache_hit=True,
+            )
             return {**cached, "source": "cache"}
 
         if not self.is_available:
             result = self._empty(query, topic, source="unavailable")
             self.cache.set(cache_namespace, cache_key, result)
+            self._ledger.log_fetch(
+                run_id=get_audit_run_id(),
+                phase="targeted_evidence",
+                agent_name="exa_search",
+                source_name="exa",
+                source_tier=get_source_tier("exa"),
+                query_text=query,
+                query_params={
+                    "topic": topic,
+                    "search_type": search_type,
+                    "max_results": max_results,
+                    "include_domains": include_domains if include_domains else [],
+                },
+                duration_ms=0,
+                response_bytes=0,
+                status="empty",
+                error_message="EXA_API_KEY not configured",
+                data_completeness=0.0,
+                data_quality=0.0,
+            )
             return result
 
         body: dict[str, Any] = {
@@ -113,6 +156,21 @@ class ExaSearchService:
                 duration_ms=monotonic_ms() - start_ms,
                 source="search_service",
             )
+            duration_ms = int(monotonic_ms() - start_ms)
+            self._ledger.log_fetch(
+                run_id=get_audit_run_id(),
+                phase="targeted_evidence",
+                agent_name="exa_search",
+                source_name="exa",
+                source_tier=get_source_tier("exa"),
+                query_text=query,
+                query_params={"topic": topic, "search_type": search_type, "max_results": max_results},
+                duration_ms=duration_ms,
+                response_bytes=len(str(result)),
+                status="success",
+                data_completeness=0.8,
+                data_quality=0.8,
+            )
             return result
         except Exception as exc:
             logger.warning("Exa search failed for %s: %s", topic, exc)
@@ -124,6 +182,21 @@ class ExaSearchService:
                 result=result,
                 duration_ms=monotonic_ms() - start_ms,
                 source="search_service",
+            )
+            self._ledger.log_fetch(
+                run_id=get_audit_run_id(),
+                phase="targeted_evidence",
+                agent_name="exa_search",
+                source_name="exa",
+                source_tier=get_source_tier("exa"),
+                query_text=query,
+                query_params={"topic": topic, "search_type": search_type, "max_results": max_results},
+                duration_ms=int(monotonic_ms() - start_ms),
+                response_bytes=0,
+                status="error",
+                error_message=str(exc),
+                data_completeness=0.0,
+                data_quality=0.0,
             )
             return result
 
