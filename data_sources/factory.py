@@ -3,15 +3,19 @@ Data Retriever Factory — PitchSideAI
 Dynamically routes data requests to the most specialized sports API available.
 Also manages singletons for shared search services.
 
-Architecture (May 2026):
+Architecture (Phase 1, June 2026):
 - Multi-source load balancing for soccer data (ESPN → FootballData → Transfermarkt → Firecrawl)
+- RoundRobinRouter for source priority routing with automatic failover
+- ParallelRaceFetcher for racing multiple sources simultaneously
 - StatsBomb retained for historical data only
-- FBref and Cricbuzz removed (FBref 403s frequently, Cricbuzz not needed)
+- 16+ dedicated source retrievers with audit logging via BaseRetriever ABC
 """
+from __future__ import annotations
+
 from typing import Any, Dict, List, Optional
 import logging
 from .cache import DataCache
-from .base import BaseRetriever
+from .base import BaseRetriever, RetrieverProtocol
 from .retrieval_audit import AuditedRetrieverProxy
 
 logger = logging.getLogger(__name__)
@@ -91,9 +95,27 @@ def get_brightdata_mcp_retriever():
     return _brightdata_mcp_retriever
 
 
+# ── Router & Race Fetcher factory ─────────────────────────────────────────
+
+def create_round_robin_router(
+    sources: list[tuple[str, Any]],
+    run_id: str,
+    agent_name: str,
+):
+    """Create a round-robin router for a prioritized source list."""
+    from .round_robin_router import RoundRobinRouter
+    return RoundRobinRouter(sources=sources, run_id=run_id, agent_name=agent_name)
+
+
+def create_parallel_race_fetcher():
+    """Create a parallel race fetcher for multi-source racing."""
+    from .parallel_race_fetcher import ParallelRaceFetcher
+    return ParallelRaceFetcher()
+
+
 # ── Sport-specific retriever factory ──────────────────────────────────────
 
-def get_retriever(sport: str, cache: Optional[DataCache] = None) -> BaseRetriever:
+def get_retriever(sport: str, cache: Optional[DataCache] = None) -> RetrieverProtocol:
     """
     Factory to return the optimal data retriever for a given sport.
 
@@ -103,9 +125,65 @@ def get_retriever(sport: str, cache: Optional[DataCache] = None) -> BaseRetrieve
     sport_key = sport.lower().strip()
 
     if sport_key == "soccer":
-        # Use multi-source retriever for soccer (load-balanced across 4 sources)
         return get_fbref_retriever(cache=cache)
 
-    # Default robust fallback for all other sports
     from .espn_retriever import ESPNDataRetriever
     return AuditedRetrieverProxy("espn", ESPNDataRetriever(cache=cache))
+
+
+# ── Named source retriever getters ────────────────────────────────────────
+
+def get_source_retriever_by_name(
+    source_name: str,
+    cache: Optional[DataCache] = None,
+) -> BaseRetriever:
+    """Get a dedicated retriever for a specific named source.
+
+    Maps source name strings (e.g. 'goal', 'rotowire', 'dbpedia')
+    to their concrete BaseRetriever subclass instances.
+    """
+    search_service = get_search_service(cache=cache)
+
+    source_map: dict[str, Any] = {
+        "goal": lambda: GoalComRetriever(cache=cache, search_service=search_service),
+        "rotowire": lambda: RotowireRetriever(cache=cache, search_service=search_service),
+        "sky_sports": lambda: SkySportsRetriever(cache=cache, search_service=search_service),
+        "bbc_sport": lambda: BbcSportRetriever(cache=cache, search_service=search_service),
+        "the_athletic": lambda: AthleticRetriever(cache=cache, search_service=search_service),
+        "sports_mole": lambda: SportsMoleRetriever(cache=cache, search_service=search_service),
+        "onefootball": lambda: OneFootballRetriever(cache=cache, search_service=search_service),
+        "sofascore": lambda: SofascoreRetriever(cache=cache, search_service=search_service),
+        "fbref": lambda: FbrefRetriever(cache=cache, search_service=search_service),
+        "whoscored": lambda: WhoScoredRetriever(cache=cache, search_service=search_service),
+        "11v11": lambda: ElevenVElevenRetriever(cache=cache, search_service=search_service),
+        "dbpedia": lambda: DbpediaRetriever(cache=cache),
+        "jina": lambda: JinaReaderRetriever(cache=cache),
+        "open_meteo": lambda: OpenMeteoRetriever(cache=cache),
+        "forvo": lambda: ForvoRetriever(cache=cache),
+        "youglish": lambda: YouglishRetriever(cache=cache),
+    }
+
+    factory_fn = source_map.get(source_name.lower().replace("-", "_"))
+    if factory_fn is None:
+        logger.warning("No dedicated retriever for source '%s', falling back to Tavily", source_name)
+        return search_service
+
+    return factory_fn()
+
+
+from .goal_com_retriever import GoalComRetriever
+from .rotowire_retriever import RotowireRetriever
+from .sky_sports_retriever import SkySportsRetriever
+from .bbc_sport_retriever import BbcSportRetriever
+from .the_athletic_retriever import AthleticRetriever
+from .sports_mole_retriever import SportsMoleRetriever
+from .one_football_retriever import OneFootballRetriever
+from .sofascore_retriever import SofascoreRetriever
+from .fbref_retriever import FbrefRetriever
+from .whoscored_retriever import WhoScoredRetriever
+from .eleven_v_eleven_retriever import ElevenVElevenRetriever
+from .dbpedia_retriever import DbpediaRetriever
+from .jina_reader_retriever import JinaReaderRetriever
+from .open_meteo_retriever import OpenMeteoRetriever
+from .forvo_retriever import ForvoRetriever
+from .youglish_retriever import YouglishRetriever

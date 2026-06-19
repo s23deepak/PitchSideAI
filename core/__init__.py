@@ -7,7 +7,7 @@ from core.concurrency import (
     get_connection_pool,
     RateLimitConfig,
     TokenBucket,
-    CircuitBreaker
+    CircuitBreaker,
 )
 from core.exceptions import (
     PitchSideAIException,
@@ -18,8 +18,12 @@ from core.exceptions import (
     ModelAPIError,
     RAGError,
     TimeoutError as PitchSideTimeoutError,
-    get_error_response
+    get_error_response,
 )
+from core.retrieval_ledger import RetrievalLedger, get_ledger
+from core.data_cache import DataCache
+from core.source_health import SourceHealth, SourceHealthRegistry, get_source_health_registry
+from core.source_catalog import DataSource, SOURCE_TIERS, get_source_tier, get_source_enum
 
 __all__ = [
     "setup_logging",
@@ -39,4 +43,14 @@ __all__ = [
     "RAGError",
     "PitchSideTimeoutError",
     "get_error_response",
+    "RetrievalLedger",
+    "get_ledger",
+    "DataCache",
+    "SourceHealth",
+    "SourceHealthRegistry",
+    "get_source_health_registry",
+    "DataSource",
+    "SOURCE_TIERS",
+    "get_source_tier",
+    "get_source_enum",
 ]
